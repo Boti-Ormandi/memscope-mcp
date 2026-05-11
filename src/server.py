@@ -27,6 +27,7 @@ from .tools.scanning import scan_aob
 from .tools.types import read_typed, write_typed
 from .utils.logger import LOGGER
 from .utils.memory_utils import format_address
+from .utils.peb import read_process_peb
 
 logger = logging.getLogger(__name__)
 
@@ -266,10 +267,14 @@ def processes(
             "threads": proc.cntThreads,
         }
 
-        # Include process path
+        # Include path and command line from PEB
         path = _get_process_path(proc_pid)
         if path:
             entry["path"] = path
+
+        peb_data = read_process_peb(proc_pid)
+        if peb_data and peb_data.get("command_line"):
+            entry["command_line"] = peb_data["command_line"]
 
         # Include services for svchost processes
         if "svchost" in name.lower():
@@ -496,7 +501,7 @@ _shutdown_done = False
 
 
 def _shutdown():
-    """Free remote memory and detach on server exit.
+    """Clean up hooks, free remote memory, and detach on server exit.
 
     Called from the main() finally block and registered with atexit as a backup.
     Idempotent -- safe to call multiple times (guarded by _shutdown_done).
@@ -506,13 +511,24 @@ def _shutdown():
         return
     _shutdown_done = True
 
-    # Signal any running Lua script to abort at the next checkpoint.
+    # Signal any running Lua script to abort at the next hook checkpoint.
     try:
         LUA_ENGINE.cancel()
     except BaseException:
         pass
 
-    # Detach fires lifecycle callbacks and frees tracked allocations.
+    # Belt-and-suspenders: try hook cleanup directly first (in case detach
+    # callbacks are not registered or SESSION.detach() fails early).
+    try:
+        from .tools.hooking import HOOK_MANAGER
+
+        if HOOK_MANAGER.hooks or HOOK_MANAGER.ring_buffer:
+            alive = SESSION.pm is not None and SESSION._is_process_alive()
+            HOOK_MANAGER.cleanup(process_alive=alive)
+    except BaseException:
+        pass
+
+    # Full detach fires remaining lifecycle callbacks and frees tracked allocations.
     try:
         if SESSION.pm is not None:
             SESSION.detach()
