@@ -12,6 +12,7 @@ import pymem.process
 import pymem.ressources.structure as structs
 
 from ...session import SESSION
+from ...utils.peb import read_process_environment, read_process_modules, read_process_peb
 
 # Windows API constants
 TH32CS_SNAPTHREAD = 0x00000004
@@ -161,6 +162,15 @@ def get_process_info(lua_table_fn: Callable, pid: Optional[int] = None):
                 result["path"] = buf.value
         finally:
             kernel32.CloseHandle(handle)
+
+    # Read PEB fields (command line, cwd, debugger flag)
+    peb_data = read_process_peb(target_pid)
+    if peb_data:
+        if peb_data.get("command_line"):
+            result["command_line"] = peb_data["command_line"]
+        if peb_data.get("current_directory"):
+            result["current_directory"] = peb_data["current_directory"]
+        result["being_debugged"] = peb_data.get("being_debugged", False)
 
     return result
 
@@ -498,5 +508,77 @@ def get_services(lua_table_fn: Callable, pid: Optional[int] = None):
         entry["display_name"] = s["display_name"]
         entry["pid"] = s["pid"]
         entry["state"] = s["state"]
+        t[i] = entry
+    return t
+
+
+def is_being_debugged(pid: Optional[int] = None) -> bool | None:
+    """Check if a process has a debugger attached via PEB.
+
+    Args:
+        pid: Process ID. Uses attached process if None.
+
+    Returns:
+        True if debugger attached, False otherwise, None on error.
+    """
+    target_pid = pid if pid else (SESSION.pid if SESSION.pm else 0)
+    if not target_pid:
+        return None
+
+    peb_data = read_process_peb(int(target_pid))
+    if peb_data is None:
+        return None
+    return peb_data.get("being_debugged", False)
+
+
+def get_environment(lua_table_fn: Callable, pid: Optional[int] = None):
+    """Read environment variables from a process via PEB.
+
+    Args:
+        lua_table_fn: Lua table constructor.
+        pid: Process ID. Uses attached process if None.
+
+    Returns:
+        Lua table of {KEY = "value", ...} or empty table on failure.
+    """
+    target_pid = pid if pid else (SESSION.pid if SESSION.pm else 0)
+    if not target_pid:
+        return lua_table_fn()
+
+    env = read_process_environment(int(target_pid))
+    if env is None:
+        return lua_table_fn()
+
+    t = lua_table_fn()
+    for key, value in env.items():
+        t[key] = value
+    return t
+
+
+def get_modules_remote(lua_table_fn: Callable, pid: Optional[int] = None):
+    """Enumerate modules from a process without attaching, via PEB Ldr.
+
+    Args:
+        lua_table_fn: Lua table constructor.
+        pid: Process ID. Uses attached process if None.
+
+    Returns:
+        Lua table of {name, base, size, path} entries, or empty table.
+    """
+    target_pid = pid if pid else (SESSION.pid if SESSION.pm else 0)
+    if not target_pid:
+        return lua_table_fn()
+
+    modules = read_process_modules(int(target_pid))
+    if modules is None:
+        return lua_table_fn()
+
+    t = lua_table_fn()
+    for i, mod in enumerate(modules, 1):
+        entry = lua_table_fn()
+        entry["name"] = mod["name"]
+        entry["base"] = mod["base"]
+        entry["size"] = mod["size"]
+        entry["path"] = mod["path"]
         t[i] = entry
     return t

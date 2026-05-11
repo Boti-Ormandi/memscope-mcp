@@ -4,12 +4,15 @@ from typing import Callable
 
 from ...extensions.base import ExtensionContext, LuaExtension
 from ...tools.lua.process_info import (
+    get_environment,
     get_memory_regions,
+    get_modules_remote,
     get_process_info,
     get_process_list,
     get_region_info,
     get_services,
     get_threads,
+    is_being_debugged,
 )
 
 
@@ -36,7 +39,11 @@ openProcess(pid)            -- Attach by PID (legacy, prefer attach())
 
 ```lua
 getProcessList(filter?, limit?)  -- List processes: {pid, name, parent_pid}
-getProcessInfo(pid?)             -- Details: {pid, name, path, threads}
+getProcessInfo(pid?)             -- Details: {pid, name, path, threads, command_line,
+                                 --   current_directory, being_debugged}
+isBeingDebugged(pid?)            -- Quick debugger check (reads PEB)
+getEnvironment(pid?)             -- Env vars as {KEY = "value", ...} table
+getModulesRemote(pid?)           -- Modules without attaching: {name, base, size, path}
 getServices(pid?)                -- Services: {name, display_name, pid, state}
 getThreads(pid?)                 -- Threads: {tid, priority}
 getMemoryRegions(filter?, limit?) -- Regions: {base, size, protection, type}
@@ -58,6 +65,9 @@ getRegionInfo(addr)              -- Region at address
             # Process introspection
             "getProcessList": lambda filt=None, limit=500: get_process_list(self._table, filt, limit),
             "getProcessInfo": lambda pid=None: get_process_info(self._table, pid),
+            "isBeingDebugged": lambda pid=None: is_being_debugged(pid),
+            "getEnvironment": lambda pid=None: get_environment(self._table, pid),
+            "getModulesRemote": lambda pid=None: get_modules_remote(self._table, pid),
             "getMemoryRegions": lambda filt=None, limit=1000: get_memory_regions(self._table, filt, limit),
             "getRegionInfo": lambda addr: get_region_info(self._table, addr),
             "getThreads": lambda pid=None: get_threads(self._table, pid),
