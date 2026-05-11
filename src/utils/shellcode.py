@@ -13,7 +13,6 @@ Builds position-independent shellcode that:
 import struct
 from typing import Any
 
-
 MAX_MULTI_CALL_COUNT = 64
 MAX_MULTI_CALL_SHELLCODE_SIZE = 0x10000
 

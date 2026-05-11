@@ -494,9 +494,7 @@ def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
             return {"success": False, "error": "TIMEOUT", "detail": f"Sequence did not complete within {timeout_ms}ms"}
 
         result_data = SESSION.read_bytes(ctx.result_addr, result_size)
-        call_results = [
-            struct.unpack("<Q", result_data[i * 8 : i * 8 + 8])[0] for i in range(len(processed_calls))
-        ]
+        call_results = [struct.unpack("<Q", result_data[i * 8 : i * 8 + 8])[0] for i in range(len(processed_calls))]
         result = call_results[-1]
 
         response = {
