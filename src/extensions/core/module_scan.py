@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional
 
 from ...extensions.base import ExtensionContext, LuaExtension
 from ...tools.lua.modules import format_address as lua_format_address
-from ...tools.lua.modules import get_module_from_address, get_modules
+from ...tools.lua.modules import get_module_from_address, get_modules, resolve_export_lua
 from ...tools.lua.scanning_helpers import scan_pointer, scan_string
 from ...tools.scanning import SCAN_TIMEOUT_SECONDS, scan_aob_addresses
 from ...utils.memory_utils import is_valid_pointer, parse_address
@@ -30,6 +30,7 @@ AOBScan(pattern, start?, end?, limit?)  -- Modules by default; bounded scan when
 AOBScanModule(mod, pattern)     -- Scan specific module
 scanString(str, module?, wide?) -- Scan for string (ASCII or UTF-16)
 scanPointer(target, module?)    -- Find all pointers to target address (xrefs)
+resolveExport(module, name)     -- Resolve DLL export to address
 ```
 
 AOBScan results carry a `metadata` table (mode, scanned_region_count, bytes_scanned, timeout_hit, result_count).
@@ -63,6 +64,8 @@ readPointerChain(base, off1, off2, ...)  -- Follow chain, return final value
             "scanPointer": lambda target, mod=None, align=8, limit=100: scan_pointer(
                 self._table, target, mod, align, limit, self._log_error
             ),
+            # PE export resolution
+            "resolveExport": lambda mod, fn: resolve_export_lua(mod, fn, self._log_error),
             # Pointer chain
             "readPointerChain": self._read_pointer_chain,
         }

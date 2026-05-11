@@ -79,6 +79,27 @@ def get_module_from_address(lua_table_fn: Callable, address, log_error: Callable
         return None
 
 
+def resolve_export_lua(module_name, function_name, log_error: Callable) -> Optional[int]:
+    """Resolve a DLL export name to its absolute address in the target.
+
+    Args:
+        module_name: DLL name (e.g. ``"ws2_32.dll"``).
+        function_name: Export name (e.g. ``"send"``).
+        log_error: Error callback.
+
+    Returns:
+        Absolute address (int) or nil if the module is not loaded or the
+        export is not exported.
+    """
+    try:
+        from ...utils.pe import resolve_export
+
+        return resolve_export(str(module_name), str(function_name))
+    except Exception as e:
+        log_error("resolveExport", e)
+        return None
+
+
 def format_address(address, log_error: Callable) -> str:
     """Format an address as module+offset if possible, raw hex otherwise.
 
