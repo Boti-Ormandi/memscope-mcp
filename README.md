@@ -7,7 +7,7 @@
 
 An MCP server for low-level Windows process memory research.
 
-AI agents attach to processes, scan byte patterns, read and write typed memory, follow pointer chains, and execute remote x64 code through 10 MCP tools. A server-side Lua environment batches multi-step operations into a single round-trip, so an agent can dereference a pointer chain, decode a structure, and report results without paying per-call latency.
+AI agents attach to processes, scan byte patterns, read and write typed memory, follow pointer chains, execute remote x64 code, install generic inline function hooks with shared ring-buffer capture, and read the Process Environment Block of processes the server has not even attached to -- all through 10 MCP tools. A server-side Lua environment batches multi-step operations into a single round-trip, so an agent can dereference a pointer chain, decode a structure, hook an API, and report results without paying per-call latency.
 
 ## What It Looks Like
 
@@ -69,7 +69,7 @@ Addresses accept hex strings (`"0x1234"`), module+offset (`"module.dll+0x1234"`)
 
 ## Lua Scripting
 
-A server-side Lua 5.4 environment with ~95 functions exposing memscope's primitives. Use it when an operation needs loops, conditionals, or chained reads that would otherwise require many MCP round-trips.
+A server-side Lua 5.4 environment with ~110 always-loaded functions exposing memscope's primitives. Use it when an operation needs loops, conditionals, or chained reads that would otherwise require many MCP round-trips.
 
 ```lua
 -- Find a RIP-relative singleton reference and read fields off it
@@ -86,21 +86,25 @@ if #matches > 0 then
 end
 ```
 
-The full reference lives in [`docs/lua-reference.md`](docs/lua-reference.md). Categories:
+The full reference lives in [`docs/lua-reference.md`](docs/lua-reference.md). Hooking and PEB-introspection design notes live in [`docs/hooking.md`](docs/hooking.md) and [`docs/peb.md`](docs/peb.md). Categories:
 
 | Category | Functions |
 |----------|-----------|
 | Memory read (typed + bulk) | 20 |
 | Memory write | 13 |
 | Struct helpers (vectors, matrix, declarative struct read) | 5 |
-| Module / address resolution | 6 |
+| Module / address resolution (incl. `resolveExport`) | 7 |
 | Scanning (AOB, string, pointer xrefs) | 4 |
 | Pointer chains | 1 |
 | Code execution (shellcode, alloc, callSequence) | 8 |
-| Process introspection (pre-attach) | 7 |
+| Hooking (inline hooks + ring buffer) | 8 |
+| Process introspection (pre-attach, PEB) | 10 |
+| Network utilities | 1 |
 | 64-bit safe comparisons | 9 |
 | Bitwise | 7 |
 | Utilities | 18 |
+
+Plus ~38 functions under the optional netcap plugin (`contrib/plugins/netcap.py`) when activated.
 
 Lua 5.4 rejects hex literals beyond 32 bits; the server transparently rewrites large literals like `0x1F58E12ECF0` to `addr("0x1F58E12ECF0")` before execution, so scripts can paste raw 64-bit addresses verbatim.
 
@@ -111,9 +115,12 @@ Domain-specific helpers without touching the core. Drop a `.py` file into `plugi
 ```bash
 # Activate the reference IL2CPP plugin (Unity runtime helpers)
 cp contrib/plugins/il2cpp.py plugins/
+
+# Or the reference netcap plugin (Winsock capture and analysis, built on the hooking layer)
+cp contrib/plugins/netcap.py plugins/
 ```
 
-See [`plugins/README.md`](plugins/README.md) for the interface and authoring guidelines.
+`il2cpp.py` is the template for plugins that walk a managed-runtime object layout. `netcap.py` is the template for plugins that hook a known API surface and add protocol-aware parsing on top -- it uses the generic `HOOK_MANAGER` to install Winsock hooks and exposes packet capture, stream assembly, framing, search, and recording through ~38 Lua functions. See [`plugins/README.md`](plugins/README.md) for the interface and authoring guidelines.
 
 ## Script Persistence
 
@@ -138,46 +145,74 @@ ASLR invalidates absolute addresses across restarts. Save the finder script, not
 ```
 src/
   server.py              # MCP tool definitions (thin wrappers + session logging)
-  session.py             # Process attachment, memory primitives, auto-reconnect
+  session.py             # Process attach/detach, memory primitives, threads,
+                         #   VirtualProtect, allocate_near, suspend/resume,
+                         #   lifecycle callbacks
+  extensions/            # Generic LuaExtension contract + bootstrap
+    base.py              # LuaExtension ABC and ExtensionContext
+    bootstrap.py         # Core extension + user plugin registration
+    core/                # Always-loaded extensions
+      general.py memory.py module_scan.py execution.py
+      hooking.py process.py network.py
   tools/
     memory.py            # Smart memory dump
     scanning.py          # AOB pattern scanning
     pointers.py          # Pointer chain resolution
     types.py             # Typed memory read/write
     execute.py           # Remote code execution
+    hooking.py           # HookManager: ring buffer + install/remove/cleanup
     lua_scripts.py       # Script persistence
-    lua/                 # Lua engine and 9 themed function modules
-  plugins/               # Plugin loader and base class
-  instructions/          # AI context builder (base + plugins)
-  utils/                 # Address parsing, heuristics, x64 shellcode builder
+    lua/                 # Lua engine and themed function modules
+  plugins/               # PluginBase (specialization of LuaExtension) + loader
+  instructions/          # AI context builder (base + extensions + plugins)
+  utils/
+    shellcode.py         # x64 codegen: native calls + hook trampolines
+    disasm.py            # Table-driven x64 length decoder + RIP-relative relocation
+    pe.py                # PE export resolver (resolveExport)
+    peb.py               # PEB reader: cmdline, env, debugger, remote modules
+    memory_utils.py heuristics.py logger.py pointers.py
 plugins/                 # Active plugins (user-curated, gitignored)
-contrib/plugins/         # Available plugins (checked in)
+contrib/plugins/         # Reference plugins (il2cpp, netcap)
 scripts/                 # Saved Lua scripts per process (gitignored)
 logs/                    # Session logs in JSONL format (gitignored)
+docs/
+  hooking.md             # Inline hooking architecture
+  peb.md                 # PEB introspection design
+  lua-reference.md       # Full Lua function reference
 ```
 
 **Design choices:**
 - Generic core, plugins for domains: no target-specific code in `src/`
 - Minimal tool surface: 10 well-shaped MCP tools, with Lua for everything that needs composition
+- One contract (`LuaExtension`), two activation paths: core extensions are always loaded; user plugins are gated on file presence in `plugins/` and isolated on failure
 - Plugin instructions are only loaded when the plugin is active (AI context costs tokens)
 - Scripts persist, addresses don't: ASLR shifts everything, save the finder
 
 ## Implementation Notes
 
+### Inline function hooking with shared ring buffer
+Hook any user-mode function by address, capture register args plus optional buffer data, and read the capture stream from Lua -- without DLL injection. `HookManager` ([`src/tools/hooking.py`](src/tools/hooking.py)) reads the target's function prologue through a table-driven x64 instruction length decoder ([`src/utils/disasm.py`](src/utils/disasm.py)), allocates an RWX trampoline page within +-2 GiB of the target so a 5-byte `JMP rel32` patch suffices, and falls back to a 14-byte `JMP [RIP+0]` with thread-suspension + IP redirect when near allocation fails. RIP-relative prologue instructions are rewritten by the relocator so the displaced bytes still resolve to the original target. Trampoline shellcode ([`src/utils/shellcode.py`](src/utils/shellcode.py)) implements pre- and post-call capture with optional struct-deref (WSABUF-style buffer pointers) and output-pointer deref. All hooks share one lock-free ring buffer in target memory; writes claim slots with `lock cmpxchg`, overflow drops without blocking, and a status field gates partial reads. Full architecture in [`docs/hooking.md`](docs/hooking.md).
+
+### PEB introspection without attaching
+`getProcessInfo`, `isBeingDebugged`, `getEnvironment`, and `getModulesRemote` read the Process Environment Block of any process the server can open with `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ` -- no debug session, no injection, no leaked handles. The reader ([`src/utils/peb.py`](src/utils/peb.py)) is pure ctypes: `NtQueryInformationProcess(ProcessBasicInformation)` returns the PEB base, then `ReadProcessMemory` walks `ProcessParameters` (cmdline, cwd, environment), the `BeingDebugged` byte, and the `Ldr.InLoadOrderModuleList` linked list. The `processes` MCP tool surfaces the per-entry command line directly, which means filters like `processes(filter="electron")` distinguish renderer / GPU / browser instances without further work. Full structure layout in [`docs/peb.md`](docs/peb.md).
+
 ### x64 shellcode generation
 `executeCode` and `callSequence` work by assembling raw x64 machine code in the target process. The codegen ([`src/utils/shellcode.py`](src/utils/shellcode.py)) implements the Microsoft x64 calling convention end to end: 32-byte shadow space, 16-byte stack alignment before each `CALL`, RCX/RDX/R8/R9 for the first four integer arguments and XMM0-XMM3 for floats, stack spill for arguments past the fourth, and RAX (or XMM0 for float returns) captured into a thread-local result slot. The Lua wrapper smart-detects argument types: numeric strings become integer arguments, text strings are allocated as buffers in the target process and freed after the call.
+
+### Extension system
+Core features and user plugins share one ABC: `LuaExtension` ([`src/extensions/base.py`](src/extensions/base.py)). Each extension owns a name, a description, an AI-facing instructions fragment, a `register(ctx)` method that returns Lua function bindings, and optional `on_process_attached` / `on_process_detaching` lifecycle callbacks. The bootstrap ([`src/extensions/bootstrap.py`](src/extensions/bootstrap.py)) instantiates the seven built-in extensions in order, loads any user plugins from `plugins/` (failures logged and isolated), wires the returned function dicts into the Lua engine, and assembles the instruction bundle. The contract is what makes hooking, PEB introspection, netcap, and any future domain helper pluggable on the same shape.
+
+### PE export resolution
+`resolveExport(module, name)` ([`src/utils/pe.py`](src/utils/pe.py)) reads the PE export directory directly from target memory and binary-searches the sorted name pointer table. Forwarded exports are resolved recursively with a depth cap of 5. The hooking layer uses this to find addresses like `ws2_32!WSARecv` without symbol files or AOB-scanning known entry points.
 
 ### Transparent reconnection
 A reverse-engineering session typically outlives the target process. `DebugSession.ensure_attached` ([`src/session.py`](src/session.py)) polls the cached handle with `GetExitCodeProcess` on every tool call; if the process has exited, it transparently re-opens by name and re-caches modules. Tools never surface a "process disappeared" error on a transient restart.
 
 ### Lua large-hex preprocessor
-Lua 5.4 has 64-bit integers, but its parser still rejects hex literals beyond 32 bits — `local p = 0x1F58E12ECF0` is a syntax error. The engine's preprocessor ([`src/tools/lua/engine.py`](src/tools/lua/engine.py)) rewrites such literals to `addr("0x...")` calls, but only after protecting long strings, single- and double-quoted strings, and already-wrapped `addr()` / `parseHex()` calls from accidental rewrite.
+Lua 5.4 has 64-bit integers, but its parser still rejects hex literals beyond 32 bits -- `local p = 0x1F58E12ECF0` is a syntax error. The engine's preprocessor ([`src/tools/lua/engine.py`](src/tools/lua/engine.py)) rewrites such literals to `addr("0x...")` calls, but only after protecting long strings, single- and double-quoted strings, and already-wrapped `addr()` / `parseHex()` calls from accidental rewrite.
 
 ### Service-to-PID enumeration
 Identifying which `svchost.exe` hosts a given Windows service is normally a multi-step chore. The `processes` tool calls `EnumServicesStatusExW` through the Service Control Manager and joins the result onto the process list, so `processes(service="EventLog")` returns the right PID in one call. Lazy-loaded: the SCM enumeration only runs when a query actually needs it.
-
-### Plugin system
-The generic core holds zero domain knowledge. Each plugin is a single `.py` file dropped into `plugins/`, instantiated at startup ([`src/plugins/__init__.py`](src/plugins/__init__.py)), registering its own Lua functions and appending its own AI-facing instructions to the MCP `instructions` channel. The reference IL2CPP plugin ([`contrib/plugins/il2cpp.py`](contrib/plugins/il2cpp.py)) shows the pattern for Unity runtime structures.
 
 ## Installation
 

@@ -14,10 +14,13 @@ The Lua runtime is Lua 5.4 via [lupa](https://github.com/scoder/lupa). All addre
 - [Scanning](#scanning)
 - [Pointer chains](#pointer-chains)
 - [Code execution](#code-execution)
+- [Hooking](#hooking)
 - [Process introspection](#process-introspection)
+- [Network utilities](#network-utilities)
 - [64-bit safe comparisons](#64-bit-safe-comparisons)
 - [Bitwise](#bitwise)
 - [Utilities](#utilities)
+- [Netcap plugin](#netcap-plugin)
 - [Important notes](#important-notes)
 
 ## Memory read
@@ -87,6 +90,7 @@ getModuleSize("mod.dll")          -- module size in bytes
 getModules(filter?)               -- table of {name, base, size, path}
 getModuleFromAddress(addr)        -- reverse lookup: {name, base, offset} or nil
 formatAddress(addr)               -- "module.dll+0xOFFSET" or "0xADDR"
+resolveExport("mod.dll", "func")  -- PE export resolution, follows forwarders (depth 5)
 ```
 
 ## Scanning
@@ -137,19 +141,97 @@ callSequence({
 
 `{result=N}` passes the RAX value from the Nth prior call (1-based) as an argument. Use `callSequenceResults` when the sequence ends in a cleanup call but you still need an earlier return value; it returns `{result=..., call_results={...}, calls_executed=N}`.
 
+## Hooking
+
+Generic inline function hooking with a shared ring buffer in the target process. Hook any function by address, capture register args + optional buffer payload + optional stack args, read entries through Lua. Requires an attached process. See [`docs/hooking.md`](hooking.md) for architecture.
+
+```lua
+createRingBuffer({entry_count=512, max_data_size=4096}?)  -- one shared buffer per session
+
+hookFunction(address, {
+    name = "label",                        -- identifier for listHooks / entry["hook_name"]
+    type = "pre" | "post",                 -- capture before or after the call
+    buffer_arg = 1..4 | -1,                -- which register arg is a buffer pointer
+    length_arg = 0..4 | -1,                -- which arg is length; 0 = use return value
+    max_capture = 4096,                    -- byte cap per entry
+    stack_args = {5, 6, ...},              -- optional capture of stack args (max 7)
+    deref_args = {[N]=4|8, ...},           -- post-call: re-read arg N as 4/8 bytes (output params)
+    buffer_deref = {arg=N, offset=K},      -- indirect buffer: [arg+K] = buffer pointer (e.g. WSABUF)
+    length_deref = {arg=N, offset=K, size=4|8},  -- indirect length: [arg+K] = length
+})                                          -- returns {hook_id, trampoline, saved_bytes, jmp_size}
+
+unhookFunction(address_or_hook_id)         -- restore original bytes; defer trampoline free
+listHooks()                                -- table of installed hooks
+destroyRingBuffer()                        -- free buffer (all hooks must be removed first)
+
+readRingBuffer(limit?, {min_result=N}?)    -- pending entries; optionally skip entries with low result
+ringBufferMarker("label")                  -- inject a marker entry with timestamp 0
+ringBufferStats()                          -- {total_captured, total_dropped, entries_pending, utilization_pct}
+```
+
+Each entry returned by `readRingBuffer` carries `sequence`, `hook_id`, `hook_name`, `timestamp`, `return_addr`, `arg0..arg3`, optional `extra_args`, `result`, `data_length`, `captured_length`, `data` (byte table), `data_hex` (printable hex), and `is_marker`. Pre-call hooks have `result=0`. Post-call hooks have `result` set to the original function's RAX as a signed int32.
+
+Minimal capture-and-read cycle:
+
+```lua
+createRingBuffer({entry_count=512, max_data_size=4096})
+
+local send_addr = resolveExport("ws2_32.dll", "send")
+hookFunction(send_addr, {
+    name = "send",
+    type = "pre",
+    buffer_arg = 2,    -- send(socket, *buf, len, flags)
+    length_arg = 3,
+    max_capture = 4096,
+})
+
+-- ... let the app run ...
+
+for _, e in ipairs(readRingBuffer(100)) do
+    print(e.hook_name, e.captured_length, e.data_hex)
+end
+```
+
+Indirect capture for APIs whose buffer lives in a struct (WSABUF):
+
+```lua
+hookFunction(resolveExport("ws2_32.dll", "WSASend"), {
+    name = "WSASend",
+    type = "pre",
+    buffer_deref = {arg=2, offset=8},                -- LPWSABUF -> {len@0, buf@8}
+    length_deref = {arg=2, offset=0, size=4},
+    max_capture = 8192,
+})
+```
+
 ## Process introspection
 
 These functions work without an attached process. Useful for discovery scripts.
 
 ```lua
 getProcessList(filter?, limit?)   -- {pid, name, parent_pid, threads}
-getProcessInfo(pid?)              -- {pid, name, path, parent_pid, threads}
+getProcessInfo(pid?)              -- {pid, name, path, parent_pid, threads,
+                                  --  command_line, current_directory, being_debugged, image_path}
 getMemoryRegions(filter?, limit?) -- {base, size, protection, type, state}
 getRegionInfo(addr)               -- {base, size, protection, is_readable/writable/executable}
 getThreads(pid?)                  -- {tid, owner_pid, priority}
 getServices(pid?)                 -- {name, display_name, pid, state}
+isBeingDebugged(pid?)             -- boolean from PEB.BeingDebugged, or nil on access failure
+getEnvironment(pid?)              -- {KEY="value", ...} from the target's PEB
+getModulesRemote(pid?)            -- {name, base, size, path} via PEB Ldr (no attach required)
 openProcess(pid)                  -- attach to process from within a script
 ```
+
+The `pid?`-suffixed functions default to the attached process when called without arguments. PEB reads (`command_line`, `getEnvironment`, `getModulesRemote`, `isBeingDebugged`) work pre-attach on any process the server can open with `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`. See [`docs/peb.md`](peb.md) for limits (64 KiB env, 1024 modules, 32 KiB strings).
+
+## Network utilities
+
+```lua
+getSocketInfo(socket_handle)      -- {remote_addr, remote_port, local_addr, local_port, family}
+                                  -- family is "IPv4" or "IPv6"; nil on error or unconnected socket
+```
+
+Calls `getpeername` and `getsockname` in the target process. Use after a network hook to identify which connection a socket belongs to.
 
 ## 64-bit safe comparisons
 
@@ -189,6 +271,84 @@ sleep(ms)                         -- pause execution
 enableDebug()  disableDebug()     -- toggle error logging into output array
 getLastError()                    -- last error message from a returning-nil call
 ```
+
+## Netcap plugin
+
+These functions are available only when the netcap plugin is activated by copying `contrib/plugins/netcap.py` to `plugins/netcap.py`. The plugin builds on the [Hooking](#hooking) primitives and adds protocol-aware capture, stream assembly, framing, search, and recording for Winsock traffic.
+
+### Capture lifecycle
+
+```lua
+startCapture({                          -- begin capturing on the named Winsock hooks
+    hooks = {"send", "recv", "WSASend", "WSARecv", "sendto", "recvfrom"},
+    connect = true,                     -- track connect/closesocket lifecycle
+    iocp = true,                        -- correlate IOCP async I/O via GQCS
+    lifecycle = true,                   -- track accept/bind for server sockets
+    header_only = false,                -- capture only headers (smaller entries)
+    buffer_size = 512,                  -- ring buffer entry_count
+    max_packet_size = 4096,             -- ring buffer max_data_size
+})
+stopCapture()
+readPackets(limit?)                     -- per-packet entries with direction, socket, parsed args
+captureStats()                          -- bytes captured, packets seen, drops
+getConnections()                        -- {socket, type, remote_addr, remote_port, local_addr, local_port}
+filterPackets(packets, {direction?, socket?, min_size?, max_size?, hook_name?, contains?})
+```
+
+### Buffer pack/unpack helpers
+
+```lua
+unpackUInt16(data, offset)   unpackInt16(data, offset)
+unpackUInt32(data, offset)   unpackInt32(data, offset)
+unpackUInt64(data, offset)
+unpackFloat(data, offset)    unpackDouble(data, offset)
+unpackString(data, offset, maxlen?)
+unpackBytes(data, offset, len)
+unpackVector3(data, offset)
+
+packUInt16(val)   packUInt32(val)   packInt32(val)
+packUInt64(val)   packFloat(val)
+
+bufferFind(data, pattern)              -- byte-table search; returns offset or nil
+bufferContains(data, pattern)          -- boolean
+bufferFindAll(data, pattern)           -- table of offsets
+```
+
+### Stream assembly
+
+```lua
+feedPackets(packets)                   -- merge packets into per-socket streams
+getStream(socket_hex, direction?)      -- byte table of assembled stream
+consumeStream(socket_hex, direction, n)-- pop n bytes from the head
+listStreams()                          -- known socket/direction pairs
+clearStream(socket_hex?)               -- drop one stream or all
+```
+
+### Protocol framing
+
+```lua
+splitLengthPrefixed(data, {length_offset, length_size, header_size, endian?, includes_header?})
+splitDelimited(data, delimiter)        -- delimiter as string or byte table
+splitFixed(data, size)
+```
+
+### Cross-reference search
+
+```lua
+searchPackets(packets, pattern)        -- byte pattern across captured payloads
+searchPacketsForValue(packets, type, value)  -- type in {"uint32", "int32", "uint64", "float", "double"}
+```
+
+### Session recording
+
+```lua
+startRecording(filename?, {compress?, max_size_mb?}?)
+stopRecording()
+loadRecording(filename)                -- returns packet table
+listRecordings(process?)               -- recordings for the named process (or attached)
+```
+
+Recordings are JSONL (or `.jsonl.gz` when `compress=true`) under `recordings/<process>/`. `max_size_mb` triggers size-based rotation.
 
 ## Important notes
 
