@@ -5,6 +5,7 @@ from .general import GeneralExtension
 from .hooking import HookingExtension
 from .memory import MemoryExtension
 from .module_scan import ModuleScanExtension
+from .network import NetworkExtension
 from .process import ProcessExtension
 
 # Registration order matters: earlier extensions get priority on name collisions.
@@ -17,6 +18,7 @@ CORE_EXTENSIONS: list[type] = [
     ExecutionExtension,
     HookingExtension,
     ProcessExtension,
+    NetworkExtension,
 ]
 
 __all__ = ["CORE_EXTENSIONS"]
