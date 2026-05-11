@@ -10,11 +10,10 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from .extensions.bootstrap import bootstrap_extensions
 from .instructions import build_instructions
-from .plugins import load_plugins
 from .session import SESSION
-from .tools.lua.engine import LUA_ENGINE
-from .tools.lua_engine import execute_lua
+from .tools.lua.engine import LUA_ENGINE, execute_lua
 from .tools.lua_scripts import (
     SCRIPTS_DIR,
     list_scripts,
@@ -31,17 +30,11 @@ from .utils.memory_utils import format_address
 
 logger = logging.getLogger(__name__)
 
-# Load plugins and register their functions
-_plugins = load_plugins()
-for _plugin in _plugins:
-    try:
-        funcs = _plugin.register(LUA_ENGINE)
-        LUA_ENGINE.register_plugin_functions(_plugin.name, funcs)
-    except Exception as e:
-        logger.warning(f"Plugin '{_plugin.name}' registration failed: {e}")
+# Bootstrap all extensions (core + plugins)
+_extensions = bootstrap_extensions(LUA_ENGINE, SESSION)
 
-# Build instructions from base + loaded plugins
-_instructions = build_instructions(_plugins)
+# Build instructions from base + loaded extensions
+_instructions = build_instructions(_extensions)
 
 # Initialize MCP server with instructions
 mcp = FastMCP(
@@ -216,7 +209,7 @@ def processes(
 ) -> dict:
     """List running processes with smart filtering.
 
-    Returns array of {pid, name, path, parent_pid, threads, services[]}.
+    Returns array of {pid, name, path, parent_pid, threads, command_line, services[]}.
     Services are auto-included for svchost processes.
 
     Filters (combine as needed):
@@ -273,7 +266,7 @@ def processes(
             "threads": proc.cntThreads,
         }
 
-        # Include path
+        # Include process path
         path = _get_process_path(proc_pid)
         if path:
             entry["path"] = path
@@ -310,21 +303,17 @@ def attach(process_name: str, pid: Optional[int] = None) -> dict:
     Use pid parameter when multiple processes share the same name (e.g., svchost.exe).
     Use processes() tool first to find the right PID.
 
-    Examples: attach("notepad.exe") or attach("svchost.exe", pid=1820)"""
+    Examples: attach("Game.exe") or attach("svchost.exe", pid=1820)"""
     _start = time.perf_counter()
-
-    # Clean up old session before switching processes
-    SESSION.detach()
-
-    SESSION.target_process = process_name
-    SESSION.pid = pid if pid else 0
-    LOGGER.set_process(process_name)
 
     _log_args = {"process_name": process_name}
     if pid:
         _log_args["pid"] = pid
 
-    if not SESSION.ensure_attached():
+    LOGGER.set_process(process_name)
+
+    # Use canonical switch path (fires lifecycle callbacks)
+    if not SESSION.switch_process(process_name, pid if pid else 0):
         detail = f"Could not attach to PID {pid}" if pid else f"Could not attach to {process_name}. Is it running?"
         result = {"success": False, "error": "PROCESS_NOT_FOUND", "detail": detail}
         return _log("attach", _log_args, result, _start)
@@ -436,35 +425,13 @@ def chain(base: str, offsets: list[int | str], read_final: str = "ptr") -> dict:
 
 
 @mcp.tool()
-def scan(
-    pattern: str,
-    module: Optional[str] = None,
-    start_addr: Optional[str] = None,
-    end_addr: Optional[str] = None,
-    limit: int = 50,
-    max_results: int = 5000,
-    timeout_ms: int = 30000,
-) -> dict:
+def scan(pattern: str, module: Optional[str] = None, limit: int = 50) -> dict:
     """Scan for byte pattern (AOB). Use ?? for wildcards.
-    Faster with module specified. Without bounds, scans loaded modules only.
-    With start_addr/end_addr and no module, scans committed readable regions.
-    Returns matching addresses and scan_metadata."""
+    Faster with module specified. Example: '48 8B 05 ?? ?? ?? ??'
+    Returns matching addresses array."""
     _start = time.perf_counter()
-    result = scan_aob(pattern, module, 0, limit, False, start_addr, end_addr, max_results, False, timeout_ms)
-    return _log(
-        "scan",
-        {
-            "pattern": pattern,
-            "module": module,
-            "start_addr": start_addr,
-            "end_addr": end_addr,
-            "limit": limit,
-            "max_results": max_results,
-            "timeout_ms": timeout_ms,
-        },
-        result,
-        _start,
-    )
+    result = scan_aob(pattern, module, 0, limit, False, None, None, 5000, False)
+    return _log("scan", {"pattern": pattern, "module": module, "limit": limit}, result, _start)
 
 
 # ============================================================================
@@ -473,22 +440,25 @@ def scan(
 
 
 @mcp.tool()
-def lua(script: str) -> dict:
+def lua(script: str, timeout: Optional[float] = None) -> dict:
     """Execute Lua script for complex memory operations (loops, conditionals, multi-step).
     See server instructions for full list of available Lua functions.
+    Args: script - Lua code. timeout - optional max seconds (default: no limit).
     Returns: {success, results (dict), output (array of prints)}"""
     _start = time.perf_counter()
-    result = execute_lua(script)
+    result = execute_lua(script, timeout=timeout)
     return _log("lua", {"script": script}, result, _start)
 
 
 @mcp.tool()
-def scripts(action: str, name: str = "", process: str = "", args: Optional[dict] = None) -> dict:
+def scripts(
+    action: str, name: str = "", process: str = "", args: Optional[dict] = None, timeout: Optional[float] = None
+) -> dict:
     """Lua script management. Scripts stored as .lua files in scripts/<process>/<name>.lua
 
     Actions:
       list - Returns scripts with absolute paths. Use process='*' for all processes.
-      run  - Execute by name. Pass args={} for script arguments.
+      run  - Execute by name. Pass args={} for script arguments. timeout=seconds optional.
 
     CREATE/EDIT: Use file tools on paths from 'list'. First line comment = description.
     Example: scripts(action='list') -> get scripts_dir, then Write to {scripts_dir}/<name>.lua"""
@@ -507,7 +477,7 @@ def scripts(action: str, name: str = "", process: str = "", args: Optional[dict]
         if not name:
             result = {"success": False, "error": "MISSING_PARAM", "detail": "name required"}
         else:
-            result = run_script(name, process if process else None, args)
+            result = run_script(name, process if process else None, args, timeout=timeout)
     else:
         result = {
             "success": False,
@@ -522,9 +492,38 @@ def scripts(action: str, name: str = "", process: str = "", args: Optional[dict]
 # Entry Point
 # ============================================================================
 
+_shutdown_done = False
+
+
+def _shutdown():
+    """Free remote memory and detach on server exit.
+
+    Called from the main() finally block and registered with atexit as a backup.
+    Idempotent -- safe to call multiple times (guarded by _shutdown_done).
+    """
+    global _shutdown_done
+    if _shutdown_done:
+        return
+    _shutdown_done = True
+
+    # Signal any running Lua script to abort at the next checkpoint.
+    try:
+        LUA_ENGINE.cancel()
+    except BaseException:
+        pass
+
+    # Detach fires lifecycle callbacks and frees tracked allocations.
+    try:
+        if SESSION.pm is not None:
+            SESSION.detach()
+    except BaseException:
+        pass
+
 
 def main():
     """Run the MCP server."""
+    import atexit
+    import signal
     import sys
 
     if sys.platform == "win32":
@@ -538,7 +537,23 @@ def main():
         except Exception:
             pass
 
-    mcp.run()
+    # Register cleanup for normal interpreter exit (backup for finally block).
+    atexit.register(_shutdown)
+
+    # Convert termination signals to SystemExit so finally/atexit run.
+    def _signal_exit(sig, _frame):
+        raise SystemExit(128 + sig)
+
+    signal.signal(signal.SIGTERM, _signal_exit)
+    if sys.platform == "win32" and hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _signal_exit)
+
+    try:
+        mcp.run()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        _shutdown()
 
 
 if __name__ == "__main__":

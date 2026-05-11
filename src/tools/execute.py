@@ -1,7 +1,8 @@
 """Remote code execution in target process.
 
-Builds x64 shellcode to call functions in the target process with
-auto-allocated string arguments, float/XMM register support, and cleanup.
+Provides executeCode/executeCodeEx for assembling and running shellcode
+in the attached process. Auto-allocates strings, handles cleanup, and
+returns results from registers or pinned globals.
 """
 
 import re
@@ -19,8 +20,6 @@ DECIMAL_PATTERN = re.compile(r"^-?\d+$")
 # Limits
 MAX_RESULT_COPY_SIZE = 4096  # Max bytes for boxed return extraction
 MAX_OUTPUT_SIZE = 4096  # Max bytes for output pointer capture
-MAX_CALL_SEQUENCE_CALLS = 64
-MAX_CALL_SEQUENCE_SHELLCODE_SIZE = 0x10000
 
 
 def is_numeric_string(s: str) -> bool:
@@ -32,8 +31,8 @@ def is_numeric_string(s: str) -> bool:
         - "-123" (negative decimal)
 
     Returns False for:
-        - "MyNamespace.MyClass" (text)
-        - "Init" (text)
+        - "Game.Player" (text)
+        - "Shot" (text)
         - "Hello World" (text)
         - "" (empty)
     """
@@ -52,11 +51,6 @@ def parse_numeric_string(s: str) -> int:
     if s.lower().startswith("0x"):
         return int(s, 16)
     return int(s)
-
-
-def normalize_native_int(value: int) -> int:
-    """Preserve a Python/Lua integer bit pattern for x64 native calls."""
-    return int(value) & 0xFFFFFFFFFFFFFFFF
 
 
 class CallContext:
@@ -232,7 +226,7 @@ def execute_code(
                 # Check if it's a numeric string (hex like "0x123" or decimal like "456")
                 if is_numeric_string(arg):
                     # Parse as integer, not as string to allocate
-                    processed_args.append(normalize_native_int(parse_numeric_string(arg)))
+                    processed_args.append(parse_numeric_string(arg))
                 else:
                     # Actual text string - allocate in target process
                     ptr = ctx.alloc_string(arg)
@@ -243,7 +237,7 @@ def execute_code(
                         else f"arg{i}='{arg}' -> {format_address(ptr)}"
                     )
             elif isinstance(arg, int):
-                processed_args.append(normalize_native_int(arg))
+                processed_args.append(arg)
             elif isinstance(arg, float):
                 # Convert float to double bit pattern (64-bit)
                 float_bits = struct.unpack("<Q", struct.pack("<d", arg))[0]
@@ -256,23 +250,28 @@ def execute_code(
                     f"Supported: int, str (hex/decimal or text), float",
                 }
 
+        # Build float mask for XMM register usage
         float_mask = 0
         for idx in float_args:
             if 0 <= idx <= 3:
                 float_mask |= 1 << idx
 
+        # Calculate result buffer size
         result_size = 8  # RAX
         if returns_float:
             result_size = 16  # RAX + XMM0
         if result_copy_size > 0:
             result_size = 16 + result_copy_size  # RAX + XMM0 slot + boxed data
 
+        # Allocate result storage
         ctx.result_addr = SESSION.allocate(result_size, executable=False)
         SESSION.write_bytes(ctx.result_addr, b"\x00" * result_size)
 
+        # Allocate output buffer if needed (tracked in ctx for cleanup)
         if output_arg >= 0 and output_size > 0:
             ctx.output_buffer_addr = SESSION.allocate(output_size, executable=False)
 
+        # Build shellcode
         shellcode = build_call_x64(
             func_addr,
             processed_args,
@@ -286,11 +285,14 @@ def execute_code(
             output_buffer_addr=ctx.output_buffer_addr,
         )
 
+        # Allocate and write shellcode
         ctx.shellcode_addr = SESSION.allocate(len(shellcode), executable=True)
         SESSION.write_bytes(ctx.shellcode_addr, shellcode)
 
+        # Create and run thread
         ctx.thread_handle = SESSION.create_remote_thread(ctx.shellcode_addr)
 
+        # Wait for completion
         completed = SESSION.wait_for_thread(ctx.thread_handle, timeout_ms)
 
         if not completed:
@@ -301,6 +303,7 @@ def execute_code(
                 f"Target may be hung or function takes longer than expected.",
             }
 
+        # Read results
         result_data = SESSION.read_bytes(ctx.result_addr, result_size)
         rax_value = struct.unpack("<Q", result_data[0:8])[0]
 
@@ -338,11 +341,13 @@ def execute_code(
 
 
 def execute_code_ex(flags: int, timeout_ms: int, func_addr: Union[str, int], *args) -> dict:
-    """Execute function with extended options.
+    """Execute function with extended options (CE-compatible signature).
 
     Flags:
         0 (EX_DEFAULT): Wait for completion, return result
         1 (EX_ASYNC): Not implemented - use execute_code instead
+
+    Convenience wrapper around execute_code with explicit register/global setup.
 
     Args:
         flags: Execution flags (currently only 0 is supported)
@@ -393,13 +398,6 @@ def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
     if not calls:
         return {"success": False, "error": "NO_CALLS", "detail": "calls list is empty"}
 
-    if len(calls) > MAX_CALL_SEQUENCE_CALLS:
-        return {
-            "success": False,
-            "error": "TOO_MANY_CALLS",
-            "detail": f"callSequence supports at most {MAX_CALL_SEQUENCE_CALLS} calls",
-        }
-
     ctx = CallContext()
 
     try:
@@ -426,7 +424,7 @@ def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
                 if isinstance(addr_raw, str):
                     func_addr = parse_address(addr_raw)
                 else:
-                    func_addr = normalize_native_int(addr_raw)
+                    func_addr = int(addr_raw)
             except ValueError as e:
                 return {"success": False, "error": "INVALID_ADDRESS", "detail": f"Call {idx}: {e}"}
 
@@ -442,7 +440,7 @@ def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
             for i, arg in enumerate(args_raw):
                 if isinstance(arg, str):
                     if is_numeric_string(arg):
-                        processed_args.append(normalize_native_int(parse_numeric_string(arg)))
+                        processed_args.append(parse_numeric_string(arg))
                     else:
                         ptr = ctx.alloc_string(arg)
                         processed_args.append(ptr)
@@ -451,7 +449,7 @@ def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
                         else:
                             all_string_info.append(f"call{idx}.arg{i}='{arg}' -> {format_address(ptr)}")
                 elif isinstance(arg, int):
-                    processed_args.append(normalize_native_int(arg))
+                    processed_args.append(arg)
                 elif isinstance(arg, dict) and "result" in arg:
                     result_index = int(arg["result"])
                     if result_index < 1 or result_index > idx:
@@ -470,29 +468,28 @@ def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
 
             processed_calls.append((func_addr, processed_args))
 
-        # Allocate result storage
+        # Allocate result storage: one uint64 slot per call.
         result_size = len(processed_calls) * 8
         ctx.result_addr = SESSION.allocate(result_size, executable=False)
         SESSION.write_bytes(ctx.result_addr, b"\x00" * result_size)
 
+        # Build multi-call shellcode
         shellcode = build_multi_call_x64(processed_calls, ctx.result_addr)
-        if len(shellcode) > MAX_CALL_SEQUENCE_SHELLCODE_SIZE:
-            return {
-                "success": False,
-                "error": "SHELLCODE_TOO_LARGE",
-                "detail": f"callSequence shellcode exceeds {MAX_CALL_SEQUENCE_SHELLCODE_SIZE} bytes",
-            }
 
+        # Allocate and write shellcode
         ctx.shellcode_addr = SESSION.allocate(len(shellcode), executable=True)
         SESSION.write_bytes(ctx.shellcode_addr, shellcode)
 
+        # Create and run thread
         ctx.thread_handle = SESSION.create_remote_thread(ctx.shellcode_addr)
 
+        # Wait for completion
         completed = SESSION.wait_for_thread(ctx.thread_handle, timeout_ms)
 
         if not completed:
             return {"success": False, "error": "TIMEOUT", "detail": f"Sequence did not complete within {timeout_ms}ms"}
 
+        # Read per-call results (each call's RAX stored in its own slot).
         result_data = SESSION.read_bytes(ctx.result_addr, result_size)
         call_results = [struct.unpack("<Q", result_data[i * 8 : i * 8 + 8])[0] for i in range(len(processed_calls))]
         result = call_results[-1]

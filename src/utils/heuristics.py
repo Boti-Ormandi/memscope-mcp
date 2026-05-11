@@ -48,12 +48,16 @@ def detect_value_type(raw_bytes: bytes, address: int) -> DetectedValue:
 
     value = struct.unpack("<Q", raw_bytes)[0]
 
+    # Check for NULL
     if value == 0:
         return DetectedValue(value_type=ValueType.NULL, raw_value=0, annotation="NULL", confidence=1.0)
 
+    # Check for valid pointer
     if is_valid_pointer(value):
+        # Try to determine what it points to
         annotation = _analyze_pointer(value)
 
+        # Check if it points to a C string
         c_str = safe_read_string(value, 64)
         if c_str and len(c_str) > 2 and _is_printable(c_str):
             preview = c_str[:50] + "..." if len(c_str) > 50 else c_str
@@ -63,14 +67,16 @@ def detect_value_type(raw_bytes: bytes, address: int) -> DetectedValue:
 
         return DetectedValue(value_type=ValueType.POINTER, raw_value=value, annotation=annotation, confidence=0.85)
 
+    # Check for small integer
     if value < 0x10000:
         return DetectedValue(value_type=ValueType.INT, raw_value=value, annotation=str(value), confidence=0.7)
 
-    # Examine lower 4 bytes for a plausible float value.
+    # Check for float (examine lower 4 bytes)
     float_val = struct.unpack("<f", raw_bytes[:4])[0]
     if _is_reasonable_float(float_val):
         return DetectedValue(value_type=ValueType.FLOAT, raw_value=value, annotation=f"{float_val:.4f}", confidence=0.6)
 
+    # Check for inline ASCII string
     if _looks_like_inline_string(raw_bytes):
         try:
             # Find null terminator or end
@@ -112,6 +118,7 @@ def _is_reasonable_float(f: float) -> bool:
 
     if math.isnan(f) or math.isinf(f):
         return False
+    # Common ranges for game values
     return -1e10 < f < 1e10
 
 

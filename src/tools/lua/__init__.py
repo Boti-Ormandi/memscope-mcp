@@ -2,4 +2,4 @@
 
 from .engine import LUA_ENGINE, MemscopeLuaEngine, execute_lua
 
-__all__ = ["execute_lua", "LUA_ENGINE", "MemscopeLuaEngine"]
+__all__ = ["MemscopeLuaEngine", "LUA_ENGINE", "execute_lua"]

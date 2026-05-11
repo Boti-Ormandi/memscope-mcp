@@ -12,7 +12,6 @@ import pymem.process
 import pymem.ressources.structure as structs
 
 from ...session import SESSION
-from ...utils.logger import LOGGER
 
 # Windows API constants
 TH32CS_SNAPTHREAD = 0x00000004
@@ -501,64 +500,3 @@ def get_services(lua_table_fn: Callable, pid: Optional[int] = None):
         entry["state"] = s["state"]
         t[i] = entry
     return t
-
-
-def open_process(lua_table_fn: Callable, pid: int, log_error: Callable):
-    """Attach to a different process by PID.
-
-    Args:
-        lua_table_fn: Lua table constructor
-        pid: Process ID to attach to
-        log_error: Error logging callback
-
-    Returns:
-        Lua table with success info or nil on error
-    """
-    try:
-        # Store old state
-        old_pid = SESSION.pid
-        old_process = SESSION.target_process
-
-        # Detach from current
-        SESSION.detach()
-
-        # Find process name
-        process_name = None
-        for proc in pymem.process.list_processes():
-            if proc.th32ProcessID == pid:
-                process_name = proc.szExeFile.decode() if isinstance(proc.szExeFile, bytes) else proc.szExeFile
-                break
-
-        if not process_name:
-            # Restore old state
-            SESSION.target_process = old_process
-            SESSION.pid = old_pid
-            if old_pid:
-                SESSION.ensure_attached()
-            return None
-
-        # Attach to new process
-        SESSION.target_process = process_name
-        SESSION.pid = pid
-
-        if not SESSION.ensure_attached():
-            # Restore old state
-            SESSION.target_process = old_process
-            SESSION.pid = old_pid
-            if old_pid:
-                SESSION.ensure_attached()
-            return None
-
-        # Update logger to log to new process directory
-        LOGGER.set_process(process_name)
-
-        result = lua_table_fn()
-        result["success"] = True
-        result["pid"] = SESSION.pid
-        result["name"] = process_name
-        result["modules"] = len(SESSION.modules)
-        return result
-
-    except Exception as e:
-        log_error("openProcess", e)
-        return None

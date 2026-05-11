@@ -98,15 +98,15 @@ def read_struct(
         float, double, ptr, pointer, cstring, vector3, vector4
 
     Example:
-        local header = readStruct(structAddr, {
-            version = "uint32@0x00",
-            flags = "uint32@0x04",
+        local player = readStruct(playerAddr, {
+            health = "float@0x100",
+            maxHealth = "float@0x104",
             name = "cstring@0x10",
-            size = "uint64@0x18",
-            timestamp = "uint64@0x20",
-            checksum = "uint32@0x28"
+            position = "vector3@0x200",
+            isAlive = "bool@0x108",
+            level = "uint32@0x110"
         })
-        print(header.version, header.name)
+        print(player.health, player.name)
 
     Returns:
         Lua table with field values, or nil on error

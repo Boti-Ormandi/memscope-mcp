@@ -95,13 +95,19 @@ def list_scripts(process: Optional[str] = None) -> dict:
     return {"scripts": scripts, "count": len(scripts), "scripts_dir": str(SCRIPTS_DIR)}
 
 
-def run_script(name: str, process: Optional[str] = None, args: Optional[dict] = None) -> dict:
+def run_script(
+    name: str,
+    process: Optional[str] = None,
+    args: Optional[dict] = None,
+    timeout: Optional[float] = None,
+) -> dict:
     """Run a saved Lua script by name.
 
     Args:
         name: Script name (without .lua extension)
         process: Optional process name. If None, uses current attached process.
         args: Optional dict of arguments passed to script as 'args' global
+        timeout: Optional max execution time in seconds.
 
     Returns:
         Lua execution result with script metadata added.
@@ -144,7 +150,7 @@ def run_script(name: str, process: Optional[str] = None, args: Optional[dict] = 
         return {"success": False, "error": "READ_FAILED", "detail": str(e)}
 
     # Execute with args
-    result = execute_lua(script_content, args)
+    result = execute_lua(script_content, args, timeout=timeout)
 
     # Add metadata
     result["script_name"] = name

@@ -54,10 +54,10 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
 
     # Follow pointer chain: add offset first, then read (standard RE semantics)
     for step, offset in enumerate(offsets):
-        read_addr = current + offset
+        read_addr = current + offset  # Add offset FIRST
 
         try:
-            ptr_value = SESSION.read_ptr(read_addr)
+            ptr_value = SESSION.read_ptr(read_addr)  # THEN read
         except Exception as e:
             chain.append(
                 {

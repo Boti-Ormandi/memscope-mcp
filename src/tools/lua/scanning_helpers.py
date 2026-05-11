@@ -31,7 +31,7 @@ def scan_string(
 
     Args:
         lua_table_fn: Lua table constructor.
-        search: The string to find (e.g. "ConfigPath").
+        search: The string to find (e.g. "PlayerHealth").
         module: Limit scan to this module (faster). nil scans all.
         wide: If true, search for UTF-16LE encoding (Windows wide strings).
         max_results: Stop after this many matches.
@@ -41,10 +41,10 @@ def scan_string(
         Lua table of addresses where the string was found. Example::
 
             -- Find ASCII string in a specific module
-            local hits = scanString("ConfigPath", "target.dll")
+            local hits = scanString("Health", "GameAssembly.dll")
 
             -- Find wide string (UTF-16) anywhere
-            local hits = scanString("AssemblyName", nil, true)
+            local hits = scanString("PlayerName", nil, true)
 
             for i, addr in ipairs(hits) do
                 print(toHex(addr) .. ": " .. readString(addr, 64))
@@ -60,6 +60,7 @@ def scan_string(
         else:
             raw = search.encode("ascii")
 
+        # Build AOB pattern string ("48 65 61 6C 74 68")
         pattern_str = " ".join(f"{b:02X}" for b in raw)
         parsed = parse_aob_pattern(pattern_str)
 
@@ -116,7 +117,7 @@ def scan_pointer(
             local refs = scanPointer(objectAddr)
 
             -- Find references within a specific module
-            local refs = scanPointer(vtableAddr, "target.dll")
+            local refs = scanPointer(vtableAddr, "GameAssembly.dll")
 
             for i, ref in ipairs(refs) do
                 print("xref: " .. formatAddress(ref))

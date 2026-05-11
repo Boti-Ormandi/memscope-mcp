@@ -87,12 +87,12 @@ def format_address(address, log_error: Callable) -> str:
         log_error: Error callback.
 
     Returns:
-        String like ``"kernel32.dll+0x1A23748"`` when the address
+        String like ``"UnityPlayer.dll+0x1A23748"`` when the address
         falls inside a known module, or ``"0x7FFC8E9F3748"`` otherwise.
         Returns ``"nil"`` for nil input. Example::
 
             print("entry: " .. formatAddress(vtable_ptr))
-            -- "entry: kernel32.dll+0x1A23748"
+            -- "entry: UnityPlayer.dll+0x1A23748"
     """
     if address is None:
         return "nil"

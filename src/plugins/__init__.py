@@ -1,7 +1,14 @@
-"""Plugin system for domain-specific helpers.
+"""Plugin system for domain-specific Lua helpers.
 
-Plugins are single .py files placed in the `plugins/` directory at the project root.
-At server startup, all plugins are loaded and their Lua functions + instructions registered.
+Plugins are user-activated extensions: single .py files placed in the `plugins/`
+directory at the project root. They share the same LuaExtension contract as core
+features, but are loaded from an external directory and isolated on failure.
+
+At server startup, the bootstrap loads them, registers their Lua functions, and
+appends their `instructions` fragments to the assembled server instructions bundle.
+
+Loading is based on the plugin file being present in `plugins/`, not on whether
+some target DLL or module is currently loaded in the attached process.
 
 See contrib/plugins/ for available plugins and plugins/README.md for the interface.
 """
@@ -10,14 +17,17 @@ import importlib.util
 import inspect
 import logging
 import sys
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from pathlib import Path
+from typing import Callable
+
+from ..extensions.base import ExtensionContext, LuaExtension
 
 logger = logging.getLogger(__name__)
 
 
-class PluginBase(ABC):
-    """Base class for domain plugins.
+class PluginBase(LuaExtension):
+    """Base class for user plugins. Thin specialization of LuaExtension.
 
     Subclass this to create a plugin. Place your .py file in the plugins/ directory.
 
@@ -27,8 +37,8 @@ class PluginBase(ABC):
             description = "Helpers for My Domain"
             instructions = "## My Domain\\n..."
 
-            def register(self, engine) -> dict[str, callable]:
-                self.table = engine.lua.table
+            def register(self, ctx: ExtensionContext) -> dict[str, callable]:
+                self.table = ctx.table_factory
                 return {"myFunction": self._my_func}
 
             def _my_func(self, addr):
@@ -50,18 +60,15 @@ class PluginBase(ABC):
     @property
     @abstractmethod
     def instructions(self) -> str:
-        """AI-facing documentation. Appended to server instructions."""
+        """AI-facing Lua/plugin docs appended to the server instruction bundle."""
         ...
 
     @abstractmethod
-    def register(self, engine) -> dict[str, callable]:
-        """Register plugin functions with the Lua engine.
-
-        Called once at startup. Use `engine.lua.table` to create Lua tables
-        in your helper functions.
+    def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
+        """Register plugin functions.
 
         Args:
-            engine: The Lua engine instance.
+            ctx: ExtensionContext with engine, session, table_factory, log_error.
 
         Returns:
             Dict mapping Lua function names to Python callables.
@@ -95,7 +102,6 @@ def load_plugins(plugins_dir: Path | None = None) -> list[PluginBase]:
         return []
 
     # Ensure PluginBase is importable from plugins
-    # Add src parent to sys.path if not already there
     project_root = plugins_dir.parent
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
