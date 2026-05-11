@@ -219,7 +219,7 @@ Identifying which `svchost.exe` hosts a given Windows service is normally a mult
 **Requirements:**
 - Windows x64
 - Python 3.10+
-- An MCP client ([Claude Desktop](https://claude.ai/download), [Claude Code](https://claude.ai/code), or any [MCP-compatible client](https://modelcontextprotocol.io/clients))
+- An [MCP-compatible client](https://modelcontextprotocol.io/clients)
 
 **Install:**
 ```bash
@@ -253,13 +253,7 @@ If the client doesn't have the script on `PATH`, fall back to the module form:
 }
 ```
 
-Where this goes:
-
-| Client | Config location |
-|--------|----------------|
-| Claude Desktop | Settings > Developer > Edit Config ([docs](https://modelcontextprotocol.io/docs/develop/connect-local-servers)) |
-| Claude Code | `.mcp.json` in project root, or `~/.claude.json` for global ([docs](https://code.claude.com/docs/en/settings)) |
-| Other clients | See [MCP client docs](https://modelcontextprotocol.io/clients) |
+The entry goes wherever your client expects its `mcpServers` configuration — consult the client's documentation.
 
 **Verify:**
 ```bash
