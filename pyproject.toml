@@ -1,0 +1,65 @@
+[project]
+name = "memscope-mcp"
+version = "0.1.0"
+description = "AI-native memory research MCP server for reverse engineering"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+keywords = [
+    "mcp",
+    "memory",
+    "reverse-engineering",
+    "debugger",
+    "process-memory",
+    "pattern-scanning",
+    "lua",
+    "ai",
+    "security-research",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: Security",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: Microsoft :: Windows",
+]
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "pymem>=1.13.0",
+    "lupa>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "pre-commit"]
+
+[project.urls]
+Repository = "https://github.com/Boti-Ormandi/memscope-mcp"
+Issues = "https://github.com/Boti-Ormandi/memscope-mcp/issues"
+
+[project.scripts]
+memscope-mcp = "src.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E722",  # bare-except — intentional in memory read code (any failure = nil)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]

@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and temp files
+*.log
+error_log.txt
+error_wrapper.log
+logs/
+nul
+
+# Claude temp files
+tmpclaude-*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Plugins (user-curated, keep README)
+plugins/*.py
+
+# Project specific
+mcp_wrapper.js
+lua_scripts.json
+scripts/*/
+
+# User-specific config
+.mcp.json
+.claude/
