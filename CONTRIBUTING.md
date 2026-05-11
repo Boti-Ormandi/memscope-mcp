@@ -1,130 +1,85 @@
 # Contributing to memscope-mcp
 
-## Philosophy
+Small focused PRs welcome. For anything large or speculative, open an issue first.
 
-memscope-mcp is built for AI agents, not humans. This drives design decisions:
+## Development setup
 
-- **Minimal toolset** -- 10 core tools, not 100. New tools must provide capabilities that can't be achieved with existing tools + Lua.
-- **Lua for complexity** -- Multi-step logic belongs in Lua scripts, not new MCP tools.
-- **Generic core** -- Domain-specific code belongs in plugins, not `src/`. Keep the core runtime/target-agnostic.
-- **AI context efficiency** -- Instructions cost tokens. Be concise. Use "Available when:" markers for conditional features.
-- **Scripts persist, addresses don't** -- ASLR invalidates addresses on restart. Save the finder script, not the address.
-
-## What We Accept
-
-- Bug fixes
-- New Lua functions that add real capability
-- Domain plugins (in `contrib/plugins/`)
-- Performance improvements
-- Documentation clarity
-
-## What We Don't Accept
-
-- Convenience wrappers around existing tools
-- GUI or visualization features
-- Domain-specific code in core (use the plugin system)
-- Features that bloat AI context without clear value
-
-When in doubt, open an issue first.
-
-## Code Style
-
-Enforced by [ruff](https://docs.astral.sh/ruff/) (linting + formatting). Pre-commit hooks run automatically.
+Windows x64 + Python 3.10+ are required. The `pymem` dependency is unconditional and Windows-only; the package will not install on macOS or Linux.
 
 ```bash
+git clone https://github.com/Boti-Ormandi/memscope-mcp.git
+cd memscope-mcp
 pip install -e ".[dev]"
 pre-commit install
+pytest
 ```
 
-This installs git hooks that run `ruff check --fix` and `ruff format` on every commit. CI also checks this on PRs.
+Pre-commit runs `ruff check --fix` and `ruff format` on every commit. CI runs the same checks plus the full pytest suite on Python 3.10 through 3.13.
 
-Rules are configured in `pyproject.toml`. Key settings:
-- Line length: 120
+## Project layout
+
+The top-level [README](README.md#architecture) has the full tree. The pieces you'll actually touch:
+
+- [`src/server.py`](src/server.py) — `@mcp.tool()` wrappers (one per MCP tool)
+- [`src/tools/`](src/tools/) — tool implementations (`memory.py`, `scanning.py`, `pointers.py`, `types.py`, `execute.py`, `lua_scripts.py`)
+- [`src/tools/lua/`](src/tools/lua/) — Lua engine (`engine.py`) plus nine themed function modules: `memory_read`, `memory_write`, `process_info`, `scanning_helpers`, `struct_helpers`, `modules`, `code_execution`, `comparisons`, `utilities`
+- [`src/instructions/base.py`](src/instructions/base.py) — AI-facing Lua reference (token-priced, kept terse)
+- [`docs/lua-reference.md`](docs/lua-reference.md) — human-facing Lua reference (complete)
+- [`contrib/plugins/`](contrib/plugins/) — checked-in plugins users can activate by copying into `plugins/`
+- [`tests/`](tests/) — pytest suite, smoke + unit
+
+## Adding an MCP tool
+
+1. Implement in `src/tools/<your_tool>.py`. Follow patterns in `types.py` or `scanning.py`.
+2. Wrap with `@mcp.tool()` in `src/server.py`. Call `_log()` so the tool call lands in session logs.
+3. Keep the docstring terse — it becomes AI-facing context and costs tokens. List parameters, types, and return shape.
+4. Update `tests/test_smoke.py`: add the tool name to `test_tool_names` and bump `test_tool_count`. This test pins the 10-tool surface; forgetting it makes the smoke test fail immediately.
+5. Add the tool to the README tool table.
+
+## Adding a Lua function
+
+1. Pick the module by category:
+   - Reads → `memory_read.py`, writes → `memory_write.py`
+   - AOB / xref scans → `scanning_helpers.py`
+   - Vector / matrix / declarative struct reads → `struct_helpers.py`
+   - Module-name and address resolution → `modules.py`
+   - Remote calls and allocation → `code_execution.py`
+   - Pre-attach introspection (processes, threads, regions, services) → `process_info.py`
+   - 64-bit safe comparisons → `comparisons.py`
+   - Bitwise, formatting, `addr()`, result helpers → `utilities.py`
+2. Register the function in `MemscopeLuaEngine._register_functions` in `src/tools/lua/engine.py`.
+3. Document it in both `src/instructions/base.py` (AI-facing, terse) and `docs/lua-reference.md` (human-facing, complete).
+4. Conventions: return `nil` on failure (don't raise), accept addresses as int or hex string (use `parse_address`), and use `engine.lua.table(...)` to build Lua-side return tables.
+
+## Adding a plugin
+
+Plugins live in `plugins/` (gitignored for user-curated) and ship in `contrib/plugins/` (checked in, activate by copying). The interface, authoring guidelines, and a minimal example are in [`plugins/README.md`](plugins/README.md). The reference IL2CPP plugin in [`contrib/plugins/il2cpp.py`](contrib/plugins/il2cpp.py) is a real-world example.
+
+## Code style
+
+Enforced by [ruff](https://docs.astral.sh/ruff/). Configuration in `pyproject.toml`:
+
+- Line length 120
 - Rules: E, F, W, I (pycodestyle, pyflakes, isort)
-- E722 (bare except) is allowed -- intentional in memory read code
-
-Beyond formatting:
-- Type hints on function signatures
+- E722 (bare `except`) is allowed: it's deliberate in memory-read paths where any failure means "return nil"
+- Type hints on public function signatures
 - Docstrings with Args/Returns on public functions
-- Follow patterns in `src/tools/` for new tools
-- Follow `contrib/plugins/il2cpp.py` for new plugins
 
-## Adding a Tool
+## Testing
 
-1. Create function in `src/tools/your_tool.py`
-2. Import and wrap with `@mcp.tool()` in `src/server.py`
-3. Add docstring (this becomes the AI-facing documentation)
-4. Update README
+The smoke suite (`tests/test_smoke.py`) is the gating invariant: it asserts the 10-tool surface, that the Lua engine initializes, that the plugin loader runs, and that the instructions builder produces output. Most regressions show up here first.
 
-## Adding Lua Functions
+Unit tests live next to features (`test_types.py`, `test_scanning.py`, `test_lua_engine.py`, etc.). Run a focused subset with `pytest -k <pattern>`.
 
-1. Register in the appropriate module under `src/tools/lua/`
-2. Document in `src/instructions/base.py`
-3. Return `nil` on failure (Lua convention)
-4. Handle both int and string address formats
+There's no live-process integration test — pymem can't attach to anything useful in a clean GitHub Actions runner, so verifying tool behavior against a real target stays manual.
 
-## Plugins
+## PR checklist
 
-Drop a `.py` file into the `plugins/` directory at the project root and restart the server. All `.py` files there are loaded at startup; their Lua functions and AI documentation are registered automatically. Plugins ship in `contrib/plugins/`; users activate them by copying into `plugins/`.
-
-### Plugin Interface
-
-A plugin is a single `.py` file with a class that extends `PluginBase`:
-
-```python
-from src.plugins import PluginBase
-from src.session import SESSION
-
-class MyPlugin(PluginBase):
-    name = "my_domain"
-    description = "Helpers for My Domain"
-
-    instructions = """
-    ## My Domain Helpers
-    **Available when: mydomain.dll present in modules**
-
-    ```lua
-    readMyThing(addr)  -- Read a domain-specific structure
-    ```
-    """
-
-    def register(self, engine) -> dict[str, callable]:
-        self.table = engine.lua.table  # for creating Lua tables
-        return {
-            "readMyThing": self._read_thing,
-        }
-
-    def _read_thing(self, address):
-        try:
-            addr = int(address)
-            return SESSION.read_int32(addr + 0x10)
-        except Exception:
-            return None
-```
-
-- **name**: short identifier (e.g. `"il2cpp"`)
-- **description**: one-line summary for log output
-- **instructions**: AI-facing documentation appended to the server's instructions
-- **register(engine)**: called once at startup. Returns a dict mapping Lua function names to callables. Use `engine.lua.table` to create Lua table return values.
-
-### Plugin Guidelines
-
-- Single `.py` file extending `PluginBase`
-- Use only generic SESSION methods (`read_ptr`, `read_int32`, `read_bytes`, etc.)
-- Hold domain-specific state on the plugin instance, not on SESSION
-- Handle errors gracefully -- return `None` on failure
-- No dependencies beyond what's in `pyproject.toml`
-
-Plugins ship in `contrib/plugins/`, not `plugins/`. Users activate them by copying into `plugins/`.
-
-## PR Process
-
-1. Fork and branch
-2. `pip install -e ".[dev]" && pre-commit install`
-3. Make focused changes (one logical change per commit)
-4. Run `pytest tests/` and `ruff check src/ contrib/ tests/`
-5. Submit PR with description of what and why
-6. Address review feedback
+- `ruff check` and `ruff format --check` pass
+- `pytest` passes locally on Windows
+- README tool table updated if you added or removed an MCP tool
+- New Lua functions documented in both `src/instructions/base.py` and `docs/lua-reference.md`
+- One logical change per commit; PR description explains the what and the why
 
 ## License
 
