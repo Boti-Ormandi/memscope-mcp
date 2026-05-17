@@ -43,7 +43,7 @@ Repository = "https://github.com/Boti-Ormandi/memscope-mcp"
 Issues = "https://github.com/Boti-Ormandi/memscope-mcp/issues"
 
 [project.scripts]
-memscope-mcp = "memscope_mcp.server:main"
+memscope-mcp = "memscope_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]
