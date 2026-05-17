@@ -31,7 +31,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp[cli]>=1.0.0",
-    "pymem>=1.13.0",
+    'pymem>=1.13.0; sys_platform == "win32"',
     "lupa>=2.0",
 ]
 
