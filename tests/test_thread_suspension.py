@@ -6,9 +6,9 @@ HookInfo fields, and backward compatibility of shellcode builder return type.
 
 import pytest
 
-from src.session import SuspendedThread
-from src.tools.hooking import PAGE_EXECUTE_READWRITE, HookInfo, HookManager
-from src.utils.shellcode import build_hook_trampoline
+from memscope_mcp.session import SuspendedThread
+from memscope_mcp.tools.hooking import PAGE_EXECUTE_READWRITE, HookInfo, HookManager
+from memscope_mcp.utils.shellcode import build_hook_trampoline
 
 # ============================================================================
 # Helpers
@@ -64,12 +64,12 @@ class TestSafePatch:
             self.protect_calls.append((addr, size, prot))
             return OLD_PROT
 
-        monkeypatch.setattr("src.tools.hooking.SESSION.suspend_process_threads", mock_suspend)
-        monkeypatch.setattr("src.tools.hooking.SESSION.resume_process_threads", mock_resume)
-        monkeypatch.setattr("src.tools.hooking.SESSION.get_thread_rip", mock_get_rip)
-        monkeypatch.setattr("src.tools.hooking.SESSION.set_thread_rip", mock_set_rip)
-        monkeypatch.setattr("src.tools.hooking.SESSION.write_bytes", mock_write)
-        monkeypatch.setattr("src.tools.hooking.SESSION.virtual_protect", mock_protect)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.suspend_process_threads", mock_suspend)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.resume_process_threads", mock_resume)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.get_thread_rip", mock_get_rip)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.set_thread_rip", mock_set_rip)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.write_bytes", mock_write)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.virtual_protect", mock_protect)
 
     def test_no_threads_in_zone(self):
         """Threads outside danger zone are not adjusted."""
@@ -128,7 +128,7 @@ class TestSafePatch:
             raise OSError("WriteProcessMemory failed")
 
         # Override write_bytes to fail
-        import src.tools.hooking as hooking_mod
+        import memscope_mcp.tools.hooking as hooking_mod
 
         original_write = hooking_mod.SESSION.write_bytes
         hooking_mod.SESSION.write_bytes = failing_write
@@ -258,14 +258,14 @@ class TestInstallRemoveRouting:
         def mock_allocate(size, executable=False):
             return 0x50000000
 
-        monkeypatch.setattr("src.tools.hooking.SESSION.read_bytes", mock_read_bytes)
-        monkeypatch.setattr("src.tools.hooking.SESSION.write_bytes", mock_write_bytes)
-        monkeypatch.setattr("src.tools.hooking.SESSION.virtual_protect", mock_virtual_protect)
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate", mock_allocate)
-        monkeypatch.setattr("src.tools.hooking.SESSION.free", lambda addr: True)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.read_bytes", mock_read_bytes)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.write_bytes", mock_write_bytes)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.virtual_protect", mock_virtual_protect)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate", mock_allocate)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.free", lambda addr: True)
 
         # Set up ring buffer
-        from src.tools.hooking import RingBufferConfig
+        from memscope_mcp.tools.hooking import RingBufferConfig
 
         self.mgr.ring_buffer = RingBufferConfig(
             address=0x10000000,
@@ -277,7 +277,7 @@ class TestInstallRemoveRouting:
 
     def test_install_14byte_uses_safe_patch(self, monkeypatch):
         """When near alloc fails (jmp_size=14), _safe_patch is used."""
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
 
         result = self.mgr.install_hook(TARGET_ADDR, "test_hook")
         assert result["jmp_size"] == 14
@@ -286,7 +286,7 @@ class TestInstallRemoveRouting:
 
     def test_install_5byte_uses_direct_write(self, monkeypatch):
         """When near alloc succeeds (jmp_size=5), direct write is used."""
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
 
         result = self.mgr.install_hook(TARGET_ADDR, "test_hook")
         assert result["jmp_size"] == 5
@@ -296,7 +296,7 @@ class TestInstallRemoveRouting:
 
     def test_remove_14byte_uses_safe_patch(self, monkeypatch):
         """Hook installed with jmp_size=14: remove_hook uses _safe_patch."""
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
 
         self.mgr.install_hook(TARGET_ADDR, "test_hook")
         self.safe_patch_calls.clear()
@@ -307,7 +307,7 @@ class TestInstallRemoveRouting:
 
     def test_remove_5byte_uses_direct_write(self, monkeypatch):
         """Hook installed with jmp_size=5: remove_hook uses direct write."""
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
 
         self.mgr.install_hook(TARGET_ADDR, "test_hook")
         self.safe_patch_calls.clear()
@@ -321,7 +321,7 @@ class TestInstallRemoveRouting:
 
     def test_hook_info_stores_jmp_size_14(self, monkeypatch):
         """HookInfo.jmp_size is 14 when near allocation fails."""
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
 
         self.mgr.install_hook(TARGET_ADDR, "test_hook")
         hook = self.mgr.hooks[TARGET_ADDR]
@@ -329,7 +329,7 @@ class TestInstallRemoveRouting:
 
     def test_hook_info_stores_jmp_size_5(self, monkeypatch):
         """HookInfo.jmp_size is 5 when near allocation succeeds."""
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
 
         self.mgr.install_hook(TARGET_ADDR, "test_hook")
         hook = self.mgr.hooks[TARGET_ADDR]
@@ -337,7 +337,7 @@ class TestInstallRemoveRouting:
 
     def test_hook_info_stores_stub_offset(self, monkeypatch):
         """HookInfo.stub_offset > 0 and matches shellcode builder output."""
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
 
         self.mgr.install_hook(TARGET_ADDR, "test_hook")
         hook = self.mgr.hooks[TARGET_ADDR]
@@ -423,7 +423,7 @@ class TestSessionThreadControlGuards:
     """Test guard clauses on session thread control methods."""
 
     def test_suspend_raises_not_attached(self):
-        from src.session import DebugSession
+        from memscope_mcp.session import DebugSession
 
         session = DebugSession()
         with pytest.raises(RuntimeError, match="Not attached"):
@@ -431,7 +431,7 @@ class TestSessionThreadControlGuards:
 
     def test_resume_empty_list(self):
         """resume_process_threads with empty list does nothing."""
-        from src.session import DebugSession
+        from memscope_mcp.session import DebugSession
 
         session = DebugSession()
         session.resume_process_threads([])  # should not raise

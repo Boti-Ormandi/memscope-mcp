@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from contrib.plugins.netcap import NetcapPlugin
-from src.tools.hooking import (
+from memscope_mcp.tools.hooking import (
     ENTRY_ARG0,
     ENTRY_CAPTURED_LENGTH,
     ENTRY_DATA_LENGTH,
@@ -242,7 +242,7 @@ class TestAlreadyHookedDetection:
     def test_rejects_e9_jmp_prologue(self, monkeypatch):
         """E9 xx xx xx xx = rel32 JMP, typical inline hook."""
         prologue = b"\xe9\x12\x34\x56\x78" + b"\x90" * 27
-        monkeypatch.setattr("src.tools.hooking.SESSION.read_bytes", lambda addr, size: prologue)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.read_bytes", lambda addr, size: prologue)
 
         with pytest.raises(RuntimeError, match="appears already hooked.*E9 rel32"):
             self.mgr.install_hook(0x7FF6A0010000, "test")
@@ -250,7 +250,7 @@ class TestAlreadyHookedDetection:
     def test_rejects_ff25_jmp_prologue(self, monkeypatch):
         """FF 25 xx xx xx xx = abs indirect JMP, typical 14-byte hook."""
         prologue = b"\xff\x25\x00\x00\x00\x00" + struct.pack("<Q", 0xDEAD) + b"\x90" * 18
-        monkeypatch.setattr("src.tools.hooking.SESSION.read_bytes", lambda addr, size: prologue)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.read_bytes", lambda addr, size: prologue)
 
         with pytest.raises(RuntimeError, match="appears already hooked.*FF25 abs"):
             self.mgr.install_hook(0x7FF6A0010000, "test")
@@ -258,15 +258,15 @@ class TestAlreadyHookedDetection:
     def test_allows_normal_prologue(self, monkeypatch):
         """Normal prologues should pass the JMP check (may fail later in decode_prologue)."""
         prologue = b"\x48\x89\x5c\x24\x08" + b"\x90" * 27  # mov [rsp+8], rbx
-        monkeypatch.setattr("src.tools.hooking.SESSION.read_bytes", lambda addr, size: prologue)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.read_bytes", lambda addr, size: prologue)
 
         # Will fail at allocate_near, but that's after the JMP check -- meaning the check passed
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate", lambda *a, **kw: 0x2000)
-        monkeypatch.setattr("src.tools.hooking.SESSION.virtual_protect", lambda *a: 0x20)
-        monkeypatch.setattr("src.tools.hooking.SESSION.write_bytes", lambda *a: None)
-        monkeypatch.setattr("src.tools.hooking.SESSION.suspend_process_threads", lambda: [])
-        monkeypatch.setattr("src.tools.hooking.SESSION.resume_process_threads", lambda threads: None)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate", lambda *a, **kw: 0x2000)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.virtual_protect", lambda *a: 0x20)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.write_bytes", lambda *a: None)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.suspend_process_threads", lambda: [])
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.resume_process_threads", lambda threads: None)
 
         result = self.mgr.install_hook(0x7FF6A0010000, "test")
         assert result["hook_id"] == 1
@@ -274,13 +274,13 @@ class TestAlreadyHookedDetection:
     def test_duplicate_address_rejected(self, monkeypatch):
         """Same target_addr should be rejected by the existing check."""
         prologue = b"\x48\x89\x5c\x24\x08" + b"\x90" * 27
-        monkeypatch.setattr("src.tools.hooking.SESSION.read_bytes", lambda addr, size: prologue)
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
-        monkeypatch.setattr("src.tools.hooking.SESSION.allocate", lambda *a, **kw: 0x2000)
-        monkeypatch.setattr("src.tools.hooking.SESSION.virtual_protect", lambda *a: 0x20)
-        monkeypatch.setattr("src.tools.hooking.SESSION.write_bytes", lambda *a: None)
-        monkeypatch.setattr("src.tools.hooking.SESSION.suspend_process_threads", lambda: [])
-        monkeypatch.setattr("src.tools.hooking.SESSION.resume_process_threads", lambda threads: None)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.read_bytes", lambda addr, size: prologue)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate", lambda *a, **kw: 0x2000)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.virtual_protect", lambda *a: 0x20)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.write_bytes", lambda *a: None)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.suspend_process_threads", lambda: [])
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.resume_process_threads", lambda threads: None)
 
         self.mgr.install_hook(0x7FF6A0010000, "first")
         with pytest.raises(RuntimeError, match="already hooked"):
@@ -296,8 +296,8 @@ class TestRingBufferBoundsChecking:
     @pytest.fixture()
     def ring(self, monkeypatch):
         buf, cfg, mgr = make_ring_buffer(entry_count=16, max_data_size=256)
-        monkeypatch.setattr("src.tools.hooking.SESSION.read_bytes", buf.read_bytes)
-        monkeypatch.setattr("src.tools.hooking.SESSION.write_uint64", buf.write_uint64)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.read_bytes", buf.read_bytes)
+        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.write_uint64", buf.write_uint64)
         return buf, cfg, mgr
 
     def test_captured_length_clamped_to_max_data_size(self, ring):

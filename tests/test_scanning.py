@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 
-from src.tools import scanning
-from src.tools.lua import engine as lua_engine_module
+from memscope_mcp.tools import scanning
+from memscope_mcp.tools.lua import engine as lua_engine_module
 
 
 @dataclass

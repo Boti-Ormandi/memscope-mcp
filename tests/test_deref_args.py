@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from src.tools.hooking import HookManager, RingBufferConfig
-from src.utils.shellcode import build_hook_trampoline
+from memscope_mcp.tools.hooking import HookManager, RingBufferConfig
+from memscope_mcp.utils.shellcode import build_hook_trampoline
 
 # ---------- fixtures ----------
 
@@ -175,7 +175,7 @@ class TestDerefArgsValidation:
     def test_deref_args_pre_hook_raises(self):
         """install_hook with hook_type='pre' and deref_args raises ValueError."""
         hm = make_hook_manager()
-        with patch("src.tools.hooking.SESSION") as mock_session:
+        with patch("memscope_mcp.tools.hooking.SESSION") as mock_session:
             mock_session.read_bytes.return_value = b"\x90" * 32
             with pytest.raises(ValueError, match="deref_args only valid with type='post'"):
                 hm.install_hook(
@@ -188,7 +188,7 @@ class TestDerefArgsValidation:
     def test_deref_args_invalid_key(self):
         """deref_args key outside 1-4 raises ValueError."""
         hm = make_hook_manager()
-        with patch("src.tools.hooking.SESSION") as mock_session:
+        with patch("memscope_mcp.tools.hooking.SESSION") as mock_session:
             mock_session.read_bytes.return_value = b"\x90" * 32
             with pytest.raises(ValueError, match="deref_args key must be 1-4"):
                 hm.install_hook(
@@ -208,7 +208,7 @@ class TestDerefArgsValidation:
     def test_deref_args_invalid_size(self):
         """deref_args value not 4 or 8 raises ValueError."""
         hm = make_hook_manager()
-        with patch("src.tools.hooking.SESSION") as mock_session:
+        with patch("memscope_mcp.tools.hooking.SESSION") as mock_session:
             mock_session.read_bytes.return_value = b"\x90" * 32
             with pytest.raises(ValueError, match="deref_args read_size must be 4 or 8"):
                 hm.install_hook(

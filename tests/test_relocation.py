@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from src.utils.disasm import (
+from memscope_mcp.utils.disasm import (
     RelocationOverflowError,
     RIPRelativeError,
     decode_instruction,

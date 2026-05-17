@@ -10,9 +10,9 @@ Activate by copying this file to the plugins/ directory.
 
 from typing import Optional
 
-from src.plugins import PluginBase
-from src.session import SESSION
-from src.utils.memory_utils import is_valid_pointer
+from memscope_mcp.plugins import PluginBase
+from memscope_mcp.session import SESSION
+from memscope_mcp.utils.memory_utils import is_valid_pointer
 
 
 class IL2CppPlugin(PluginBase):

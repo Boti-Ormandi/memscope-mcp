@@ -2,7 +2,7 @@
 
 import struct
 
-from src.utils.heuristics import (
+from memscope_mcp.utils.heuristics import (
     ValueType,
     _is_printable,
     _is_reasonable_float,

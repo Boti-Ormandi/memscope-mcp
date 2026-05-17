@@ -1,6 +1,6 @@
 """Tests for type system metadata and definitions."""
 
-from src.tools.types import COMPOSITE_TYPES, PRIMITIVES, get_type_info, list_supported_types
+from memscope_mcp.tools.types import COMPOSITE_TYPES, PRIMITIVES, get_type_info, list_supported_types
 
 
 class TestPrimitiveDefinitions:

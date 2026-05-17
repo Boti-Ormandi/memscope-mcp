@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from src.tools.hooking import (
+from memscope_mcp.tools.hooking import (
     ENTRY_ARG0,
     ENTRY_CAPTURED_LENGTH,
     ENTRY_DATA_LENGTH,
@@ -169,8 +169,8 @@ def set_stats(buf: MockBuffer, total_captured: int = 0, total_dropped: int = 0) 
 def ring(monkeypatch):
     """Yield (MockBuffer, RingBufferConfig, HookManager) with SESSION patched."""
     buf, cfg, mgr = make_ring_buffer()
-    monkeypatch.setattr("src.tools.hooking.SESSION.read_bytes", buf.read_bytes)
-    monkeypatch.setattr("src.tools.hooking.SESSION.write_uint64", buf.write_uint64)
+    monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.read_bytes", buf.read_bytes)
+    monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.write_uint64", buf.write_uint64)
     return buf, cfg, mgr
 
 
@@ -462,7 +462,7 @@ class TestNoRingBuffer:
 class TestHookNameLookup:
     def test_entry_includes_hook_name(self, ring):
         buf, cfg, mgr = ring
-        from src.tools.hooking import HookInfo
+        from memscope_mcp.tools.hooking import HookInfo
 
         hook = HookInfo(
             hook_id=7,

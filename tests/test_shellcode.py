@@ -2,8 +2,8 @@
 
 import struct
 
-from src.tools.execute import call_sequence
-from src.utils.shellcode import build_call_x64, build_multi_call_x64, build_simple_ret
+from memscope_mcp.tools.execute import call_sequence
+from memscope_mcp.utils.shellcode import build_call_x64, build_multi_call_x64, build_simple_ret
 
 
 class TestBuildSimpleRet:
@@ -254,7 +254,7 @@ class TestCallSequence:
             def close_handle(self, _handle):
                 return True
 
-        monkeypatch.setattr("src.tools.execute.SESSION", FakeSession())
+        monkeypatch.setattr("memscope_mcp.tools.execute.SESSION", FakeSession())
 
         result = call_sequence(
             [

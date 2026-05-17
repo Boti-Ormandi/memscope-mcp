@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.utils.memory_utils import parse_address
+from memscope_mcp.utils.memory_utils import parse_address
 
 
 class TestParseAddressInt:

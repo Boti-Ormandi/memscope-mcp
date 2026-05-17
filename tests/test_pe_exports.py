@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from src.utils.pe import resolve_export
+from memscope_mcp.utils.pe import resolve_export
 
 # ---------- PE Builder ----------
 
@@ -146,7 +146,7 @@ BASE_ADDR = 0x7FF800000000
 def mock_session(monkeypatch):
     """Provide a MockSession and patch it into the pe module."""
     session = MockSession()
-    monkeypatch.setattr("src.utils.pe.SESSION", session)
+    monkeypatch.setattr("memscope_mcp.utils.pe.SESSION", session)
     return session
 
 

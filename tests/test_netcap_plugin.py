@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from contrib.plugins.netcap import AF_INET, AF_INET6, NetcapPlugin
-from src.tools.hooking import RingBufferConfig
+from memscope_mcp.tools.hooking import RingBufferConfig
 
 # ==================== Helpers ====================
 

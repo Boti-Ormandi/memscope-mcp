@@ -3,12 +3,12 @@
 
 def test_server_imports():
     """All server modules load without error."""
-    from src.server import mcp  # noqa: F401
+    from memscope_mcp.server import mcp  # noqa: F401
 
 
 def test_tool_count():
     """Server registers exactly 10 MCP tools."""
-    from src.server import mcp
+    from memscope_mcp.server import mcp
 
     tools = mcp._tool_manager._tools
     assert len(tools) == 10, f"Expected 10 tools, got {len(tools)}: {sorted(tools.keys())}"
@@ -16,7 +16,7 @@ def test_tool_count():
 
 def test_tool_names():
     """All expected tools are registered."""
-    from src.server import mcp
+    from memscope_mcp.server import mcp
 
     tools = set(mcp._tool_manager._tools.keys())
     expected = {
@@ -36,7 +36,7 @@ def test_tool_names():
 
 def test_lua_engine_initializes():
     """Lua engine creates successfully."""
-    from src.tools.lua.engine import LUA_ENGINE
+    from memscope_mcp.tools.lua.engine import LUA_ENGINE
 
     assert LUA_ENGINE is not None
     assert LUA_ENGINE.lua is not None
@@ -44,7 +44,7 @@ def test_lua_engine_initializes():
 
 def test_lua_engine_basic_execution():
     """Lua engine can execute a simple script."""
-    from src.tools.lua.engine import LUA_ENGINE
+    from memscope_mcp.tools.lua.engine import LUA_ENGINE
 
     result = LUA_ENGINE.execute('addResult("test", 42)')
     assert result["success"] is True
@@ -53,7 +53,7 @@ def test_lua_engine_basic_execution():
 
 def test_lua_engine_addr_function():
     """Lua addr() function handles large hex values."""
-    from src.tools.lua.engine import LUA_ENGINE
+    from memscope_mcp.tools.lua.engine import LUA_ENGINE
 
     result = LUA_ENGINE.execute('addResult("addr", toHex(addr("0x1F58E12ECF0")))')
     assert result["success"] is True
@@ -62,7 +62,7 @@ def test_lua_engine_addr_function():
 
 def test_lua_engine_print():
     """Lua print() captures output."""
-    from src.tools.lua.engine import LUA_ENGINE
+    from memscope_mcp.tools.lua.engine import LUA_ENGINE
 
     result = LUA_ENGINE.execute('print("hello", "world")')
     assert result["success"] is True
@@ -71,7 +71,7 @@ def test_lua_engine_print():
 
 def test_plugin_loader():
     """Plugin loader runs without error (may find 0 plugins if dir is empty)."""
-    from src.plugins import load_plugins
+    from memscope_mcp.plugins import load_plugins
 
     plugins = load_plugins()
     assert isinstance(plugins, list)
@@ -79,7 +79,7 @@ def test_plugin_loader():
 
 def test_instructions_build():
     """Instructions builder produces non-empty string."""
-    from src.instructions import build_instructions
+    from memscope_mcp.instructions import build_instructions
 
     instructions = build_instructions([])
     assert isinstance(instructions, str)
@@ -88,7 +88,7 @@ def test_instructions_build():
 
 def test_session_initial_state():
     """Session starts detached."""
-    from src.session import SESSION
+    from memscope_mcp.session import SESSION
 
     assert SESSION.pm is None
     assert SESSION.target_process == ""

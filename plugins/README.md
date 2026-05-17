@@ -19,9 +19,9 @@ cp ../contrib/plugins/netcap.py .
 A plugin is a single `.py` file containing one `PluginBase` subclass:
 
 ```python
-from src.extensions.base import ExtensionContext
-from src.plugins import PluginBase
-from src.session import SESSION
+from memscope_mcp.extensions.base import ExtensionContext
+from memscope_mcp.plugins import PluginBase
+from memscope_mcp.session import SESSION
 
 class MyPlugin(PluginBase):
     name = "my_domain"

@@ -1,6 +1,6 @@
 """Tests for bitwise utility functions (Python-level, not via Lua)."""
 
-from src.tools.lua.utilities import (
+from memscope_mcp.tools.lua.utilities import (
     bit_and,
     bit_extract,
     bit_lshift,

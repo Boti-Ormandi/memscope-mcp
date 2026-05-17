@@ -1,6 +1,6 @@
 """Tests for 64-bit safe comparison functions."""
 
-from src.tools.lua.comparisons import (
+from memscope_mcp.tools.lua.comparisons import (
     parse_hex_address,
     safe_eq,
     safe_ge,

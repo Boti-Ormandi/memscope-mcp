@@ -1,7 +1,7 @@
 """Tests for Lua engine edge cases and built-in functions."""
 
-from src.tools.lua.code_execution import parse_lua_arg
-from src.tools.lua.engine import LUA_ENGINE
+from memscope_mcp.tools.lua.code_execution import parse_lua_arg
+from memscope_mcp.tools.lua.engine import LUA_ENGINE
 
 
 class TestLuaArgParsing:
@@ -75,7 +75,7 @@ class TestLuaCodeExecution:
             calls.append((addr, args, timeout_ms))
             return {"success": True, "result": "0x1"}
 
-        monkeypatch.setattr("src.tools.execute.execute_code", fake_execute_code)
+        monkeypatch.setattr("memscope_mcp.tools.execute.execute_code", fake_execute_code)
 
         result = LUA_ENGINE.execute("""
             local blocked = 0
@@ -99,7 +99,7 @@ class TestLuaCodeExecution:
             calls.append((addr, args, timeout_ms))
             return {"success": True, "result": "0x1"}
 
-        monkeypatch.setattr("src.tools.execute.execute_code", fake_execute_code)
+        monkeypatch.setattr("memscope_mcp.tools.execute.execute_code", fake_execute_code)
 
         override = LUA_ENGINE.execute("""
             allowUnsafeCodeExecution(true)
@@ -136,7 +136,7 @@ class TestLuaCodeExecution:
                 "calls_executed": 2,
             }
 
-        monkeypatch.setattr("src.tools.execute.call_sequence", fake_call_sequence)
+        monkeypatch.setattr("memscope_mcp.tools.execute.call_sequence", fake_call_sequence)
 
         result = LUA_ENGINE.execute("""
             local r = callSequenceResults({

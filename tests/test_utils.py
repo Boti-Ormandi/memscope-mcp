@@ -2,8 +2,8 @@
 
 import pytest
 
-from src.utils.memory_utils import format_address, format_bytes, is_valid_pointer, parse_offset
-from src.utils.pattern import create_signature_pattern, match_pattern, parse_aob_pattern
+from memscope_mcp.utils.memory_utils import format_address, format_bytes, is_valid_pointer, parse_offset
+from memscope_mcp.utils.pattern import create_signature_pattern, match_pattern, parse_aob_pattern
 
 # ============================================================================
 # Address parsing

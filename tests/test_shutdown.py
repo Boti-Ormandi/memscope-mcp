@@ -5,7 +5,7 @@ Verifies _shutdown() is idempotent and cleans up resources properly.
 
 from unittest.mock import MagicMock, patch
 
-import src.server as server_mod
+import memscope_mcp.server as server_mod
 
 
 class TestShutdownIdempotency:
@@ -66,10 +66,10 @@ class TestShutdownCleansUp:
         with (
             patch.object(server_mod, "SESSION") as mock_session,
             patch.dict("sys.modules", {}),
-            patch("src.server.HOOK_MANAGER", mock_hm, create=True),
+            patch("memscope_mcp.server.HOOK_MANAGER", mock_hm, create=True),
         ):
             # Patch the lazy import inside _shutdown
-            with patch("src.tools.hooking.HOOK_MANAGER", mock_hm):
+            with patch("memscope_mcp.tools.hooking.HOOK_MANAGER", mock_hm):
                 mock_session.pm = MagicMock()
                 mock_session._is_process_alive.return_value = True
                 server_mod._shutdown()

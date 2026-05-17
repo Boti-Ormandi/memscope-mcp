@@ -4,10 +4,10 @@ Verifies that core extensions register through the bootstrap path,
 function names are present, ordering is stable, and collisions are caught.
 """
 
-from src.extensions.base import LuaExtension
-from src.extensions.bootstrap import bootstrap_extensions
-from src.extensions.core import CORE_EXTENSIONS
-from src.tools.lua.engine import LUA_ENGINE, MemscopeLuaEngine
+from memscope_mcp.extensions.base import LuaExtension
+from memscope_mcp.extensions.bootstrap import bootstrap_extensions
+from memscope_mcp.extensions.core import CORE_EXTENSIONS
+from memscope_mcp.tools.lua.engine import LUA_ENGINE, MemscopeLuaEngine
 
 
 class TestCoreExtensions:
@@ -96,7 +96,7 @@ class TestPluginIsolation:
 
     def test_bad_plugin_does_not_block_core(self):
         """A failing plugin doesn't prevent core extensions from loading."""
-        from src.session import DebugSession
+        from memscope_mcp.session import DebugSession
 
         engine = MemscopeLuaEngine()
         session = DebugSession()
@@ -109,7 +109,7 @@ class TestPluginIsolation:
                 raise RuntimeError("I broke")
 
         # Monkey-patch load_plugins to return our bad plugin
-        import src.extensions.bootstrap as bootstrap_mod
+        import memscope_mcp.extensions.bootstrap as bootstrap_mod
 
         original_load = bootstrap_mod.load_plugins
 

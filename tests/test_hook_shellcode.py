@@ -7,7 +7,7 @@ import struct
 
 import pytest
 
-from src.utils.shellcode import RB_CONTROL_SIZE, build_hook_trampoline
+from memscope_mcp.utils.shellcode import RB_CONTROL_SIZE, build_hook_trampoline
 
 # ---------- helpers ----------
 

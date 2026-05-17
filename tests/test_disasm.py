@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.utils.disasm import RIPRelativeError, decode_prologue, instruction_length
+from memscope_mcp.utils.disasm import RIPRelativeError, decode_prologue, instruction_length
 
 # ============================================================================
 # instruction_length - individual instructions

@@ -16,11 +16,11 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from src.extensions.base import ExtensionContext
-from src.plugins import PluginBase
-from src.session import SESSION
-from src.tools.hooking import HOOK_MANAGER
-from src.utils.pe import resolve_export
+from memscope_mcp.extensions.base import ExtensionContext
+from memscope_mcp.plugins import PluginBase
+from memscope_mcp.session import SESSION
+from memscope_mcp.tools.hooking import HOOK_MANAGER
+from memscope_mcp.utils.pe import resolve_export
 
 # ==================== Hook Specifications ====================
 

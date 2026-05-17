@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from src.utils.peb import (
+from memscope_mcp.utils.peb import (
     get_peb_address,
     read_process_environment,
     read_process_modules,

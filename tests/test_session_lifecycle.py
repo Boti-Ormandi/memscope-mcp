@@ -4,7 +4,7 @@ Verifies attach/detach callbacks fire correctly, are isolated on failure,
 and integrate with the canonical switch_process path.
 """
 
-from src.session import DebugSession
+from memscope_mcp.session import DebugSession
 
 
 class TestCallbackRegistration:
