@@ -24,7 +24,7 @@ in your shell before starting the server.
 
 ## Project layout
 
-The top-level [README](README.md#architecture) has the full tree. The pieces you'll actually touch:
+The full repository layout lives in [`docs/architecture.md`](docs/architecture.md). The pieces you'll actually touch:
 
 - [`memscope_mcp/server.py`](memscope_mcp/server.py) -- `@mcp.tool()` wrappers (one per MCP tool)
 - [`memscope_mcp/tools/`](memscope_mcp/tools/) -- tool implementations (`memory.py`, `scanning.py`, `pointers.py`, `types.py`, `execute.py`, `hooking.py`, `lua_scripts.py`)
@@ -71,7 +71,7 @@ A core extension is appropriate when the functionality is generic enough to be u
 1. Create `memscope_mcp/extensions/core/<your_ext>.py`. Subclass `LuaExtension` from `memscope_mcp/extensions/base.py`. Implement `name`, `description`, `instructions`, and `register(ctx)`. Override `on_process_attached` / `on_process_detaching` if the extension holds process-bound state (allocations, hooks).
 2. Register the class in `memscope_mcp/extensions/core/__init__.py` -- import it and add it to `CORE_EXTENSIONS` in the right position (`General` first, the rest in the order the AI is likely to encounter them).
 3. Hold cross-call state on the extension instance, not on `SESSION`.
-4. If the extension introduces a new conceptual surface, write a short `docs/<topic>.md` design doc (see [`docs/hooking.md`](docs/hooking.md) and [`docs/peb.md`](docs/peb.md) for shape and tone) and link it from the README's Implementation Notes.
+4. If the extension introduces a new conceptual surface, write a short `docs/<topic>.md` design doc (see [`docs/hooking.md`](docs/hooking.md) and [`docs/peb.md`](docs/peb.md) for shape and tone) and link it from the relevant subsystem section in [`docs/architecture.md`](docs/architecture.md).
 5. Add a test file under `tests/test_<your_ext>.py` covering the registration path and any non-trivial logic. `tests/test_extension_bootstrap.py` already pins ordering and the basic contract.
 
 ## Adding a plugin

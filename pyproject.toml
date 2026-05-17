@@ -1,6 +1,6 @@
 [project]
 name = "memscope-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "AI-native memory research MCP server for reverse engineering"
 readme = "README.md"
 license = {text = "MIT"}

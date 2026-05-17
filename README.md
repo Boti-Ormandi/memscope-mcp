@@ -9,7 +9,57 @@ An MCP server for low-level Windows process memory research.
 
 AI agents attach to processes, scan byte patterns, read and write typed memory, follow pointer chains, execute remote x64 code, install generic inline function hooks with shared ring-buffer capture, and read the Process Environment Block of processes the server has not even attached to -- all through 10 MCP tools. A server-side Lua environment batches multi-step operations into a single round-trip, so an agent can dereference a pointer chain, decode a structure, hook an API, and report results without paying per-call latency.
 
-## What It Looks Like
+## Installation
+
+**Requirements:** Windows x64, Python 3.10+, an [MCP-compatible client](https://modelcontextprotocol.io/clients).
+
+```bash
+pip install memscope-mcp
+```
+
+Configure your MCP client with a server entry. The cleanest form uses the installed console script:
+
+```json
+{
+  "mcpServers": {
+    "memscope": {
+      "command": "memscope-mcp"
+    }
+  }
+}
+```
+
+If the client doesn't have the script on `PATH`, use the module form:
+
+```json
+{
+  "mcpServers": {
+    "memscope": {
+      "command": "python",
+      "args": ["-m", "memscope_mcp.server"]
+    }
+  }
+}
+```
+
+Verify the install:
+
+```bash
+memscope-mcp list-plugins
+```
+
+This exercises the CLI, the package import, and the plugin discovery in one command. If it lists `il2cpp` and `netcap`, the install is good.
+
+### For development
+
+```bash
+git clone https://github.com/Boti-Ormandi/memscope-mcp.git
+cd memscope-mcp
+pip install -e ".[dev]"
+pytest tests/
+```
+
+## Quick tour
 
 Everything happens through MCP tool calls. A typical exploration session:
 
@@ -67,7 +117,7 @@ Addresses accept hex strings (`"0x1234"`), module+offset (`"module.dll+0x1234"`)
 | `lua` | Execute Lua scripts server-side for multi-step operations |
 | `scripts` | Manage saved Lua scripts. Actions: `list` (with paths), `run` (with args) |
 
-## Lua Scripting
+## Lua scripting
 
 A server-side Lua 5.4 environment with ~110 always-loaded functions exposing memscope's primitives. Use it when an operation needs loops, conditionals, or chained reads that would otherwise require many MCP round-trips.
 
@@ -86,7 +136,7 @@ if #matches > 0 then
 end
 ```
 
-The full reference lives in [`docs/lua-reference.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/lua-reference.md). Hooking and PEB-introspection design notes live in [`docs/hooking.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/hooking.md) and [`docs/peb.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/peb.md). Categories:
+Function categories (full reference in [`docs/lua-reference.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/lua-reference.md)):
 
 | Category | Functions |
 |----------|-----------|
@@ -104,10 +154,6 @@ The full reference lives in [`docs/lua-reference.md`](https://github.com/Boti-Or
 | Bitwise | 7 |
 | Utilities | 18 |
 
-Plus ~38 functions under the optional netcap plugin (`memscope_mcp/_contrib/plugins/netcap.py`) when activated.
-
-Lua 5.4 rejects hex literals beyond 32 bits; the server transparently rewrites large literals like `0x1F58E12ECF0` to `addr("0x1F58E12ECF0")` before execution, so scripts can paste raw 64-bit addresses verbatim.
-
 ## Plugins
 
 Domain-specific helpers without touching the core. Drop a custom `.py` file into `$MEMSCOPE_HOME/plugins/` and restart; the loader instantiates the `PluginBase` subclass it finds, registers the plugin's Lua functions, and appends its instructions to the AI-facing documentation.
@@ -120,9 +166,19 @@ memscope-mcp install-plugin il2cpp
 memscope-mcp install-plugin netcap
 ```
 
-`il2cpp.py` is the template for plugins that walk a managed-runtime object layout. `netcap.py` is the template for plugins that hook a known API surface and add protocol-aware parsing on top -- it uses the generic `HOOK_MANAGER` to install Winsock hooks and exposes packet capture, stream assembly, framing, search, and recording through ~38 Lua functions. Installed plugins are placed in `$MEMSCOPE_HOME/plugins/` (default `~/.memscope-mcp/plugins/`); drop any custom `.py` file there to load it on the next server start.
+`il2cpp.py` is the template for plugins that walk a managed-runtime object layout. `netcap.py` is the template for plugins that hook a known API surface and add protocol-aware parsing on top -- it uses the generic `HOOK_MANAGER` to install Winsock hooks and exposes packet capture, stream assembly, framing, search, and recording through ~38 Lua functions.
 
-## Script Persistence
+## Data directory
+
+Logs, saved Lua scripts, and user plugins live under `MEMSCOPE_HOME`, which defaults to `~/.memscope-mcp/`. Override with the `MEMSCOPE_HOME` environment variable. On server startup, a single line is printed to stderr indicating the resolved location.
+
+Subdirectories:
+
+- `$MEMSCOPE_HOME/logs/sessions/` -- per-session JSONL logs.
+- `$MEMSCOPE_HOME/scripts/<process>/` -- Lua scripts saved per attached process.
+- `$MEMSCOPE_HOME/plugins/` -- user plugins (see `memscope-mcp install-plugin` for the bundled reference plugins).
+
+### Saved scripts
 
 Save working Lua scripts as `.lua` files, organized by process:
 
@@ -140,144 +196,9 @@ scripts/
 
 ASLR invalidates absolute addresses across restarts. Save the finder script, not the address.
 
-## Data directory
+## Session logging
 
-Logs, saved Lua scripts, and user plugins live under `MEMSCOPE_HOME`, which
-defaults to `~/.memscope-mcp/`. Override with the `MEMSCOPE_HOME` environment
-variable. On server startup, a single line is printed to stderr indicating the
-resolved location.
-
-Subdirectories:
-
-- `$MEMSCOPE_HOME/logs/sessions/` — per-session JSONL logs.
-- `$MEMSCOPE_HOME/scripts/<process>/` — Lua scripts saved per attached process.
-- `$MEMSCOPE_HOME/plugins/` — user plugins (see `memscope-mcp install-plugin`
-  for the bundled reference plugins).
-
-## Architecture
-
-```
-memscope_mcp/
-  server.py              # MCP tool definitions (thin wrappers + session logging)
-  session.py             # Process attach/detach, memory primitives, threads,
-                         #   VirtualProtect, allocate_near, suspend/resume,
-                         #   lifecycle callbacks
-  extensions/            # Generic LuaExtension contract + bootstrap
-    base.py              # LuaExtension ABC and ExtensionContext
-    bootstrap.py         # Core extension + user plugin registration
-    core/                # Always-loaded extensions
-      general.py memory.py module_scan.py execution.py
-      hooking.py process.py network.py
-  tools/
-    memory.py            # Smart memory dump
-    scanning.py          # AOB pattern scanning
-    pointers.py          # Pointer chain resolution
-    types.py             # Typed memory read/write
-    execute.py           # Remote code execution
-    hooking.py           # HookManager: ring buffer + install/remove/cleanup
-    lua_scripts.py       # Script persistence
-    lua/                 # Lua engine and themed function modules
-  plugins/               # PluginBase (specialization of LuaExtension) + loader
-  instructions/          # AI context builder (base + extensions + plugins)
-  utils/
-    shellcode.py         # x64 codegen: native calls + hook trampolines
-    disasm.py            # Table-driven x64 length decoder + RIP-relative relocation
-    pe.py                # PE export resolver (resolveExport)
-    peb.py               # PEB reader: cmdline, env, debugger, remote modules
-    memory_utils.py heuristics.py logger.py pointers.py
-  _contrib/plugins/      # Bundled reference plugins (il2cpp, netcap)
-scripts/                 # Saved Lua scripts per process (gitignored)
-logs/                    # Session logs in JSONL format (gitignored)
-docs/
-  hooking.md             # Inline hooking architecture
-  peb.md                 # PEB introspection design
-  lua-reference.md       # Full Lua function reference
-```
-
-**Design choices:**
-- Generic core, plugins for domains: no target-specific code in `memscope_mcp/`
-- Minimal tool surface: 10 well-shaped MCP tools, with Lua for everything that needs composition
-- One contract (`LuaExtension`), two activation paths: core extensions are always loaded; user plugins are gated on file presence in `$MEMSCOPE_HOME/plugins/` and isolated on failure
-- Plugin instructions are only loaded when the plugin is active (AI context costs tokens)
-- Scripts persist, addresses don't: ASLR shifts everything, save the finder
-
-## Implementation Notes
-
-### Inline function hooking with shared ring buffer
-Hook any user-mode function by address, capture register args plus optional buffer data, and read the capture stream from Lua -- without DLL injection. `HookManager` ([`memscope_mcp/tools/hooking.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/tools/hooking.py)) reads the target's function prologue through a table-driven x64 instruction length decoder ([`memscope_mcp/utils/disasm.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/utils/disasm.py)), allocates an RWX trampoline page within +-2 GiB of the target so a 5-byte `JMP rel32` patch suffices, and falls back to a 14-byte `JMP [RIP+0]` with thread-suspension + IP redirect when near allocation fails. RIP-relative prologue instructions are rewritten by the relocator so the displaced bytes still resolve to the original target. Trampoline shellcode ([`memscope_mcp/utils/shellcode.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/utils/shellcode.py)) implements pre- and post-call capture with optional struct-deref (WSABUF-style buffer pointers) and output-pointer deref. All hooks share one lock-free ring buffer in target memory; writes claim slots with `lock cmpxchg`, overflow drops without blocking, and a status field gates partial reads. Full architecture in [`docs/hooking.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/hooking.md).
-
-### PEB introspection without attaching
-`getProcessInfo`, `isBeingDebugged`, `getEnvironment`, and `getModulesRemote` read the Process Environment Block of any process the server can open with `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ` -- no debug session, no injection, no leaked handles. The reader ([`memscope_mcp/utils/peb.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/utils/peb.py)) is pure ctypes: `NtQueryInformationProcess(ProcessBasicInformation)` returns the PEB base, then `ReadProcessMemory` walks `ProcessParameters` (cmdline, cwd, environment), the `BeingDebugged` byte, and the `Ldr.InLoadOrderModuleList` linked list. The `processes` MCP tool surfaces the per-entry command line directly, which means filters like `processes(filter="electron")` distinguish renderer / GPU / browser instances without further work. Full structure layout in [`docs/peb.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/peb.md).
-
-### x64 shellcode generation
-`executeCode` and `callSequence` work by assembling raw x64 machine code in the target process. The codegen ([`memscope_mcp/utils/shellcode.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/utils/shellcode.py)) implements the Microsoft x64 calling convention end to end: 32-byte shadow space, 16-byte stack alignment before each `CALL`, RCX/RDX/R8/R9 for the first four integer arguments and XMM0-XMM3 for floats, stack spill for arguments past the fourth, and RAX (or XMM0 for float returns) captured into a thread-local result slot. The Lua wrapper smart-detects argument types: numeric strings become integer arguments, text strings are allocated as buffers in the target process and freed after the call.
-
-### Extension system
-Core features and user plugins share one ABC: `LuaExtension` ([`memscope_mcp/extensions/base.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/extensions/base.py)). Each extension owns a name, a description, an AI-facing instructions fragment, a `register(ctx)` method that returns Lua function bindings, and optional `on_process_attached` / `on_process_detaching` lifecycle callbacks. The bootstrap ([`memscope_mcp/extensions/bootstrap.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/extensions/bootstrap.py)) instantiates the seven built-in extensions in order, loads any user plugins from `$MEMSCOPE_HOME/plugins/` (failures logged and isolated), wires the returned function dicts into the Lua engine, and assembles the instruction bundle. The contract is what makes hooking, PEB introspection, netcap, and any future domain helper pluggable on the same shape.
-
-### PE export resolution
-`resolveExport(module, name)` ([`memscope_mcp/utils/pe.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/utils/pe.py)) reads the PE export directory directly from target memory and binary-searches the sorted name pointer table. Forwarded exports are resolved recursively with a depth cap of 5. The hooking layer uses this to find addresses like `ws2_32!WSARecv` without symbol files or AOB-scanning known entry points.
-
-### Transparent reconnection
-A reverse-engineering session typically outlives the target process. `DebugSession.ensure_attached` ([`memscope_mcp/session.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/session.py)) polls the cached handle with `GetExitCodeProcess` on every tool call; if the process has exited, it transparently re-opens by name and re-caches modules. Tools never surface a "process disappeared" error on a transient restart.
-
-### Lua large-hex preprocessor
-Lua 5.4 has 64-bit integers, but its parser still rejects hex literals beyond 32 bits -- `local p = 0x1F58E12ECF0` is a syntax error. The engine's preprocessor ([`memscope_mcp/tools/lua/engine.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/tools/lua/engine.py)) rewrites such literals to `addr("0x...")` calls, but only after protecting long strings, single- and double-quoted strings, and already-wrapped `addr()` / `parseHex()` calls from accidental rewrite.
-
-### Service-to-PID enumeration
-Identifying which `svchost.exe` hosts a given Windows service is normally a multi-step chore. The `processes` tool calls `EnumServicesStatusExW` through the Service Control Manager and joins the result onto the process list, so `processes(service="EventLog")` returns the right PID in one call. Lazy-loaded: the SCM enumeration only runs when a query actually needs it.
-
-## Installation
-
-**Requirements:**
-- Windows x64
-- Python 3.10+
-- An [MCP-compatible client](https://modelcontextprotocol.io/clients)
-
-**Install:**
-```bash
-git clone https://github.com/Boti-Ormandi/memscope-mcp.git
-cd memscope-mcp
-pip install -e .
-```
-
-**Configure your MCP client.** Add a server entry; the cleanest form uses the installed console script:
-
-```json
-{
-  "mcpServers": {
-    "memscope": {
-      "command": "memscope-mcp"
-    }
-  }
-}
-```
-
-If the client doesn't have the script on `PATH`, fall back to the module form:
-
-```json
-{
-  "mcpServers": {
-    "memscope": {
-      "command": "python",
-      "args": ["-m", "memscope_mcp.server"]
-    }
-  }
-}
-```
-
-The entry goes wherever your client expects its `mcpServers` configuration — consult the client's documentation.
-
-**Verify:**
-```bash
-pytest tests/test_smoke.py -v
-```
-
-The smoke suite checks that all 10 tools register, the Lua engine initializes, the plugin loader runs cleanly, and the instructions builder produces output.
-
-## Session Logging
-
-Every tool call is logged to `$MEMSCOPE_HOME/logs/sessions/<timestamp>.jsonl` — one JSONL file per server session, one line per call with tool name, arguments, success status, and duration in milliseconds. Logs older than two years are auto-cleaned. Useful for debugging and replaying sessions.
+Every tool call is logged to `$MEMSCOPE_HOME/logs/sessions/<timestamp>.jsonl` -- one JSONL file per server session, one line per call with tool name, arguments, success status, and duration in milliseconds. Logs older than two years are auto-cleaned. Useful for debugging and replaying sessions.
 
 ## Platform
 
@@ -289,7 +210,26 @@ memscope-mcp can read and write arbitrary memory in attached processes and execu
 
 User-mode access only. Targets with anti-tampering or debugger-detection mitigations (commercial obfuscators, EDR-hooked binaries, kernel-level protection) may detect or block the tool.
 
-Plugins execute arbitrary Python code at server startup — only activate plugins you have read.
+Plugins execute arbitrary Python code at server startup -- only activate plugins you have read.
+
+## Architecture
+
+Generic core, plugins for domains. Core extensions are always loaded; user plugins are gated on file presence in `$MEMSCOPE_HOME/plugins/`. Both implement the same `LuaExtension` ABC.
+
+- Generic core, plugins for domains: no target-specific code in `memscope_mcp/`
+- Minimal tool surface: 10 well-shaped MCP tools, with Lua for everything that needs composition
+- One contract (`LuaExtension`), two activation paths: core extensions are always loaded; user plugins are gated on file presence in `$MEMSCOPE_HOME/plugins/` and isolated on failure
+- Plugin instructions are only loaded when the plugin is active (AI context costs tokens)
+- Scripts persist, addresses don't: ASLR shifts everything, save the finder
+
+Full repository layout, subsystem deep-dives, and design notes in [`docs/architecture.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/architecture.md).
+
+## Documentation
+
+- [Architecture and internals](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/architecture.md) -- repository layout, design philosophy, subsystem deep-dives
+- [Inline hooking](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/hooking.md) -- trampolines, ring buffer, prologue relocation
+- [PEB introspection](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/peb.md) -- pre-attach process inspection
+- [Lua reference](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/lua-reference.md) -- full function-by-function API
 
 ## Contributing
 
