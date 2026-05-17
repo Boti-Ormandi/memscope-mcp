@@ -16,6 +16,12 @@ pytest
 
 Pre-commit runs `ruff check --fix` and `ruff format` on every commit. CI runs the same checks plus the full pytest suite on Python 3.10 through 3.13.
 
+### Dev workflow note: MEMSCOPE_HOME
+
+By default, logs and saved Lua scripts land in `~/.memscope-mcp/`. If you want
+artefacts to land next to the cloned repository instead, set `MEMSCOPE_HOME=$PWD`
+in your shell before starting the server.
+
 ## Project layout
 
 The top-level [README](README.md#architecture) has the full tree. The pieces you'll actually touch:

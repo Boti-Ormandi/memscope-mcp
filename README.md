@@ -140,6 +140,20 @@ scripts/
 
 ASLR invalidates absolute addresses across restarts. Save the finder script, not the address.
 
+## Data directory
+
+Logs, saved Lua scripts, and user plugins live under `MEMSCOPE_HOME`, which
+defaults to `~/.memscope-mcp/`. Override with the `MEMSCOPE_HOME` environment
+variable. On server startup, a single line is printed to stderr indicating the
+resolved location.
+
+Subdirectories:
+
+- `$MEMSCOPE_HOME/logs/sessions/` — per-session JSONL logs.
+- `$MEMSCOPE_HOME/scripts/<process>/` — Lua scripts saved per attached process.
+- `$MEMSCOPE_HOME/plugins/` — user plugins (see `memscope-mcp install-plugin`
+  for the bundled reference plugins).
+
 ## Architecture
 
 ```

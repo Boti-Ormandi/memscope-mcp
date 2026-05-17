@@ -564,6 +564,10 @@ def main():
     if sys.platform == "win32" and hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, _signal_exit)
 
+    from .paths import MEMSCOPE_HOME as _MEMSCOPE_HOME
+
+    print(f"[memscope] data dir: {_MEMSCOPE_HOME}", file=sys.stderr)
+
     try:
         mcp.run()
     except (KeyboardInterrupt, SystemExit):

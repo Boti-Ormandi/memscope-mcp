@@ -20,10 +20,10 @@ class MCPLogger:
     Session ID format: YYYY-MM-DD_HH-MM-SS (server start time)
     """
 
-    def __init__(self, log_dir: str = "logs", retention_days: int = 730):
-        # Use absolute path relative to project root (parent of src/)
-        project_root = Path(__file__).parent.parent.parent
-        self.log_dir = project_root / log_dir
+    def __init__(self, retention_days: int = 730):
+        from ..paths import LOGS_DIR
+
+        self.log_dir = LOGS_DIR
         self.retention_days = retention_days
 
         # Session-based logging

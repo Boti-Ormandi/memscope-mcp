@@ -1,14 +1,15 @@
 """Plugin system for domain-specific Lua helpers.
 
-Plugins are user-activated extensions: single .py files placed in the `plugins/`
-directory at the project root. They share the same LuaExtension contract as core
-features, but are loaded from an external directory and isolated on failure.
+Plugins are user-activated extensions: single .py files placed in the
+$MEMSCOPE_HOME/plugins/ directory (~/.memscope-mcp/plugins/ by default). They
+share the same LuaExtension contract as core features, but are loaded from an
+external directory and isolated on failure.
 
 At server startup, the bootstrap loads them, registers their Lua functions, and
 appends their `instructions` fragments to the assembled server instructions bundle.
 
-Loading is based on the plugin file being present in `plugins/`, not on whether
-some target DLL or module is currently loaded in the attached process.
+Loading is based on the plugin file being present in the plugins directory, not on
+whether some target DLL or module is currently loaded in the attached process.
 
 See contrib/plugins/ for available plugins and plugins/README.md for the interface.
 """
@@ -16,7 +17,6 @@ See contrib/plugins/ for available plugins and plugins/README.md for the interfa
 import importlib.util
 import inspect
 import logging
-import sys
 from abc import abstractmethod
 from pathlib import Path
 from typing import Callable
@@ -94,17 +94,12 @@ def load_plugins(plugins_dir: Path | None = None) -> list[PluginBase]:
         List of instantiated plugin objects, sorted by name.
     """
     if plugins_dir is None:
-        # Project root is 2 levels up from src/plugins/
-        project_root = Path(__file__).parent.parent.parent
-        plugins_dir = project_root / "plugins"
+        from ..paths import PLUGINS_DIR
+
+        plugins_dir = PLUGINS_DIR
 
     if not plugins_dir.is_dir():
         return []
-
-    # Ensure PluginBase is importable from plugins
-    project_root = plugins_dir.parent
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
 
     plugins = []
     plugin_files = sorted(plugins_dir.glob("*.py"))

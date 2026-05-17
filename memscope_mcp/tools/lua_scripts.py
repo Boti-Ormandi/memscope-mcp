@@ -10,10 +10,8 @@ This module provides list and run functionality only.
 from pathlib import Path
 from typing import Optional
 
+from ..paths import SCRIPTS_DIR
 from ..session import SESSION
-
-# Scripts directory - relative to project root (parent of src/)
-SCRIPTS_DIR = Path(__file__).parent.parent.parent / "scripts"
 
 
 def _get_process_name() -> Optional[str]:
