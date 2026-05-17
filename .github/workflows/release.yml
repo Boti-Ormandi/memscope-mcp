@@ -1,3 +1,17 @@
+# OIDC trusted publisher config (required for the publish step to work):
+#   Owner:     Boti-Ormandi
+#   Repo:      memscope-mcp
+#   Workflow:  release.yml
+#   Env:       'pypi' (production) and 'testpypi' (dry-run)
+# Renaming any of the above silently breaks publishing. Update the PyPI
+# trusted publisher entries at https://pypi.org/manage/account/publishing/
+# before changing anything here.
+#
+# TestPyPI re-upload constraint: PyPI/TestPyPI reject re-uploads of identical
+# filenames permanently. A workflow_dispatch dry-run targeting `testpypi` at a
+# version already published there will fail. Bump the version (or skip the
+# dry-run) when shipping patches.
+
 name: release
 
 on:
@@ -20,10 +34,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
@@ -41,8 +55,8 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
       - name: Install build tools
@@ -53,7 +67,7 @@ jobs:
         run: python -m build
       - name: Metadata check
         run: twine check dist/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -66,15 +80,15 @@ jobs:
     environment:
       name: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'pypi' }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
       - name: Publish to TestPyPI
         if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
         with:
           repository-url: https://test.pypi.org/legacy/
       - name: Publish to PyPI
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
