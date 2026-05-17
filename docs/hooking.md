@@ -2,7 +2,7 @@
 
 Pure shellcode inline hooking with a shared ring buffer in the target process. Hook any function by address, capture register arguments plus optional buffer data, and read entries back through Lua. No DLL injection, no kernel components.
 
-The hooking layer is a core extension (`src/extensions/core/hooking.py`) registered on every server start. All hooking operations require a process to be attached first via the `attach` MCP tool. The netcap plugin builds on top of this layer; see [`plugins/README.md`](../plugins/README.md) for activation.
+The hooking layer is a core extension (`memscope_mcp/extensions/core/hooking.py`) registered on every server start. All hooking operations require a process to be attached first via the `attach` MCP tool. The netcap plugin builds on top of this layer; activate it with `memscope-mcp install-plugin netcap`.
 
 ## Scope
 
@@ -99,7 +99,7 @@ This uniform CALL pattern means the same shellcode generator produces both pre a
 
 ### Instruction decoder
 
-A table-driven x64 length decoder in `src/utils/disasm.py` covers integer ALU, control flow, and the prologue subset of two-byte opcodes. It is conservative: unrecognized opcodes raise. RIP-relative operands are flagged for the relocator.
+A table-driven x64 length decoder in `memscope_mcp/utils/disasm.py` covers integer ALU, control flow, and the prologue subset of two-byte opcodes. It is conservative: unrecognized opcodes raise. RIP-relative operands are flagged for the relocator.
 
 `decode_prologue_ex(data, min_bytes)` returns the minimum number of full instructions whose total length meets `min_bytes`, plus per-instruction metadata used by the relocator.
 

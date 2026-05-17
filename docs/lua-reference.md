@@ -1,6 +1,6 @@
 # Lua Reference
 
-Complete reference for the Lua functions exposed by the memscope-mcp `lua` tool. The same surface is summarized in [`src/instructions/base.py`](../src/instructions/base.py) for AI consumption (kept terse because that text ships as the MCP `instructions` channel and is token-priced). When adding or renaming a function, update both files.
+Complete reference for the Lua functions exposed by the memscope-mcp `lua` tool. The same surface is summarized in [`memscope_mcp/instructions/base.py`](../memscope_mcp/instructions/base.py) for AI consumption (kept terse because that text ships as the MCP `instructions` channel and is token-priced). When adding or renaming a function, update both files.
 
 The Lua runtime is Lua 5.4 via [lupa](https://github.com/scoder/lupa). All address parameters accept Lua integers, hex strings (`"0x1234"`), and module+offset strings (`"module.dll+0x1234"`).
 

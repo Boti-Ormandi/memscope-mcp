@@ -23,7 +23,7 @@ All operations are read-only.
 
 ## Architecture
 
-`src/utils/peb.py` is a self-contained PEB reader: pure ctypes, no pymem dependency, no `SESSION` state. It opens its own process handle per call (so no handles leak into the session lifecycle) and reads the PEB through `NtQueryInformationProcess(ProcessBasicInformation)` + `ReadProcessMemory`.
+`memscope_mcp/utils/peb.py` is a self-contained PEB reader: pure ctypes, no pymem dependency, no `SESSION` state. It opens its own process handle per call (so no handles leak into the session lifecycle) and reads the PEB through `NtQueryInformationProcess(ProcessBasicInformation)` + `ReadProcessMemory`.
 
 ```
 NtQueryInformationProcess(ProcessBasicInformation)
@@ -50,16 +50,16 @@ Integration points:
 
 | Layer | Role |
 |-------|------|
-| `src/utils/peb.py` | PEB reading functions: `read_process_peb`, `read_process_environment`, `read_process_modules`. Used by both Lua wrappers and the MCP tool. |
-| `src/tools/lua/process_info.py` | Lua wrappers: `get_process_info` enriched, plus `is_being_debugged`, `get_environment`, `get_modules_remote`. |
-| `src/extensions/core/process.py` | Registers the new Lua functions and updates the AI-facing instructions fragment. |
-| `src/server.py` | Per-entry `command_line` enrichment in the `processes` MCP tool. |
+| `memscope_mcp/utils/peb.py` | PEB reading functions: `read_process_peb`, `read_process_environment`, `read_process_modules`. Used by both Lua wrappers and the MCP tool. |
+| `memscope_mcp/tools/lua/process_info.py` | Lua wrappers: `get_process_info` enriched, plus `is_being_debugged`, `get_environment`, `get_modules_remote`. |
+| `memscope_mcp/extensions/core/process.py` | Registers the new Lua functions and updates the AI-facing instructions fragment. |
+| `memscope_mcp/server.py` | Per-entry `command_line` enrichment in the `processes` MCP tool. |
 
 Self-contained because PEB reading needs only `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ` and shares no state with the attach/detach session. Both the Lua wrappers and the `processes` MCP tool consume it. `path` in `getProcessInfo` actually comes from `QueryFullProcessImageNameW` (more reliable than the PEB `ImagePathName`); the PEB read fills in `command_line`, `current_directory`, `being_debugged`, and the PEB-derived `image_path`.
 
 ## PEB structures (x64 Windows)
 
-All offsets are for x64 user-mode processes. Offsets are hard-coded as named constants near each read site in `src/utils/peb.py`; if Microsoft rearranges fields in a future ABI, those constants are the surface to update.
+All offsets are for x64 user-mode processes. Offsets are hard-coded as named constants near each read site in `memscope_mcp/utils/peb.py`; if Microsoft rearranges fields in a future ABI, those constants are the surface to update.
 
 ```c
 typedef struct _PROCESS_BASIC_INFORMATION {

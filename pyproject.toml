@@ -41,6 +41,8 @@ dev = ["pytest", "ruff", "pre-commit"]
 [project.urls]
 Repository = "https://github.com/Boti-Ormandi/memscope-mcp"
 Issues = "https://github.com/Boti-Ormandi/memscope-mcp/issues"
+Documentation = "https://github.com/Boti-Ormandi/memscope-mcp/tree/main/docs"
+Changelog = "https://github.com/Boti-Ormandi/memscope-mcp/releases"
 
 [project.scripts]
 memscope-mcp = "memscope_mcp.cli:main"
