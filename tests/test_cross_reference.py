@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from contrib.plugins.netcap import NetcapPlugin, _encode_search_value
+from memscope_mcp._contrib.plugins.netcap import NetcapPlugin, _encode_search_value
 
 # ==================== Helpers ====================
 

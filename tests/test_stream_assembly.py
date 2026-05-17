@@ -8,7 +8,7 @@ import struct
 from dataclasses import dataclass
 from typing import Any
 
-from contrib.plugins.netcap import NetcapPlugin
+from memscope_mcp._contrib.plugins.netcap import NetcapPlugin
 
 # ==================== Helpers ====================
 

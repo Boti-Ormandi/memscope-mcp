@@ -34,7 +34,7 @@ The top-level [README](README.md#architecture) has the full tree. The pieces you
 - [`src/instructions/base.py`](src/instructions/base.py) -- AI-facing Lua reference (token-priced, kept terse)
 - [`docs/lua-reference.md`](docs/lua-reference.md) -- human-facing Lua reference (complete)
 - [`docs/hooking.md`](docs/hooking.md) and [`docs/peb.md`](docs/peb.md) -- design docs for the hooking and PEB-introspection layers
-- [`contrib/plugins/`](contrib/plugins/) -- checked-in plugins users can activate by copying into `plugins/`
+- [`memscope_mcp/_contrib/plugins/`](memscope_mcp/_contrib/plugins/) -- bundled reference plugins (il2cpp, netcap)
 - [`tests/`](tests/) -- pytest suite, smoke + unit + extension/hook/netcap/PEB coverage
 
 ## Adding an MCP tool
@@ -76,10 +76,10 @@ A core extension is appropriate when the functionality is generic enough to be u
 
 ## Adding a plugin
 
-Plugins live in `plugins/` (gitignored for user-curated activations) and ship in `contrib/plugins/` (checked in, activated by copying). The interface, authoring guidelines, and a minimal example are in [`plugins/README.md`](plugins/README.md). Reference plugins:
+The bundled reference plugins live under `memscope_mcp/_contrib/plugins/` and ship in the wheel. Users install them to `$MEMSCOPE_HOME/plugins/` (default `~/.memscope-mcp/plugins/`) via `memscope-mcp install-plugin <name>`; the loader picks up any `.py` file placed there. Reference plugins:
 
-- [`contrib/plugins/il2cpp.py`](contrib/plugins/il2cpp.py) -- Unity IL2CPP runtime helpers; template for managed-runtime object walking.
-- [`contrib/plugins/netcap.py`](contrib/plugins/netcap.py) -- Winsock capture and analysis built on the generic hooking layer; template for API-hooking + protocol parsing.
+- [`memscope_mcp/_contrib/plugins/il2cpp.py`](memscope_mcp/_contrib/plugins/il2cpp.py) -- Unity IL2CPP runtime helpers; template for managed-runtime object walking.
+- [`memscope_mcp/_contrib/plugins/netcap.py`](memscope_mcp/_contrib/plugins/netcap.py) -- Winsock capture and analysis built on the generic hooking layer; template for API-hooking + protocol parsing.
 
 ## Code style
 

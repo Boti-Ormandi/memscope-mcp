@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from contrib.plugins.netcap import NetcapPlugin
+from memscope_mcp._contrib.plugins.netcap import NetcapPlugin
 from memscope_mcp.tools.hooking import (
     ENTRY_ARG0,
     ENTRY_CAPTURED_LENGTH,
@@ -458,7 +458,7 @@ class TestIOCPCorrelationTTL:
 
         # Mock HOOK_MANAGER.read_ring_buffer to return no entries
         monkeypatch.setattr(
-            "contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
+            "memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
             lambda limit: [],
         )
 
@@ -482,7 +482,7 @@ class TestIOCPCorrelationTTL:
         }
 
         monkeypatch.setattr(
-            "contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
+            "memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
             lambda limit: [],
         )
 
@@ -494,7 +494,7 @@ class TestIOCPCorrelationTTL:
         self.plugin._pending_io = {}
 
         monkeypatch.setattr(
-            "contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
+            "memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
             lambda limit: [],
         )
 
@@ -531,7 +531,7 @@ class TestPaginatedLoadRecording:
     def test_load_full_recording(self, tmp_path, monkeypatch):
         """Loading without offset/limit returns all entries."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("contrib.plugins.netcap.SESSION.target_process", "test.exe")
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 20)
@@ -550,7 +550,7 @@ class TestPaginatedLoadRecording:
     def test_load_with_limit(self, tmp_path, monkeypatch):
         """Loading with limit=5 returns only 5 entries."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("contrib.plugins.netcap.SESSION.target_process", "test.exe")
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 20)
@@ -569,7 +569,7 @@ class TestPaginatedLoadRecording:
     def test_load_with_offset(self, tmp_path, monkeypatch):
         """Loading with offset=15 skips first 15, returns remaining 5."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("contrib.plugins.netcap.SESSION.target_process", "test.exe")
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 20)
@@ -588,7 +588,7 @@ class TestPaginatedLoadRecording:
     def test_load_with_offset_and_limit(self, tmp_path, monkeypatch):
         """Loading with offset=5, limit=3 returns entries 6-8."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("contrib.plugins.netcap.SESSION.target_process", "test.exe")
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 20)
@@ -609,7 +609,7 @@ class TestPaginatedLoadRecording:
     def test_offset_beyond_file(self, tmp_path, monkeypatch):
         """Offset past end of file returns empty result."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("contrib.plugins.netcap.SESSION.target_process", "test.exe")
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 5)
@@ -624,7 +624,7 @@ class TestPaginatedLoadRecording:
     def test_limit_zero(self, tmp_path, monkeypatch):
         """Limit of 0 returns no entries."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("contrib.plugins.netcap.SESSION.target_process", "test.exe")
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 20)
@@ -637,7 +637,7 @@ class TestPaginatedLoadRecording:
     def test_no_opts_backward_compatible(self, tmp_path, monkeypatch):
         """Calling without opts (old API) still works."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("contrib.plugins.netcap.SESSION.target_process", "test.exe")
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 3)

@@ -274,7 +274,7 @@ getLastError()                    -- last error message from a returning-nil cal
 
 ## Netcap plugin
 
-These functions are available only when the netcap plugin is activated by copying `contrib/plugins/netcap.py` to `plugins/netcap.py`. The plugin builds on the [Hooking](#hooking) primitives and adds protocol-aware capture, stream assembly, framing, search, and recording for Winsock traffic.
+These functions are available only when the netcap plugin is installed to `$MEMSCOPE_HOME/plugins/netcap.py` (run `memscope-mcp install-plugin netcap`). The plugin builds on the [Hooking](#hooking) primitives and adds protocol-aware capture, stream assembly, framing, search, and recording for Winsock traffic.
 
 ### Capture lifecycle
 

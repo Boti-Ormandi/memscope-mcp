@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
 
-from contrib.plugins.netcap import AF_INET, NetcapPlugin
+from memscope_mcp._contrib.plugins.netcap import AF_INET, NetcapPlugin
 
 # ==================== Helpers ====================
 
@@ -104,7 +104,7 @@ class TestAcceptProcessing:
 
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         self.plugin._read_packets(100)
 
@@ -122,7 +122,7 @@ class TestAcceptProcessing:
 
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         packets = self.plugin._read_packets(100)
 
@@ -137,7 +137,7 @@ class TestAcceptProcessing:
 
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
@@ -167,7 +167,7 @@ class TestBindProcessing:
 
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         self.plugin._read_packets(100)
 
@@ -191,7 +191,7 @@ class TestBindProcessing:
 
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         self.plugin._read_packets(100)
 

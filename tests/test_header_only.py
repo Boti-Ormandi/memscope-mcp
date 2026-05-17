@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
 
-from contrib.plugins.netcap import NetcapPlugin
+from memscope_mcp._contrib.plugins.netcap import NetcapPlugin
 
 # ==================== Helpers ====================
 
@@ -144,7 +144,7 @@ class TestHeaderOnlyPackets:
 
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
@@ -168,7 +168,7 @@ class TestHeaderOnlyPackets:
 
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]

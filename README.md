@@ -104,7 +104,7 @@ The full reference lives in [`docs/lua-reference.md`](docs/lua-reference.md). Ho
 | Bitwise | 7 |
 | Utilities | 18 |
 
-Plus ~38 functions under the optional netcap plugin (`contrib/plugins/netcap.py`) when activated.
+Plus ~38 functions under the optional netcap plugin (`memscope_mcp/_contrib/plugins/netcap.py`) when activated.
 
 Lua 5.4 rejects hex literals beyond 32 bits; the server transparently rewrites large literals like `0x1F58E12ECF0` to `addr("0x1F58E12ECF0")` before execution, so scripts can paste raw 64-bit addresses verbatim.
 
@@ -114,13 +114,13 @@ Domain-specific helpers without touching the core. Drop a `.py` file into `plugi
 
 ```bash
 # Activate the reference IL2CPP plugin (Unity runtime helpers)
-cp contrib/plugins/il2cpp.py plugins/
+memscope-mcp install-plugin il2cpp
 
 # Or the reference netcap plugin (Winsock capture and analysis, built on the hooking layer)
-cp contrib/plugins/netcap.py plugins/
+memscope-mcp install-plugin netcap
 ```
 
-`il2cpp.py` is the template for plugins that walk a managed-runtime object layout. `netcap.py` is the template for plugins that hook a known API surface and add protocol-aware parsing on top -- it uses the generic `HOOK_MANAGER` to install Winsock hooks and exposes packet capture, stream assembly, framing, search, and recording through ~38 Lua functions. See [`plugins/README.md`](plugins/README.md) for the interface and authoring guidelines.
+`il2cpp.py` is the template for plugins that walk a managed-runtime object layout. `netcap.py` is the template for plugins that hook a known API surface and add protocol-aware parsing on top -- it uses the generic `HOOK_MANAGER` to install Winsock hooks and exposes packet capture, stream assembly, framing, search, and recording through ~38 Lua functions. Installed plugins are placed in `$MEMSCOPE_HOME/plugins/` (default `~/.memscope-mcp/plugins/`); drop any custom `.py` file there to load it on the next server start.
 
 ## Script Persistence
 
@@ -185,8 +185,7 @@ src/
     pe.py                # PE export resolver (resolveExport)
     peb.py               # PEB reader: cmdline, env, debugger, remote modules
     memory_utils.py heuristics.py logger.py pointers.py
-plugins/                 # Active plugins (user-curated, gitignored)
-contrib/plugins/         # Reference plugins (il2cpp, netcap)
+  _contrib/plugins/      # Bundled reference plugins (il2cpp, netcap)
 scripts/                 # Saved Lua scripts per process (gitignored)
 logs/                    # Session logs in JSONL format (gitignored)
 docs/

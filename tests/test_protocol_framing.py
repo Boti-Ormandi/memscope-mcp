@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from contrib.plugins.netcap import NetcapPlugin
+from memscope_mcp._contrib.plugins.netcap import NetcapPlugin
 
 # ==================== Helpers ====================
 

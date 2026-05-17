@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import patch
 
-from contrib.plugins.netcap import NetcapPlugin
+from memscope_mcp._contrib.plugins.netcap import NetcapPlugin
 
 # ==================== Helpers ====================
 
@@ -133,8 +133,8 @@ class TestWsaSendSync:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("contrib.plugins.netcap.SESSION")
-    @patch("contrib.plugins.netcap.HOOK_MANAGER")
+    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
+    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
     def test_sync_send(self, mock_hm, mock_session):
         """Sync WSASend: result=0, reads buffer, produces send packet."""
         entry = make_entry(
@@ -172,8 +172,8 @@ class TestWsaRecvSync:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("contrib.plugins.netcap.SESSION")
-    @patch("contrib.plugins.netcap.HOOK_MANAGER")
+    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
+    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
     def test_sync_recv(self, mock_hm, mock_session):
         """Sync WSARecv: result=0, reads buffer, produces recv packet."""
         entry = make_entry(
@@ -211,8 +211,8 @@ class TestWsaRecvAsync:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("contrib.plugins.netcap.SESSION")
-    @patch("contrib.plugins.netcap.HOOK_MANAGER")
+    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
+    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
     def test_async_pending_then_complete(self, mock_hm, mock_session):
         """Async WSARecv: step 1 stores pending, step 2 GQCS completes it."""
         # Step 1: WSARecv returns SOCKET_ERROR (-1) -> async pending
@@ -277,8 +277,8 @@ class TestGqcsUnmatched:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("contrib.plugins.netcap.SESSION")
-    @patch("contrib.plugins.netcap.HOOK_MANAGER")
+    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
+    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
     def test_unmatched_gqcs(self, mock_hm, mock_session):
         """GQCS with no matching pending IO -> no packet emitted."""
         entry = make_entry(
@@ -311,8 +311,8 @@ class TestGqcsFailure:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("contrib.plugins.netcap.SESSION")
-    @patch("contrib.plugins.netcap.HOOK_MANAGER")
+    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
+    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
     def test_failed_gqcs(self, mock_hm, mock_session):
         """GQCS with result=0 -> no packet emitted."""
         # Add a pending entry to verify it's NOT consumed
@@ -356,8 +356,8 @@ class TestCorrelationTableEviction:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("contrib.plugins.netcap.SESSION")
-    @patch("contrib.plugins.netcap.HOOK_MANAGER")
+    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
+    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
     def test_eviction(self, mock_hm, mock_session):
         """Fill _pending_io beyond _max_pending_io -> oldest entry evicted."""
         limit = self.plugin._max_pending_io
@@ -412,8 +412,8 @@ class TestServerSideReadFailure:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("contrib.plugins.netcap.SESSION")
-    @patch("contrib.plugins.netcap.HOOK_MANAGER")
+    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
+    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
     def test_read_failure(self, mock_hm, mock_session):
         """SESSION.read_bytes raises -> packet emitted with captured=0, no data."""
         entry = make_entry(

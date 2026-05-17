@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
 
-from contrib.plugins.netcap import AF_INET, NetcapPlugin
+from memscope_mcp._contrib.plugins.netcap import AF_INET, NetcapPlugin
 
 # ==================== Helpers ====================
 
@@ -115,8 +115,8 @@ class TestSendtoProcessing:
         mock_session = MagicMock()
         mock_session.read_bytes.return_value = sockaddr
 
-        monkeypatch.setattr("contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("contrib.plugins.netcap.SESSION", mock_session)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION", mock_session)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
@@ -164,8 +164,8 @@ class TestRecvfromProcessing:
         mock_session = MagicMock()
         mock_session.read_bytes.return_value = sockaddr
 
-        monkeypatch.setattr("contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("contrib.plugins.netcap.SESSION", mock_session)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION", mock_session)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
@@ -209,8 +209,8 @@ class TestUdpSockaddrFailure:
         mock_session = MagicMock()
         mock_session.read_bytes.side_effect = Exception("memory read failed")
 
-        monkeypatch.setattr("contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("contrib.plugins.netcap.SESSION", mock_session)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION", mock_session)
 
         packets = self.plugin._read_packets(100)
 

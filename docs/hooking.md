@@ -144,7 +144,7 @@ for _, e in ipairs(readRingBuffer(100)) do
 end
 ```
 
-For per-API patterns (WSASend/WSARecv with WSABUF deref, sendto/recvfrom UDP, IOCP correlation via GQCS, header-only mode), see `contrib/plugins/netcap.py`. It is the canonical example of building protocol-aware capture on the generic primitive.
+For per-API patterns (WSASend/WSARecv with WSABUF deref, sendto/recvfrom UDP, IOCP correlation via GQCS, header-only mode), see `memscope_mcp/_contrib/plugins/netcap.py`. It is the canonical example of building protocol-aware capture on the generic primitive.
 
 ## Constraints
 

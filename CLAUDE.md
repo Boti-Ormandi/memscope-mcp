@@ -37,8 +37,7 @@ src/
     peb.py           # PEB reader: cmdline, env, debugger, remote modules
   plugins/           # PluginBase (LuaExtension specialization) + loader
   instructions/      # AI context builder (base + extensions + plugins)
-contrib/plugins/     # Reference plugins (il2cpp, netcap)
-plugins/             # Active plugins (gitignored, user copies from contrib/)
+  _contrib/plugins/  # Bundled reference plugins (il2cpp, netcap)
 scripts/             # Saved Lua scripts per process (gitignored)
 logs/                # Session logs in JSONL (gitignored)
 docs/                # hooking.md, peb.md, lua-reference.md
@@ -47,7 +46,7 @@ tests/               # pytest suite
 
 ## Architecture rules
 
-- **Generic core, plugins for domains.** No domain-specific code in `src/`. Game/engine helpers go in `contrib/plugins/`; users activate by copying to `plugins/`.
+- **Generic core, plugins for domains.** No domain-specific code in `src/`. Game/engine helpers go in `memscope_mcp/_contrib/plugins/`; users install to `$MEMSCOPE_HOME/plugins/`.
 - **One contract, two activation paths.** Core features and plugins both implement `LuaExtension` (`src/extensions/base.py`). Core extensions are always loaded and registration failure is hard; plugins are user-curated, loaded only when their file is in `plugins/`, and isolated on failure.
 - **10 MCP tools, locked.** Everything new goes through Lua. `tests/test_smoke.py::test_tool_count` pins the count. Adding an MCP tool requires explicit justification.
 - **Lua for complexity.** Simple typed reads use MCP tools. Loops, conditionals, multi-step chains go in Lua.
@@ -89,4 +88,4 @@ tests/               # pytest suite
 - Module bases cached on `attach` -- the auto-reconnect path re-caches transparently on transient restart.
 - Large Lua hex literals (>32-bit) cause parse errors. The engine preprocessor rewrites them, but explicit `addr("0x...")` is safer in user-edited scripts.
 - All MCP tool calls log to `logs/sessions/<timestamp>.jsonl`. Useful for diagnosing what the agent actually called.
-- The netcap plugin (`contrib/plugins/netcap.py`) is *not* a core extension. It is the reference plugin built on the hooking primitives. Don't import it from `src/`.
+- The netcap plugin (`memscope_mcp/_contrib/plugins/netcap.py`) is *not* a core extension. It is the reference plugin built on the hooking primitives. Don't import it from `src/`.
