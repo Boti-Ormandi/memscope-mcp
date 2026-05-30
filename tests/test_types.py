@@ -182,10 +182,18 @@ class TestGetTypeInfo:
         assert info["size"] == 16
         assert info["count_controls_size"] is False
 
-    def test_malformed_bytes_metadata_is_unknown(self):
-        info = get_type_info("bytes[abc]")
-        assert info["success"] is False
-        assert info["error"] == "UNKNOWN_TYPE"
+    def test_malformed_bytes_metadata_is_unknown_with_detail(self):
+        cases = {
+            "bytes[abc]": "bytes type must be 'bytes' or 'bytes[N]'",
+            "bytes[]": "bytes type must be 'bytes' or 'bytes[N]'",
+            "bytes[0]": "bytes[N] requires a positive integer size",
+        }
+        for type_name, detail in cases.items():
+            info = get_type_info(type_name)
+            assert info["success"] is False
+            assert info["error"] == "UNKNOWN_TYPE"
+            assert info["type"] == type_name
+            assert info["detail"] == detail
 
 
 class TestListSupportedTypes:
@@ -317,5 +325,24 @@ class TestVerifiedWrites:
         assert result["expected"] == "2A 00 00 00"
         assert result["actual"] == "2B 00 00 00"
         assert result["old_value"] == "07 00 00 00"
+        assert result["rollback"] == {"attempted": True, "success": True, "value": "07 00 00 00"}
+        assert bytes(fake.memory[:4]) == struct.pack("<i", 7)
         assert fake.reads == [(0x4000, 4), (0x4000, 4)]
-        assert fake.writes == [(0x4000, struct.pack("<i", 42))]
+        assert fake.writes == [(0x4000, struct.pack("<i", 42)), (0x4000, struct.pack("<i", 7))]
+
+    def test_verified_byte_writes_reject_out_of_range_values_before_write(self, monkeypatch):
+        for type_name in ("byte", "uint8"):
+            for value in (-1, 256, 300):
+                fake = FakeVerifiedWriteSession(b"\x00")
+                monkeypatch.setattr(types_module, "SESSION", fake)
+
+                result = write_typed("0x5000", value, type_name, validate=True)
+
+                assert result["success"] is False
+                assert result["error"] == "VALUE_OUT_OF_RANGE"
+                assert result["type"] == type_name
+                assert result["value"] == value
+                assert "0..255" in result["detail"]
+                assert fake.range_checks == []
+                assert fake.reads == []
+                assert fake.writes == []

@@ -410,8 +410,8 @@ def get_type_info(type_name: str) -> dict[str, Any]:
     if type_lower == "bytes" or type_lower.startswith("bytes["):
         try:
             size = _parse_bytes_type_size(type_lower)
-        except ValueError:
-            return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
+        except ValueError as e:
+            return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name, "detail": str(e)}
 
         return {
             "success": True,
@@ -449,8 +449,20 @@ def _pack_primitive_value(type_name: str, value: Any) -> dict[str, Any]:
     size, fmt, _signed = PRIMITIVES[type_name]
     val = _coerce_primitive_value(type_name, value)
 
-    if type_name in ("byte", "uint8", "bool", "boolean"):
-        return {"success": True, "data": bytes([int(val) & 0xFF]), "new_value": value, "size": size}
+    if type_name in ("byte", "uint8"):
+        byte_value = int(val)
+        if byte_value < 0 or byte_value > 255:
+            return {
+                "success": False,
+                "error": "VALUE_OUT_OF_RANGE",
+                "type": type_name,
+                "value": value,
+                "detail": f"{type_name} value must be in range 0..255",
+            }
+        return {"success": True, "data": bytes([byte_value]), "new_value": value, "size": size}
+
+    if type_name in ("bool", "boolean"):
+        return {"success": True, "data": bytes([int(val)]), "new_value": value, "size": size}
 
     try:
         data = struct.pack(fmt, val)
@@ -548,6 +560,16 @@ def _pack_write_value(type_name: str, value: Any) -> dict[str, Any]:
     return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
 
 
+def _restore_prewrite_bytes(addr: int, old_data: bytes) -> dict[str, Any]:
+    rollback = {"attempted": True, "success": True, "value": format_bytes(old_data)}
+    try:
+        SESSION.write_bytes(addr, old_data)
+    except Exception as e:
+        rollback["success"] = False
+        rollback["error"] = str(e)
+    return rollback
+
+
 def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
     packed = _pack_write_value(type_name, value)
     if not packed.get("success"):
@@ -601,6 +623,7 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
             "new_value": new_value,
             "size": size,
             "detail": f"Cannot read target range after write: {e}",
+            "rollback": _restore_prewrite_bytes(addr, old_data),
         }
 
     if actual_data != data:
@@ -617,6 +640,7 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
             "actual_value": actual_value,
             "size": size,
             "detail": "Readback did not match requested bytes",
+            "rollback": _restore_prewrite_bytes(addr, old_data),
         }
 
     return {
@@ -652,7 +676,9 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
                 bytes[N] - same as bytes, with exact payload length N
 
         validate: If True, check the whole target range is writable, capture
-            exact pre-write bytes, write, and byte-compare the readback
+            exact pre-write bytes, write, byte-compare the readback, and
+            attempt to restore pre-write bytes before returning a post-write
+            verification failure
 
     Returns:
         {
@@ -661,7 +687,8 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
             "type": str,
             "old_value": <pre-write bytes as hex> (if validate=True),
             "new_value": <value written>,
-            "size": int (bytes written)
+            "size": int (bytes written),
+            "rollback": <pre-image restore result> (post-write verification failures only)
         }
     """
     if not SESSION.ensure_attached():

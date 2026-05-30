@@ -7,15 +7,25 @@ from memscope_mcp.tools.types import get_type_info, list_supported_types, read_t
 
 
 class FakeBytesSession:
-    def __init__(self, initial: bytes = b"\x00" * 32, *, base: int = 0x1000, writable: bool = True, readback=None):
+    def __init__(
+        self,
+        initial: bytes = b"\x00" * 32,
+        *,
+        base: int = 0x1000,
+        writable: bool = True,
+        readback=None,
+        fail_write_on: int | None = None,
+    ):
         self.memory = bytearray(initial)
         self.base = base
         self.writable = writable
         self.readback = readback
+        self.fail_write_on = fail_write_on
         self.range_checks = []
         self.reads = []
         self.writes = []
         self.read_count = 0
+        self.write_count = 0
 
     def ensure_attached(self):
         return True
@@ -28,13 +38,18 @@ class FakeBytesSession:
         self.reads.append((address, size))
         self.read_count += 1
         if self.read_count > 1 and self.readback is not None:
+            if isinstance(self.readback, Exception):
+                raise self.readback
             return self.readback
         offset = address - self.base
         return bytes(self.memory[offset : offset + size])
 
     def write_bytes(self, address: int, data: bytes):
         data = bytes(data)
+        self.write_count += 1
         self.writes.append((address, data))
+        if self.fail_write_on == self.write_count:
+            raise OSError("rollback write failed")
         offset = address - self.base
         self.memory[offset : offset + len(data)] = data
 
@@ -158,19 +173,56 @@ def test_verified_bytes_write_uses_parsed_payload_length_and_canonical_values(mo
     assert session.writes == [(0x1002, b"\xaa\xbb\xcc")]
 
 
-def test_verified_bytes_mismatch_reports_canonical_actual_value(monkeypatch):
-    session = install_session(monkeypatch, FakeBytesSession(b"\x00" * 8, readback=b"\xaa\xbb\x00"))
+def test_verified_bytes_mismatch_restores_old_bytes_and_reports_actual_value(monkeypatch):
+    session = install_session(monkeypatch, FakeBytesSession(b"\x11\x22\x33\x44", readback=b"\xaa\xbb\x00"))
 
     result = write_typed("0x1000", [0xAA, 0xBB, 0xCC], "bytes[3]", validate=True)
 
     assert result["success"] is False
     assert result["error"] == "VERIFY_MISMATCH"
-    assert result["old_value"] == "00 00 00"
+    assert result["old_value"] == "11 22 33"
     assert result["new_value"] == "AA BB CC"
     assert result["actual"] == "AA BB 00"
     assert result["actual_value"] == "AA BB 00"
+    assert result["rollback"] == {"attempted": True, "success": True, "value": "11 22 33"}
+    assert bytes(session.memory[:4]) == b"\x11\x22\x33\x44"
     assert session.range_checks == [(0x1000, 3)]
-    assert session.writes == [(0x1000, b"\xaa\xbb\xcc")]
+    assert session.writes == [(0x1000, b"\xaa\xbb\xcc"), (0x1000, b"\x11\x22\x33")]
+
+
+def test_verified_bytes_readback_failure_restores_old_bytes(monkeypatch):
+    session = install_session(monkeypatch, FakeBytesSession(b"\x44\x55\x66\x77", readback=OSError("readback lost")))
+
+    result = write_typed("0x1000", "AA BB CC", "bytes[3]", validate=True)
+
+    assert result["success"] is False
+    assert result["error"] == "VERIFY_READ_FAILED"
+    assert result["old_value"] == "44 55 66"
+    assert result["new_value"] == "AA BB CC"
+    assert "readback lost" in result["detail"]
+    assert result["rollback"] == {"attempted": True, "success": True, "value": "44 55 66"}
+    assert bytes(session.memory[:4]) == b"\x44\x55\x66\x77"
+    assert session.writes == [(0x1000, b"\xaa\xbb\xcc"), (0x1000, b"\x44\x55\x66")]
+
+
+def test_verified_bytes_reports_rollback_failure(monkeypatch):
+    session = install_session(
+        monkeypatch,
+        FakeBytesSession(b"\x10\x20\x30\x40", readback=b"\xaa\xbb\x00", fail_write_on=2),
+    )
+
+    result = write_typed("0x1000", "AA BB CC", "bytes[3]", validate=True)
+
+    assert result["success"] is False
+    assert result["error"] == "VERIFY_MISMATCH"
+    assert result["rollback"] == {
+        "attempted": True,
+        "success": False,
+        "value": "10 20 30",
+        "error": "rollback write failed",
+    }
+    assert bytes(session.memory[:4]) == b"\xaa\xbb\xcc\x40"
+    assert session.writes == [(0x1000, b"\xaa\xbb\xcc"), (0x1000, b"\x10\x20\x30")]
 
 
 def test_read_bytes_returns_uppercase_spaced_hex_for_unsized_and_sized_reads(monkeypatch):
@@ -211,6 +263,7 @@ def test_sized_bytes_metadata_rejects_zero_length_type():
 
     assert info["success"] is False
     assert info["error"] == "UNKNOWN_TYPE"
+    assert "positive" in info["detail"]
 
 
 def test_list_supported_types_exposes_writable_special_types():
