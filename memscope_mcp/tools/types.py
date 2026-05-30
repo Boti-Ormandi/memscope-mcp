@@ -2,7 +2,7 @@
 
 Supports primitives (int8-64, float, double, bool, ptr),
 composite types (vector2/3/4, quaternion, color, rect, bounds, matrix4x4),
-and null-terminated C strings.
+null-terminated C strings, and raw byte reads.
 """
 
 import struct
@@ -48,6 +48,28 @@ PRIMITIVES = {
     "boolean": (1, "<B", None),
 }
 
+PRIMITIVE_ALIASES = {
+    "int8": ["sbyte"],
+    "uint8": ["byte"],
+    "int16": ["short"],
+    "uint16": ["ushort"],
+    "int32": ["int"],
+    "uint32": ["uint"],
+    "int64": ["long"],
+    "uint64": ["ulong"],
+    "float": ["single"],
+    "ptr": ["pointer", "intptr"],
+    "bool": ["boolean"],
+}
+
+PRIMITIVE_CANONICAL_TYPES = {type_name: type_name for type_name in PRIMITIVES}
+for _canonical, _aliases in PRIMITIVE_ALIASES.items():
+    PRIMITIVE_CANONICAL_TYPES[_canonical] = _canonical
+    for _alias in _aliases:
+        PRIMITIVE_CANONICAL_TYPES[_alias] = _canonical
+
+SPECIAL_READ_TYPES = ["bytes", "bytes[N]"]
+
 # Composite types: (size, component_count, component_format)
 COMPOSITE_TYPES = {
     "vector2": (8, 2, "<ff"),
@@ -72,16 +94,18 @@ def read_typed(address: str, type_name: str, count: int = 1) -> dict[str, Any]:
             Primitives:
                 int8/sbyte, uint8/byte, int16/short, uint16/ushort, char,
                 int32/int, uint32/uint, int64/long, uint64/ulong,
-                float/single, double, ptr/pointer, bool
+                float/single, double, ptr/pointer/intptr, bool/boolean
 
             Composite Types:
                 vector2, vector3, vector4, quaternion,
                 color, color32, rect, bounds, matrix4x4
 
-            Strings:
+            Special Types:
                 cstring - reads null-terminated C string
+                bytes - reads count raw bytes as uppercase spaced hex
+                bytes[N] - reads N raw bytes as uppercase spaced hex
 
-        count: Number of consecutive values to read (for arrays of primitives)
+        count: Number of consecutive values to read; controls byte count for bytes
 
     Returns:
         {
@@ -256,6 +280,18 @@ def _read_cstring(addr: int, max_length: int = 256) -> dict:
     }
 
 
+def _parse_bytes_type_size(type_lower: str) -> int | None:
+    if type_lower == "bytes":
+        return None
+    if not type_lower.startswith("bytes[") or not type_lower.endswith("]"):
+        raise ValueError("not a bytes type")
+
+    size_text = type_lower[6:-1].strip()
+    if not size_text.isdecimal():
+        raise ValueError("bytes[N] requires a non-negative integer size")
+    return int(size_text)
+
+
 def get_type_info(type_name: str) -> dict[str, Any]:
     """Get information about a type (size, alignment, etc.).
 
@@ -268,21 +304,29 @@ def get_type_info(type_name: str) -> dict[str, Any]:
     type_lower = type_name.lower().strip()
 
     if type_lower in PRIMITIVES:
-        size, fmt, signed = PRIMITIVES[type_lower]
-        return {
+        size, _fmt, signed = PRIMITIVES[type_lower]
+        canonical = PRIMITIVE_CANONICAL_TYPES[type_lower]
+        info = {
             "success": True,
             "type": type_lower,
+            "canonical_type": canonical,
+            "aliases": PRIMITIVE_ALIASES.get(canonical, []).copy(),
             "category": "primitive",
             "size": size,
             "signed": signed,
             "alignment": size,
         }
+        if type_lower == "char":
+            info["encoding"] = "UTF-16 code unit"
+        return info
 
     if type_lower in COMPOSITE_TYPES:
-        size, num_components, fmt = COMPOSITE_TYPES[type_lower]
+        size, num_components, _fmt = COMPOSITE_TYPES[type_lower]
         return {
             "success": True,
             "type": type_lower,
+            "canonical_type": type_lower,
+            "aliases": [],
             "category": "composite",
             "size": size,
             "components": num_components,
@@ -290,7 +334,32 @@ def get_type_info(type_name: str) -> dict[str, Any]:
         }
 
     if type_lower == "cstring":
-        return {"success": True, "type": "cstring", "category": "native", "encoding": "null-terminated ASCII/UTF-8"}
+        return {
+            "success": True,
+            "type": "cstring",
+            "canonical_type": "cstring",
+            "aliases": [],
+            "category": "native",
+            "encoding": "null-terminated ASCII/UTF-8",
+        }
+
+    if type_lower == "bytes" or type_lower.startswith("bytes["):
+        try:
+            size = _parse_bytes_type_size(type_lower)
+        except ValueError:
+            return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
+
+        return {
+            "success": True,
+            "type": type_lower,
+            "canonical_type": "bytes",
+            "aliases": [],
+            "category": "special",
+            "size": size,
+            "alignment": 1,
+            "count_controls_size": size is None,
+            "value_format": "uppercase spaced hex string",
+        }
 
     return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
 
@@ -470,10 +539,16 @@ def list_supported_types() -> dict[str, Any]:
     Returns:
         {"primitives": [...], "composite_types": [...], ...}
     """
+    aliases = {alias: canonical for canonical, type_aliases in PRIMITIVE_ALIASES.items() for alias in type_aliases}
+    primitive_aliases = {canonical: type_aliases.copy() for canonical, type_aliases in PRIMITIVE_ALIASES.items()}
+
     return {
         "success": True,
         "primitives": list(PRIMITIVES.keys()),
+        "primitive_aliases": primitive_aliases,
+        "aliases": aliases,
         "composite_types": list(COMPOSITE_TYPES.keys()),
         "native_types": ["cstring"],
-        "special": ["bytes", "bytes[N]"],
+        "special": SPECIAL_READ_TYPES.copy(),
+        "special_types": SPECIAL_READ_TYPES.copy(),
     }

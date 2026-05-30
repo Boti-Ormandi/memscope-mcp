@@ -142,6 +142,48 @@ class TestGetTypeInfo:
         assert info["success"] is True
         assert info["size"] == 4
 
+    def test_primitive_alias_metadata(self):
+        info = get_type_info("sbyte")
+        assert info["success"] is True
+        assert info["canonical_type"] == "int8"
+        assert info["aliases"] == ["sbyte"]
+        assert info["size"] == 1
+
+    def test_pointer_alias_metadata(self):
+        info = get_type_info("intptr")
+        assert info["success"] is True
+        assert info["canonical_type"] == "ptr"
+        assert info["aliases"] == ["pointer", "intptr"]
+        assert info["size"] == 8
+
+    def test_char_metadata(self):
+        info = get_type_info("char")
+        assert info["success"] is True
+        assert info["category"] == "primitive"
+        assert info["size"] == 2
+        assert info["encoding"] == "UTF-16 code unit"
+
+    def test_bytes_metadata(self):
+        info = get_type_info("bytes")
+        assert info["success"] is True
+        assert info["category"] == "special"
+        assert info["canonical_type"] == "bytes"
+        assert info["size"] is None
+        assert info["count_controls_size"] is True
+
+    def test_sized_bytes_metadata(self):
+        info = get_type_info("bytes[16]")
+        assert info["success"] is True
+        assert info["category"] == "special"
+        assert info["canonical_type"] == "bytes"
+        assert info["size"] == 16
+        assert info["count_controls_size"] is False
+
+    def test_malformed_bytes_metadata_is_unknown(self):
+        info = get_type_info("bytes[abc]")
+        assert info["success"] is False
+        assert info["error"] == "UNKNOWN_TYPE"
+
 
 class TestListSupportedTypes:
     def test_returns_all_categories(self):
@@ -165,3 +207,15 @@ class TestListSupportedTypes:
     def test_cstring_in_native(self):
         result = list_supported_types()
         assert "cstring" in result["native_types"]
+
+    def test_special_read_types_populated(self):
+        result = list_supported_types()
+        assert "bytes" in result["special"]
+        assert "bytes[N]" in result["special"]
+        assert result["special_types"] == result["special"]
+
+    def test_aliases_are_discoverable(self):
+        result = list_supported_types()
+        assert result["aliases"]["sbyte"] == "int8"
+        assert result["aliases"]["intptr"] == "ptr"
+        assert result["primitive_aliases"]["ptr"] == ["pointer", "intptr"]

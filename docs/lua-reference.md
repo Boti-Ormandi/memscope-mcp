@@ -101,13 +101,13 @@ resolveExport("mod.dll", "func")  -- PE export resolution, follows forwarders (d
 ## Scanning
 
 ```lua
-AOBScan(pattern, start?, end?, limit?)  -- modules by default; with bounds, scans readable regions
-AOBScanModule(mod, pattern, limit?)     -- scan one module
+AOBScan(pattern, start?, end?, limit?, timeout_ms?)  -- modules by default; with bounds, scans readable regions
+AOBScanModule(mod, pattern, limit?, timeout_ms?)     -- scan one module
 scanString(str, module?, wide?)         -- find string (ASCII or UTF-16)
 scanPointer(target, module?)            -- find all pointers to target address (xrefs)
 ```
 
-Bounded `AOBScan` walks committed readable regions via `VirtualQueryEx`, including MEM_PRIVATE heap pages. Results include `hits.metadata` with region counts, bytes scanned, timeout state, and result count.
+Bounded `AOBScan` walks committed readable regions via `VirtualQueryEx`, including MEM_PRIVATE heap pages. Results include `hits.metadata` with region counts, bytes scanned, timeout state, and result count. `timeout_ms` defaults to 30000 and is clamped to 100..30000 ms.
 
 ## Pointer chains
 

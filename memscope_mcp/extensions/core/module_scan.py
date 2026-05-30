@@ -26,14 +26,15 @@ getAddress("mod.dll+0x123")    -- Resolve module+offset
 getModules(filter?)             -- List modules: {name, base, size, path}
 getModuleFromAddress(addr)      -- Reverse lookup: {name, base, offset} or nil
 formatAddress(addr)             -- "module.dll+0xOFFSET" or "0xADDR"
-AOBScan(pattern, start?, end?, limit?)  -- Modules by default; bounded scan when start/end given
-AOBScanModule(mod, pattern)     -- Scan specific module
+AOBScan(pattern, start?, end?, limit?, timeout_ms?)  -- Modules by default; bounded scan when start/end given
+AOBScanModule(mod, pattern, limit?, timeout_ms?)     -- Scan specific module
 scanString(str, module?, wide?) -- Scan for string (ASCII or UTF-16)
 scanPointer(target, module?)    -- Find all pointers to target address (xrefs)
 resolveExport(module, name)     -- Resolve DLL export to address
 ```
 
 AOBScan results carry a `metadata` table (mode, scanned_region_count, bytes_scanned, timeout_hit, result_count).
+`timeout_ms` defaults to 30000 and is clamped to 100..30000 ms.
 
 ### Pointer Chains
 

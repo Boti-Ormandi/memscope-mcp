@@ -10,7 +10,7 @@ def disable_session_logging(monkeypatch):
     monkeypatch.setattr(server, "_log", lambda _tool, _args, result, _start_time: result)
 
 
-def test_scan_forwards_current_positional_arguments(monkeypatch):
+def test_scan_forwards_default_arguments_by_keyword(monkeypatch):
     calls = []
 
     def fake_scan_aob(*args, **kwargs):
@@ -19,10 +19,68 @@ def test_scan_forwards_current_positional_arguments(monkeypatch):
 
     monkeypatch.setattr(server, "scan_aob", fake_scan_aob)
 
-    result = server.scan("48 8B ??", module="target.dll", limit=7)
+    result = server.scan("48 8B ??")
 
     assert result == {"success": True, "data": [{"address": "0x1000"}]}
-    assert calls == [(("48 8B ??", "target.dll", 0, 7, False, None, None, 5000, False), {})]
+    assert calls == [
+        (
+            (),
+            {
+                "pattern": "48 8B ??",
+                "module": None,
+                "limit": 50,
+                "offset": 0,
+                "summary_only": False,
+                "address_min": None,
+                "address_max": None,
+                "max_results": 5000,
+                "return_offset": False,
+                "timeout_ms": 30000,
+            },
+        )
+    ]
+
+
+def test_scan_forwards_custom_arguments_by_keyword(monkeypatch):
+    calls = []
+
+    def fake_scan_aob(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"success": True, "data": [{"address": "0x1000", "module_offset": "target.dll+0x10"}]}
+
+    monkeypatch.setattr(server, "scan_aob", fake_scan_aob)
+
+    result = server.scan(
+        "48 8B ??",
+        module="target.dll",
+        limit=7,
+        offset=2,
+        summary_only=True,
+        address_min="target.dll+0x100",
+        address_max="target.dll+0x200",
+        max_results=123,
+        return_offset=True,
+        timeout_ms=1500,
+    )
+
+    assert result == {"success": True, "data": [{"address": "0x1000", "module_offset": "target.dll+0x10"}]}
+    assert calls == [
+        (
+            (),
+            {
+                "pattern": "48 8B ??",
+                "module": "target.dll",
+                "limit": 7,
+                "offset": 2,
+                "summary_only": True,
+                "address_min": "target.dll+0x100",
+                "address_max": "target.dll+0x200",
+                "max_results": 123,
+                "return_offset": True,
+                "timeout_ms": 1500,
+            },
+        )
+    ]
 
 
 def test_dump_forwards_current_hardcoded_defaults(monkeypatch):
@@ -40,14 +98,14 @@ def test_dump_forwards_current_hardcoded_defaults(monkeypatch):
     assert calls == [(("module.dll+0x20", 0x80, 0, True, False, 100, "normal"), {})]
 
 
-def test_modules_response_omits_module_path(monkeypatch):
+def test_modules_response_includes_module_path_and_tolerates_missing_path(monkeypatch):
     monkeypatch.setattr(server.SESSION, "pm", object())
     monkeypatch.setattr(
         server.SESSION,
         "modules",
         {
             "target.exe": {"base": 0x140000000, "size": 0x2000, "path": r"C:\\Games\\target.exe"},
-            "helper.dll": {"base": 0x7FFE0000, "size": 0x1000, "path": r"C:\\Games\\helper.dll"},
+            "helper.dll": {"base": 0x7FFE0000, "size": 0x1000},
         },
     )
 
@@ -55,10 +113,9 @@ def test_modules_response_omits_module_path(monkeypatch):
 
     assert result["success"] is True
     assert result["modules"] == [
-        {"name": "target.exe", "base": "0x140000000", "size": 0x2000},
-        {"name": "helper.dll", "base": "0x7FFE0000", "size": 0x1000},
+        {"name": "target.exe", "base": "0x140000000", "size": 0x2000, "path": r"C:\\Games\\target.exe"},
+        {"name": "helper.dll", "base": "0x7FFE0000", "size": 0x1000, "path": ""},
     ]
-    assert all("path" not in module for module in result["modules"])
 
 
 def test_modules_filter_and_limit_apply_before_formatting(monkeypatch):
@@ -76,7 +133,7 @@ def test_modules_filter_and_limit_apply_before_formatting(monkeypatch):
     result = server.modules(filter="helper", limit=1)
 
     assert result["success"] is True
-    assert result["modules"] == [{"name": "helper.dll", "base": "0x7FFE0000", "size": 0x1000}]
+    assert result["modules"] == [{"name": "helper.dll", "base": "0x7FFE0000", "size": 0x1000, "path": ""}]
     assert result["total"] == 3
 
 
@@ -112,7 +169,11 @@ def test_write_wrapper_forwards_verify_to_write_typed(monkeypatch):
 
 def test_read_write_docstrings_describe_current_basics():
     assert "Use count > 1" in server.read.__doc__
-    assert "vector2/3/4" in server.read.__doc__
+    assert "sbyte" in server.read.__doc__
+    assert "char" in server.read.__doc__
+    assert "bytes[N]" in server.read.__doc__
+    assert "color32" in server.read.__doc__
+    assert "ptr/pointer/intptr" in server.read.__doc__
     assert "Set verify=True" in server.write.__doc__
     assert "vector3 as {x,y,z} dict" in server.write.__doc__
 

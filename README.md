@@ -80,8 +80,8 @@ Everything happens through MCP tool calls. A typical exploration session:
 
 **Scan for a pattern, follow pointers:**
 ```
-> scan(pattern="48 8B 05 ?? ?? ?? ??", module="target.dll")
-  {data: [{address: "target.dll+0x1A208D8"}], _pagination: {total: 1}}
+> scan(pattern="48 8B 05 ?? ?? ?? ??", module="target.dll", return_offset=True)
+  {data: [{address: "0x7FF6A1A208D8", module_offset: "target.dll+0x1A208D8"}], _pagination: {total: 1}}
 
 > chain(base="0x183C13300", offsets=["0x50", "0x18", "0x100"], read_final="float")
   {final_address: "0x184A52118", final_value: 100.0}
@@ -113,7 +113,7 @@ Addresses accept hex strings (`"0x1234"`), module+offset (`"module.dll+0x1234"`)
 | `write` | Write typed memory with optional pre-write verification against page protection |
 | `dump` | Smart memory dump with automatic type detection (pointers, strings, ints, floats) and confidence scoring |
 | `chain` | Follow pointer chains: `[[base+off0]+off1]...` with configurable final read type |
-| `scan` | AOB pattern scanning with wildcards (`??`, `?`, `**`). Module scans by default; bounded scans walk committed readable regions |
+| `scan` | AOB pattern scanning with wildcards (`??`, `?`, `**`). Supports pagination, bounds, `return_offset`, and `timeout_ms` (clamped to 100..30000 ms) |
 | `lua` | Execute Lua scripts server-side for multi-step operations |
 | `scripts` | Manage saved Lua scripts. Actions: `list` (with paths), `run` (with args) |
 

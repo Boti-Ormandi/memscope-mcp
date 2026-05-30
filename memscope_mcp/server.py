@@ -347,7 +347,7 @@ def attach(process_name: str, pid: Optional[int] = None) -> dict:
 
 @mcp.tool()
 def modules(filter: Optional[str] = None, limit: int = 30) -> dict:
-    """List loaded modules with base addresses and sizes.
+    """List loaded modules with base addresses, sizes, and paths.
     Use filter for substring match. Returns modules array."""
     _start = time.perf_counter()
     if SESSION.pm is None:
@@ -362,7 +362,9 @@ def modules(filter: Optional[str] = None, limit: int = 30) -> dict:
     for name, info in SESSION.modules.items():
         if filter and filter.lower() not in name.lower():
             continue
-        mods.append({"name": name, "base": format_address(info["base"]), "size": info["size"]})
+        mods.append(
+            {"name": name, "base": format_address(info["base"]), "size": info["size"], "path": info.get("path", "")}
+        )
         if len(mods) >= limit:
             break
 
@@ -382,9 +384,13 @@ def modules(filter: Optional[str] = None, limit: int = 30) -> dict:
 @mcp.tool()
 def read(address: str, type_name: str, count: int = 1) -> dict:
     """Read typed data from memory.
-    Types: int8-64, uint8-64, float, double, bool, ptr, cstring,
-           vector2/3/4, quaternion, color, rect, bounds, matrix4x4.
-    Use count > 1 for consecutive values. Returns value or values array."""
+    Primitive types: int8/sbyte, uint8/byte, int16/short, uint16/ushort, char,
+    int32/int, uint32/uint, int64/long, uint64/ulong, float/single,
+    double, bool/boolean, ptr/pointer/intptr.
+    Special types: cstring, bytes, bytes[N].
+    Composite types: vector2/3/4, quaternion, color, color32, rect, bounds, matrix4x4.
+    Use count > 1 for consecutive values; count controls length for bytes.
+    Returns value or values array."""
     _start = time.perf_counter()
     result = read_typed(address, type_name, count)
     return _log("read", {"address": address, "type_name": type_name, "count": count}, result, _start)
@@ -431,13 +437,37 @@ def chain(base: str, offsets: list[int | str], read_final: str = "ptr") -> dict:
 
 
 @mcp.tool()
-def scan(pattern: str, module: Optional[str] = None, limit: int = 50) -> dict:
+def scan(
+    pattern: str,
+    module: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    summary_only: bool = False,
+    address_min: Optional[str] = None,
+    address_max: Optional[str] = None,
+    max_results: int = 5000,
+    return_offset: bool = False,
+    timeout_ms: int = 30000,
+) -> dict:
     """Scan for byte pattern (AOB). Use ?? for wildcards.
-    Faster with module specified. Example: '48 8B 05 ?? ?? ?? ??'
-    Returns matching addresses array."""
+    Faster with module specified. address_min/address_max bound the scan range.
+    timeout_ms is clamped by the scanner to 100..30000 ms.
+    Returns absolute matching addresses; return_offset=True adds module_offset."""
     _start = time.perf_counter()
-    result = scan_aob(pattern, module, 0, limit, False, None, None, 5000, False)
-    return _log("scan", {"pattern": pattern, "module": module, "limit": limit}, result, _start)
+    _log_args = {
+        "pattern": pattern,
+        "module": module,
+        "limit": limit,
+        "offset": offset,
+        "summary_only": summary_only,
+        "address_min": address_min,
+        "address_max": address_max,
+        "max_results": max_results,
+        "return_offset": return_offset,
+        "timeout_ms": timeout_ms,
+    }
+    result = scan_aob(**_log_args)
+    return _log("scan", _log_args, result, _start)
 
 
 # ============================================================================
