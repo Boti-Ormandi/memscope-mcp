@@ -9,7 +9,7 @@ import struct
 from typing import Any
 
 from ..session import SESSION
-from ..utils.memory_utils import format_address, parse_address
+from ..utils.memory_utils import format_address, format_bytes, parse_address
 
 # =============================================================================
 # Type Definitions - sizes and struct formats
@@ -364,6 +364,173 @@ def get_type_info(type_name: str) -> dict[str, Any]:
     return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
 
 
+def _coerce_primitive_value(type_name: str, value: Any) -> int | float:
+    if type_name in ("bool", "boolean"):
+        return 1 if value else 0
+    if type_name in ("float", "single", "double"):
+        return float(value)
+    if type_name in ("ptr", "pointer", "intptr"):
+        if isinstance(value, str):
+            return parse_address(value)
+        return int(value)
+    return int(value)
+
+
+def _pack_primitive_value(type_name: str, value: Any) -> dict[str, Any]:
+    size, fmt, _signed = PRIMITIVES[type_name]
+    val = _coerce_primitive_value(type_name, value)
+
+    if type_name in ("byte", "uint8", "bool", "boolean"):
+        return {"success": True, "data": bytes([int(val) & 0xFF]), "new_value": value, "size": size}
+
+    try:
+        data = struct.pack(fmt, val)
+    except struct.error as e:
+        return {"success": False, "error": "VALUE_OUT_OF_RANGE", "type": type_name, "value": value, "detail": str(e)}
+
+    return {"success": True, "data": data, "new_value": value, "size": size}
+
+
+def _get_composite_components(type_name: str, value: Any) -> tuple[Any, ...] | dict[str, Any]:
+    _size, num_components, _fmt = COMPOSITE_TYPES[type_name]
+
+    if isinstance(value, dict):
+        if type_name in ("vector2",):
+            return (value["x"], value["y"])
+        if type_name in ("vector3",):
+            return (value["x"], value["y"], value["z"])
+        if type_name in ("vector4", "quaternion"):
+            return (value["x"], value["y"], value["z"], value["w"])
+        if type_name in ("color",):
+            return (value["r"], value["g"], value["b"], value["a"])
+        if type_name in ("color32",):
+            return (int(value["r"]), int(value["g"]), int(value["b"]), int(value["a"]))
+        if type_name in ("rect",):
+            return (value["x"], value["y"], value["width"], value["height"])
+        if type_name in ("bounds",):
+            c = value["center"]
+            e = value["extents"]
+            return (c["x"], c["y"], c["z"], e["x"], e["y"], e["z"])
+        return {"success": False, "error": "UNSUPPORTED_COMPOSITE_TYPE", "type": type_name}
+
+    if isinstance(value, (list, tuple)):
+        if len(value) != num_components:
+            return {
+                "success": False,
+                "error": "COMPONENT_COUNT_MISMATCH",
+                "expected": num_components,
+                "got": len(value),
+            }
+        return tuple(value)
+
+    return {
+        "success": False,
+        "error": "INVALID_VALUE_FORMAT",
+        "detail": "Composite types require dict {x,y,z} or list [x,y,z]",
+    }
+
+
+def _pack_composite_value(type_name: str, value: Any) -> dict[str, Any]:
+    size, _num_components, fmt = COMPOSITE_TYPES[type_name]
+
+    try:
+        components = _get_composite_components(type_name, value)
+        if isinstance(components, dict):
+            return components
+        data = struct.pack(fmt, *components)
+    except (KeyError, struct.error) as e:
+        return {"success": False, "error": "VALUE_FORMAT_ERROR", "type": type_name, "detail": str(e)}
+
+    return {"success": True, "data": data, "new_value": value, "size": size}
+
+
+def _pack_write_value(type_name: str, value: Any) -> dict[str, Any]:
+    if type_name in PRIMITIVES:
+        return _pack_primitive_value(type_name, value)
+    if type_name in COMPOSITE_TYPES:
+        return _pack_composite_value(type_name, value)
+    return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
+
+
+def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
+    packed = _pack_write_value(type_name, value)
+    if not packed.get("success"):
+        return packed
+
+    data = packed["data"]
+    size = packed["size"]
+    address = format_address(addr)
+
+    try:
+        writable = SESSION.is_memory_range_writable(addr, size)
+    except Exception:
+        writable = False
+    if not writable:
+        return {
+            "success": False,
+            "error": "MEMORY_NOT_WRITABLE",
+            "address": address,
+            "type": type_name,
+            "size": size,
+            "detail": "Target range is not writable",
+        }
+
+    try:
+        old_data = SESSION.read_bytes(addr, size)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": "VALIDATION_FAILED",
+            "address": address,
+            "type": type_name,
+            "size": size,
+            "detail": f"Cannot read target range before write: {e}",
+        }
+
+    try:
+        SESSION.write_bytes(addr, data)
+    except Exception as e:
+        return {"success": False, "error": "WRITE_ERROR", "address": address, "type": type_name, "detail": str(e)}
+
+    try:
+        actual_data = SESSION.read_bytes(addr, size)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": "VERIFY_READ_FAILED",
+            "address": address,
+            "type": type_name,
+            "old_value": format_bytes(old_data),
+            "new_value": value,
+            "size": size,
+            "detail": f"Cannot read target range after write: {e}",
+        }
+
+    if actual_data != data:
+        return {
+            "success": False,
+            "error": "VERIFY_MISMATCH",
+            "address": address,
+            "type": type_name,
+            "old_value": format_bytes(old_data),
+            "new_value": value,
+            "expected": format_bytes(data),
+            "actual": format_bytes(actual_data),
+            "size": size,
+            "detail": "Readback did not match requested bytes",
+        }
+
+    return {
+        "success": True,
+        "address": address,
+        "type": type_name,
+        "old_value": format_bytes(old_data),
+        "new_value": value,
+        "size": size,
+        "verified": True,
+    }
+
+
 def write_typed(address: str, value: Any, type_name: str, validate: bool = False) -> dict[str, Any]:
     """Write typed data to memory.
 
@@ -381,14 +548,15 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
                 vector2, vector3, vector4, quaternion,
                 color, color32, rect, bounds
 
-        validate: If True, read the address first to ensure it's accessible
+        validate: If True, check the whole target range is writable, capture
+            exact pre-write bytes, write, and byte-compare the readback
 
     Returns:
         {
             "success": bool,
             "address": "0x...",
             "type": str,
-            "old_value": <value before write> (if validate=True),
+            "old_value": <pre-write bytes as hex> (if validate=True),
             "new_value": <value written>,
             "size": int (bytes written)
         }
@@ -403,31 +571,17 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
 
     type_lower = type_name.lower().strip()
 
-    # Validate before write if requested
-    old_value = None
-    if validate:
-        try:
-            # Try to read the address first
-            read_result = read_typed(address, type_name, 1)
-            if read_result.get("success"):
-                old_value = read_result.get("value")
-        except:
-            return {"success": False, "error": "VALIDATION_FAILED", "detail": "Cannot read address before write"}
-
     try:
+        if validate:
+            return _write_verified(addr, type_lower, value)
+
         # Handle primitives
         if type_lower in PRIMITIVES:
-            result = _write_primitive(addr, type_lower, value)
-            if result["success"] and validate:
-                result["old_value"] = old_value
-            return result
+            return _write_primitive(addr, type_lower, value)
 
         # Handle composite types
         if type_lower in COMPOSITE_TYPES:
-            result = _write_composite_type(addr, type_lower, value)
-            if result["success"] and validate:
-                result["old_value"] = old_value
-            return result
+            return _write_composite_type(addr, type_lower, value)
 
         return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
 
@@ -437,22 +591,10 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
 
 def _write_primitive(addr: int, type_name: str, value: Any) -> dict:
     """Write primitive type."""
-    size, fmt, signed = PRIMITIVES[type_name]
+    size, fmt, _signed = PRIMITIVES[type_name]
 
     try:
-        # Convert value to appropriate type
-        if type_name in ("bool", "boolean"):
-            val = 1 if value else 0
-        elif type_name in ("float", "single", "double"):
-            val = float(value)
-        elif type_name in ("ptr", "pointer", "intptr"):
-            # Handle hex string addresses
-            if isinstance(value, str):
-                val = parse_address(value)
-            else:
-                val = int(value)
-        else:
-            val = int(value)
+        val = _coerce_primitive_value(type_name, value)
 
         # Write using SESSION methods for common types (faster)
         if type_name in ("int32", "int"):
@@ -482,55 +624,18 @@ def _write_primitive(addr: int, type_name: str, value: Any) -> dict:
 
 def _write_composite_type(addr: int, type_name: str, value: Any) -> dict:
     """Write composite type."""
-    size, num_components, fmt = COMPOSITE_TYPES[type_name]
+    packed = _pack_composite_value(type_name, value)
+    if not packed.get("success"):
+        return packed
 
-    # Convert value to component tuple
-    try:
-        if isinstance(value, dict):
-            # Handle dict format: {x, y, z}
-            if type_name in ("vector2",):
-                components = (value["x"], value["y"])
-            elif type_name in ("vector3",):
-                components = (value["x"], value["y"], value["z"])
-            elif type_name in ("vector4", "quaternion"):
-                components = (value["x"], value["y"], value["z"], value["w"])
-            elif type_name in ("color",):
-                components = (value["r"], value["g"], value["b"], value["a"])
-            elif type_name in ("color32",):
-                components = (int(value["r"]), int(value["g"]), int(value["b"]), int(value["a"]))
-            elif type_name in ("rect",):
-                components = (value["x"], value["y"], value["width"], value["height"])
-            elif type_name in ("bounds",):
-                c = value["center"]
-                e = value["extents"]
-                components = (c["x"], c["y"], c["z"], e["x"], e["y"], e["z"])
-            else:
-                return {"success": False, "error": "UNSUPPORTED_COMPOSITE_TYPE", "type": type_name}
-        elif isinstance(value, (list, tuple)):
-            # Handle list/tuple format
-            if len(value) != num_components:
-                return {
-                    "success": False,
-                    "error": "COMPONENT_COUNT_MISMATCH",
-                    "expected": num_components,
-                    "got": len(value),
-                }
-            components = tuple(value)
-        else:
-            return {
-                "success": False,
-                "error": "INVALID_VALUE_FORMAT",
-                "detail": "Composite types require dict {x,y,z} or list [x,y,z]",
-            }
-
-        # Pack and write
-        data = struct.pack(fmt, *components)
-        SESSION.write_bytes(addr, data)
-
-        return {"success": True, "address": format_address(addr), "type": type_name, "new_value": value, "size": size}
-
-    except (KeyError, struct.error) as e:
-        return {"success": False, "error": "VALUE_FORMAT_ERROR", "type": type_name, "detail": str(e)}
+    SESSION.write_bytes(addr, packed["data"])
+    return {
+        "success": True,
+        "address": format_address(addr),
+        "type": type_name,
+        "new_value": value,
+        "size": packed["size"],
+    }
 
 
 def list_supported_types() -> dict[str, Any]:

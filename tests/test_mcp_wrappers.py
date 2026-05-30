@@ -224,6 +224,8 @@ def test_read_write_docstrings_describe_current_basics():
     assert "color32" in server.read.__doc__
     assert "ptr/pointer/intptr" in server.read.__doc__
     assert "Set verify=True" in server.write.__doc__
+    assert "writable range check" in server.write.__doc__
+    assert "byte-for-byte readback" in server.write.__doc__
     assert "vector3 as {x,y,z} dict" in server.write.__doc__
 
 

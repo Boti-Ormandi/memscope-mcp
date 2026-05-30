@@ -439,7 +439,7 @@ def read(address: str, type_name: str, count: int = 1) -> dict:
 def write(address: str, value, type_name: str, verify: bool = False) -> dict:
     """Write typed data to memory. Use with caution.
     Types: primitives and composite types (vector3 as {x,y,z} dict).
-    Set verify=True to read address first. Returns success and written value."""
+    Set verify=True to require a writable range check and byte-for-byte readback."""
     _start = time.perf_counter()
     result = write_typed(address, value, type_name, verify)
     return _log("write", {"address": address, "value": value, "type_name": type_name, "verify": verify}, result, _start)

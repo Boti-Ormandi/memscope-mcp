@@ -4,6 +4,9 @@ Verifies attach/detach callbacks fire correctly, are isolated on failure,
 and integrate with the canonical switch_process path.
 """
 
+from types import SimpleNamespace
+
+import memscope_mcp.session as session_module
 from memscope_mcp.session import DebugSession
 
 
@@ -194,6 +197,44 @@ class TestAllocationTracking:
         session = DebugSession()
         result = session.free(0x9999)
         assert result is False
+
+
+class TestWritableMemoryRange:
+    def test_writable_range_walks_all_covered_regions(self, monkeypatch):
+        session = DebugSession()
+        session.pm = SimpleNamespace(process_handle=1)
+        queries = []
+
+        committed = session_module.structs.MEMORY_STATE.MEM_COMMIT.value
+        writable = session_module.structs.MEMORY_PROTECTION.PAGE_READWRITE.value
+
+        def fake_virtual_query(process_handle, address):
+            queries.append((process_handle, address))
+            if address < 0x1008:
+                return SimpleNamespace(State=committed, Protect=writable, BaseAddress=0x1000, RegionSize=8)
+            return SimpleNamespace(State=committed, Protect=writable, BaseAddress=0x1008, RegionSize=8)
+
+        monkeypatch.setattr(session_module.pymem.memory, "virtual_query", fake_virtual_query)
+
+        assert session.is_memory_range_writable(0x1004, 8) is True
+        assert queries == [(1, 0x1004), (1, 0x1008)]
+
+    def test_writable_range_fails_when_any_covered_region_is_read_only(self, monkeypatch):
+        session = DebugSession()
+        session.pm = SimpleNamespace(process_handle=1)
+
+        committed = session_module.structs.MEMORY_STATE.MEM_COMMIT.value
+        writable = session_module.structs.MEMORY_PROTECTION.PAGE_READWRITE.value
+        read_only = session_module.structs.MEMORY_PROTECTION.PAGE_READONLY.value
+
+        def fake_virtual_query(_process_handle, address):
+            if address < 0x1008:
+                return SimpleNamespace(State=committed, Protect=writable, BaseAddress=0x1000, RegionSize=8)
+            return SimpleNamespace(State=committed, Protect=read_only, BaseAddress=0x1008, RegionSize=8)
+
+        monkeypatch.setattr(session_module.pymem.memory, "virtual_query", fake_virtual_query)
+
+        assert session.is_memory_range_writable(0x1004, 8) is False
 
 
 class TestSwitchProcess:

@@ -384,40 +384,57 @@ class DebugSession:
         # Valid x64 user-mode range: 0x10000 to 0x7FFFFFFFFFFF
         return 0x10000 <= value <= 0x7FFFFFFFFFFF
 
-    def is_memory_writable(self, address: int) -> bool:
-        """Check if memory at address is writable (won't crash on write).
-
-        Uses VirtualQueryEx to check page protection before writing.
-        Returns False for PAGE_NOACCESS, PAGE_GUARD, or read-only pages.
-        """
-        if self.pm is None:
+    @staticmethod
+    def _is_writable_protection(protect: int) -> bool:
+        """Return True for page protections that allow writes."""
+        if protect & structs.MEMORY_PROTECTION.PAGE_GUARD.value:
             return False
 
-        try:
-            mbi = pymem.memory.virtual_query(self.pm.process_handle, address)
-        except Exception:
-            return False
-
-        # Must be committed memory (not reserved or free)
-        if mbi.State != structs.MEMORY_STATE.MEM_COMMIT.value:
-            return False
-
-        # PAGE_GUARD triggers exception on first access - not safe
-        if mbi.Protect & structs.MEMORY_PROTECTION.PAGE_GUARD.value:
-            return False
-
-        # Get base protection (strip modifier flags like PAGE_NOCACHE, PAGE_WRITECOMBINE)
-        base_protect = mbi.Protect & 0xFF
-
-        # Writable protections
+        base_protect = protect & 0xFF
         writable = {
             structs.MEMORY_PROTECTION.PAGE_READWRITE.value,  # 0x04
             structs.MEMORY_PROTECTION.PAGE_WRITECOPY.value,  # 0x08
             structs.MEMORY_PROTECTION.PAGE_EXECUTE_READWRITE.value,  # 0x40
             structs.MEMORY_PROTECTION.PAGE_EXECUTE_WRITECOPY.value,  # 0x80
         }
-
         return base_protect in writable
+
+    def is_memory_writable(self, address: int) -> bool:
+        """Check if memory at address is writable (won't crash on write)."""
+        return self.is_memory_range_writable(address, 1)
+
+    def is_memory_range_writable(self, address: int, size: int) -> bool:
+        """Check if every byte in a memory range is writable.
+
+        Uses VirtualQueryEx to walk each page covered by the range. Returns False
+        for uncommitted, guarded, inaccessible, or read-only pages.
+        """
+        if self.pm is None or size <= 0:
+            return False
+
+        end = address + size
+        current = address
+
+        try:
+            while current < end:
+                mbi = pymem.memory.virtual_query(self.pm.process_handle, current)
+
+                if mbi.State != structs.MEMORY_STATE.MEM_COMMIT.value:
+                    return False
+                if not self._is_writable_protection(mbi.Protect):
+                    return False
+
+                region_base = int(mbi.BaseAddress)
+                region_size = int(mbi.RegionSize)
+                region_end = region_base + region_size
+                if region_size <= 0 or region_end <= current:
+                    return False
+
+                current = min(region_end, end)
+        except Exception:
+            return False
+
+        return True
 
     # ========== Memory Write Functions ==========
 

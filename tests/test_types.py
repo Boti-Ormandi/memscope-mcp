@@ -1,6 +1,9 @@
 """Tests for type system metadata and definitions."""
 
-from memscope_mcp.tools.types import COMPOSITE_TYPES, PRIMITIVES, get_type_info, list_supported_types
+import struct
+
+import memscope_mcp.tools.types as types_module
+from memscope_mcp.tools.types import COMPOSITE_TYPES, PRIMITIVES, get_type_info, list_supported_types, write_typed
 
 
 class TestPrimitiveDefinitions:
@@ -219,3 +222,100 @@ class TestListSupportedTypes:
         assert result["aliases"]["sbyte"] == "int8"
         assert result["aliases"]["intptr"] == "ptr"
         assert result["primitive_aliases"]["ptr"] == ["pointer", "intptr"]
+
+
+class FakeVerifiedWriteSession:
+    def __init__(self, initial: bytes, *, writable: bool = True, readback: bytes | None = None):
+        self.memory = bytearray(initial)
+        self.writable = writable
+        self.readback = readback
+        self.range_checks = []
+        self.reads = []
+        self.writes = []
+        self.read_count = 0
+
+    def ensure_attached(self):
+        return True
+
+    def is_memory_range_writable(self, address: int, size: int):
+        self.range_checks.append((address, size))
+        return self.writable
+
+    def read_bytes(self, address: int, size: int):
+        self.reads.append((address, size))
+        self.read_count += 1
+        if self.read_count > 1 and self.readback is not None:
+            return self.readback
+        return bytes(self.memory[:size])
+
+    def write_bytes(self, address: int, data: bytes):
+        data = bytes(data)
+        self.writes.append((address, data))
+        self.memory[: len(data)] = data
+
+
+class TestVerifiedWrites:
+    def test_verified_primitive_write_checks_range_and_exact_readback(self, monkeypatch):
+        fake = FakeVerifiedWriteSession(struct.pack("<i", 7))
+        monkeypatch.setattr(types_module, "SESSION", fake)
+
+        result = write_typed("0x1000", 42, "int32", validate=True)
+
+        expected = struct.pack("<i", 42)
+        assert result == {
+            "success": True,
+            "address": "0x1000",
+            "type": "int32",
+            "old_value": "07 00 00 00",
+            "new_value": 42,
+            "size": 4,
+            "verified": True,
+        }
+        assert fake.range_checks == [(0x1000, 4)]
+        assert fake.reads == [(0x1000, 4), (0x1000, 4)]
+        assert fake.writes == [(0x1000, expected)]
+
+    def test_verified_composite_write_uses_packed_byte_length(self, monkeypatch):
+        fake = FakeVerifiedWriteSession(b"\x00" * 12)
+        monkeypatch.setattr(types_module, "SESSION", fake)
+
+        value = {"x": 1.25, "y": -2.5, "z": 3.75}
+        result = write_typed("0x2000", value, "vector3", validate=True)
+
+        expected = struct.pack("<fff", 1.25, -2.5, 3.75)
+        assert result["success"] is True
+        assert result["old_value"] == "00 00 00 00 00 00 00 00 00 00 00 00"
+        assert result["new_value"] == value
+        assert result["size"] == 12
+        assert result["verified"] is True
+        assert fake.range_checks == [(0x2000, 12)]
+        assert fake.reads == [(0x2000, 12), (0x2000, 12)]
+        assert fake.writes == [(0x2000, expected)]
+
+    def test_verified_write_fails_without_writing_when_range_not_writable(self, monkeypatch):
+        fake = FakeVerifiedWriteSession(struct.pack("<i", 7), writable=False)
+        monkeypatch.setattr(types_module, "SESSION", fake)
+
+        result = write_typed("0x3000", 42, "int32", validate=True)
+
+        assert result["success"] is False
+        assert result["error"] == "MEMORY_NOT_WRITABLE"
+        assert result["address"] == "0x3000"
+        assert result["size"] == 4
+        assert fake.range_checks == [(0x3000, 4)]
+        assert fake.reads == []
+        assert fake.writes == []
+
+    def test_verified_write_reports_expected_and_actual_on_readback_mismatch(self, monkeypatch):
+        fake = FakeVerifiedWriteSession(struct.pack("<i", 7), readback=b"\x2b\x00\x00\x00")
+        monkeypatch.setattr(types_module, "SESSION", fake)
+
+        result = write_typed("0x4000", 42, "int32", validate=True)
+
+        assert result["success"] is False
+        assert result["error"] == "VERIFY_MISMATCH"
+        assert result["expected"] == "2A 00 00 00"
+        assert result["actual"] == "2B 00 00 00"
+        assert result["old_value"] == "07 00 00 00"
+        assert fake.reads == [(0x4000, 4), (0x4000, 4)]
+        assert fake.writes == [(0x4000, struct.pack("<i", 42))]
