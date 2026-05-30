@@ -5,6 +5,7 @@ import json
 
 import memscope_mcp.paths as paths
 import memscope_mcp.server as server
+from memscope_mcp.session import DebugSession
 from memscope_mcp.utils.logger import MAX_CONTAINER_ITEMS, MAX_LUA_PREVIEW_CHARS, MCPLogger
 
 
@@ -217,4 +218,18 @@ def test_failed_attach_does_not_keep_stale_log_process(monkeypatch):
 
     assert result["success"] is False
     assert result["error"] == "PROCESS_NOT_FOUND"
+    assert server.LOGGER._current_process is None
+
+
+def test_session_detach_clears_log_process(monkeypatch):
+    class FakeProcess:
+        def close_process(self):
+            return None
+
+    session = DebugSession(pm=FakeProcess(), target_process="Target.exe", pid=4242)
+    monkeypatch.setattr(session, "_is_process_alive", lambda: False)
+    monkeypatch.setattr(server.LOGGER, "_current_process", "Target.exe", raising=False)
+
+    session.detach()
+
     assert server.LOGGER._current_process is None

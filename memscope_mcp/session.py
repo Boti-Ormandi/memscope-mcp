@@ -822,6 +822,10 @@ class DebugSession:
         self.pid = 0
         self.modules.clear()
 
+        from .utils.logger import LOGGER
+
+        LOGGER.clear_process()
+
 
 # Global session instance
 SESSION = DebugSession()
