@@ -88,6 +88,8 @@ def test_get_capabilities_reports_detached_state_paths_and_wrapper_flags(monkeyp
         addResult("tool_count", caps.wrappers.tool_count)
         addResult("error_normalization", caps.wrappers.error_normalization)
         addResult("script_namespace_selection", caps.wrappers.script_namespace_selection)
+        addResult("verified_writes", caps.wrappers.verified_writes)
+        addResult("typed_byte_writes", caps.wrappers.typed_byte_writes)
         """
     )
 
@@ -100,6 +102,8 @@ def test_get_capabilities_reports_detached_state_paths_and_wrapper_flags(monkeyp
     assert result["results"]["tool_count"] == 10
     assert result["results"]["error_normalization"] is True
     assert result["results"]["script_namespace_selection"] is True
+    assert result["results"]["verified_writes"] is True
+    assert result["results"]["typed_byte_writes"] is True
 
 
 def test_get_capabilities_includes_attached_process_info(monkeypatch):

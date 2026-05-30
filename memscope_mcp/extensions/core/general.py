@@ -187,6 +187,8 @@ Lua 5.4 also supports native operators: `a & b`, `a | b`, `a ~ b`, `a << n`, `a 
                 "dump_options": True,
                 "module_paths": True,
                 "script_namespace_selection": True,
+                "verified_writes": True,
+                "typed_byte_writes": True,
             }
         )
         return caps
