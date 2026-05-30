@@ -348,13 +348,14 @@ def attach(process_name: str, pid: Optional[int] = None) -> dict:
     if pid:
         _log_args["pid"] = pid
 
-    LOGGER.set_process(process_name)
-
     # Use canonical switch path (fires lifecycle callbacks)
     if not SESSION.switch_process(process_name, pid if pid else 0):
+        LOGGER.clear_process()
         detail = f"Could not attach to PID {pid}" if pid else f"Could not attach to {process_name}. Is it running?"
         result = {"success": False, "error": "PROCESS_NOT_FOUND", "detail": detail}
         return _log("attach", _log_args, result, _start)
+
+    LOGGER.set_process(process_name)
 
     # Return largest modules (most likely to be interesting)
     sorted_mods = sorted(SESSION.modules.items(), key=lambda x: x[1]["size"], reverse=True)
@@ -542,7 +543,7 @@ def lua(script: str, timeout: Optional[float] = None) -> dict:
     Returns: {success, results (dict), output (array of prints)}"""
     _start = time.perf_counter()
     result = execute_lua(script, timeout=timeout)
-    return _log("lua", {"script": script}, result, _start)
+    return _log("lua", {"script": script, "timeout": timeout}, result, _start)
 
 
 @mcp.tool()
@@ -561,11 +562,7 @@ def scripts(
     Example: scripts(action='list') -> get scripts_dir, then Write to {scripts_dir}/<name>.lua
     """
     _start = time.perf_counter()
-    _args = {"action": action, "name": name}
-    if process:
-        _args["process"] = process
-    if args:
-        _args["args"] = args
+    _args = {"action": action, "name": name, "process": process, "args": args, "timeout": timeout}
 
     action = action.lower().strip()
 

@@ -200,7 +200,7 @@ ASLR invalidates absolute addresses across restarts. Save the finder script, not
 
 ## Session logging
 
-Every tool call is logged to `$MEMSCOPE_HOME/logs/sessions/<timestamp>.jsonl` -- one JSONL file per server session, one line per call with tool name, arguments, success status, and duration in milliseconds. Logs older than two years are auto-cleaned. Useful for debugging and replaying sessions.
+Every tool call is logged to `$MEMSCOPE_HOME/logs/sessions/<timestamp>.jsonl` -- one JSONL file per server session, one line per call with a session-local request ID, bounded argument and result summaries, success status, and duration in milliseconds. Direct Lua calls store source length, line count, preview, and SHA-256 instead of the full script body. Logs older than two years are auto-cleaned and are intended for diagnostics, not full replay transcripts.
 
 ## Platform
 

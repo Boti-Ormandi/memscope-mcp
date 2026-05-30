@@ -1,15 +1,25 @@
 """MCP request/response logging for debugging and analysis.
 
-Logs all tool calls to JSON Lines files organized by process name and date.
+Logs bounded tool-call summaries to JSON Lines files organized by server session.
 Auto-cleans logs older than 2 years.
 """
 
+import hashlib
 import json
+import math
 import time
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from functools import wraps
+from itertools import islice
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+MAX_STRING_CHARS = 240
+MAX_LUA_PREVIEW_CHARS = 160
+MAX_BYTES_PREVIEW = 32
+MAX_CONTAINER_ITEMS = 8
+MAX_DEPTH = 3
 
 
 class MCPLogger:
@@ -26,21 +36,24 @@ class MCPLogger:
         self.log_dir = LOGS_DIR
         self.retention_days = retention_days
 
-        # Session-based logging
         self.session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.session_dir = self.log_dir / "sessions"
         self.current_file: Optional[Path] = None
         self._file_handle = None
         self._last_cleanup: Optional[datetime] = None
+        self._current_process: Optional[str] = None
+        self._request_id = 0
 
-        # Ensure session directory exists
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
     def set_process(self, process_name: str):
-        """Set current process name (for logging context, doesn't change log file)."""
-        # Session-based: log file doesn't change, but we track process for log entries
+        """Set current process name for subsequent log entries."""
         self._current_process = process_name
         self._maybe_cleanup()
+
+    def clear_process(self):
+        """Clear process context for subsequent log entries."""
+        self._current_process = None
 
     def _ensure_log_dir(self):
         """Create session log directory."""
@@ -71,7 +84,6 @@ class MCPLogger:
         """Get file handle, opening new file if needed."""
         log_file = self._get_log_file()
 
-        # Check if we need a new file (new day or new process)
         if self.current_file != log_file:
             self._close_file()
             self.current_file = log_file
@@ -97,65 +109,189 @@ class MCPLogger:
 
         for log_file in self.session_dir.glob("*.jsonl"):
             try:
-                # Parse date from filename (YYYY-MM-DD_HH-MM-SS.jsonl)
-                date_str = log_file.stem.split("_")[0]  # Get YYYY-MM-DD part
+                date_str = log_file.stem.split("_")[0]
                 file_date = datetime.strptime(date_str, "%Y-%m-%d")
                 if file_date < cutoff:
                     log_file.unlink()
             except (ValueError, OSError):
-                pass  # Skip files with unexpected names
+                pass
 
     def log(self, tool: str, args: dict, result: dict, duration_ms: float):
         """Log a tool call."""
+        success = self._is_success(result)
         entry = {
+            "request_id": self._next_request_id(),
             "ts": datetime.now().strftime("%H:%M:%S.%f")[:-3],
             "tool": tool,
+            "args": self._sanitize_args(args, tool),
+            "success": success,
+            "ms": round(duration_ms, 1),
         }
 
-        # Include process context if set
-        if hasattr(self, "_current_process") and self._current_process:
+        if self._current_process:
             entry["process"] = self._current_process
 
-        entry["args"] = self._sanitize_args(args)
-        entry["success"] = result.get("success", False)
-
-        # Add error info if failed
-        if not entry["success"]:
-            if "error" in result:
-                entry["error"] = result["error"]
-            if "detail" in result or "error_detail" in result:
-                entry["detail"] = result.get("detail") or result.get("error_detail")
-
-        # Add result summary (truncate large results)
-        if entry["success"] and "result" in result:
-            entry["result"] = result["result"]
-
-        entry["ms"] = round(duration_ms, 1)
+        if success:
+            entry["result"] = self._summarize_value(result)
+        else:
+            self._add_failure_fields(entry, result)
 
         try:
             handle = self._get_handle()
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            handle.write(json.dumps(entry, ensure_ascii=False, allow_nan=False) + "\n")
             handle.flush()
         except Exception as e:
-            # Don't let logging errors break the MCP, but print for debugging
             import sys
 
             print(f"[LOGGER ERROR] {e}", file=sys.stderr)
 
-    def _sanitize_args(self, args: dict) -> dict:
-        """Sanitize args for logging (handle non-serializable types)."""
+    def _next_request_id(self) -> int:
+        self._request_id += 1
+        return self._request_id
+
+    def _is_success(self, result: Any) -> bool:
+        if not isinstance(result, Mapping):
+            return True
+        return not (result.get("success") is False or "error" in result)
+
+    def _add_failure_fields(self, entry: dict, result: Any) -> None:
+        if not isinstance(result, Mapping):
+            entry["failure"] = self._summarize_value(result)
+            return
+
+        if "error" in result:
+            entry["error"] = self._summarize_value(result["error"])
+
+        detail = result.get("detail") if result.get("detail") is not None else result.get("error_detail")
+        if detail is not None:
+            entry["detail"] = self._summarize_value(detail)
+
+        extras = {
+            key: value
+            for key, value in result.items()
+            if key not in {"success", "error", "detail"} and not (key == "error_detail" and value == detail)
+        }
+        if extras:
+            entry["failure"] = self._summarize_value(extras)
+
+    def _sanitize_args(self, args: dict, tool: Optional[str] = None) -> dict:
+        """Sanitize and bound args for logging."""
+        if not isinstance(args, Mapping):
+            return self._summarize_value(args)
+
         result = {}
-        for k, v in args.items():
-            try:
-                # Test if serializable
-                json.dumps(v)
-                result[k] = v
-            except (TypeError, ValueError):
-                result[k] = str(v)
+        for key, value in args.items():
+            key_text = self._summarize_key(key)
+            if tool == "lua" and key_text == "script":
+                result[key_text] = self._summarize_lua_source(value)
+            else:
+                result[key_text] = self._summarize_value(value)
         return result
 
+    def _summarize_lua_source(self, value: Any) -> Any:
+        if not isinstance(value, str):
+            return self._summarize_value(value)
 
-# Global logger instance
+        return {
+            "type": "lua_source",
+            "length": len(value),
+            "lines": len(value.splitlines()) if value else 0,
+            "preview": self._preview(value, MAX_LUA_PREVIEW_CHARS),
+            "sha256": hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest(),
+        }
+
+    def _summarize_value(self, value: Any, depth: int = 0) -> Any:
+        if value is None or isinstance(value, bool | int):
+            return value
+
+        if isinstance(value, float):
+            if math.isfinite(value):
+                return value
+            return {"type": "float", "value": str(value)}
+
+        if isinstance(value, str):
+            return self._summarize_string(value)
+
+        if isinstance(value, bytes | bytearray | memoryview):
+            return self._summarize_bytes(bytes(value))
+
+        if isinstance(value, Mapping):
+            return self._summarize_mapping(value, depth)
+
+        if isinstance(value, set | frozenset):
+            ordered = sorted(value, key=repr)
+            return self._summarize_sequence(ordered, "set", depth)
+
+        if isinstance(value, Sequence):
+            return self._summarize_sequence(value, type(value).__name__, depth)
+
+        return {"type": type(value).__name__, "repr": self._summarize_string(repr(value))}
+
+    def _summarize_string(self, value: str) -> Any:
+        if len(value) <= MAX_STRING_CHARS:
+            return value
+        return {
+            "type": "str",
+            "length": len(value),
+            "preview": self._preview(value, MAX_STRING_CHARS),
+            "sha256": hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest(),
+        }
+
+    def _summarize_bytes(self, value: bytes) -> dict:
+        preview = value[:MAX_BYTES_PREVIEW]
+        return {
+            "type": "bytes",
+            "length": len(value),
+            "preview_hex": preview.hex(" ").upper(),
+            "sha256": hashlib.sha256(value).hexdigest(),
+        }
+
+    def _summarize_mapping(self, value: Mapping, depth: int) -> dict:
+        if depth >= MAX_DEPTH:
+            return {"type": "dict", "length": len(value), "truncated": True}
+
+        result = {}
+        length = len(value)
+        for index, (key, item) in enumerate(islice(value.items(), MAX_CONTAINER_ITEMS)):
+            key_text = self._summarize_key(key)
+            if key_text in result:
+                key_text = f"{key_text}#{index}"
+            result[key_text] = self._summarize_value(item, depth + 1)
+
+        if length > MAX_CONTAINER_ITEMS:
+            result["_truncated"] = f"{length - MAX_CONTAINER_ITEMS} more entries"
+
+        return result
+
+    def _summarize_sequence(self, value: Sequence, type_name: str, depth: int) -> Any:
+        length = len(value)
+        if depth >= MAX_DEPTH:
+            return {"type": type_name, "length": length, "truncated": True}
+
+        items = [self._summarize_value(value[index], depth + 1) for index in range(min(length, MAX_CONTAINER_ITEMS))]
+        if length <= MAX_CONTAINER_ITEMS:
+            return items
+
+        return {
+            "type": type_name,
+            "length": length,
+            "items": items,
+            "truncated_items": length - MAX_CONTAINER_ITEMS,
+        }
+
+    def _summarize_key(self, key: Any) -> str:
+        if isinstance(key, str):
+            text = key
+        else:
+            text = repr(key)
+        return self._preview(text, MAX_STRING_CHARS)
+
+    def _preview(self, value: str, limit: int) -> str:
+        if len(value) <= limit:
+            return value
+        return value[:limit] + "..."
+
+
 LOGGER = MCPLogger()
 
 
@@ -166,17 +302,10 @@ def logged_tool(tool_name: str):
         @wraps(func)
         def wrapper(*args, **kwargs):
             start = time.perf_counter()
-
-            # Capture args for logging
             log_args = kwargs.copy()
-
-            # Execute tool
             result = func(*args, **kwargs)
-
-            # Log
             duration_ms = (time.perf_counter() - start) * 1000
             LOGGER.log(tool_name, log_args, result, duration_ms)
-
             return result
 
         return wrapper
