@@ -2,7 +2,7 @@
 
 Complete reference for the Lua functions exposed by the memscope-mcp `lua` tool. The same surface is summarized in [`memscope_mcp/instructions/base.py`](../memscope_mcp/instructions/base.py) for AI consumption (kept terse because that text ships as the MCP `instructions` channel and is token-priced). When adding or renaming a function, update both files.
 
-The Lua runtime is Lua 5.4 via [lupa](https://github.com/scoder/lupa). All address parameters accept Lua integers, hex strings (`"0x1234"`), and module+offset strings (`"module.dll+0x1234"`).
+The Lua runtime is Lua 5.4 via [lupa](https://github.com/scoder/lupa). Address helpers like `addr("0x...")` and `getAddress("module.dll+0x1234")` accept Lua integers, hex strings, and module+offset strings. Core read/write/struct helpers generally expect a numeric address, so resolve string expressions first.
 
 ## Contents
 
@@ -14,6 +14,7 @@ The Lua runtime is Lua 5.4 via [lupa](https://github.com/scoder/lupa). All addre
 - [Scanning](#scanning)
 - [Pointer chains](#pointer-chains)
 - [Code execution](#code-execution)
+- [Session management](#session-management)
 - [Hooking](#hooking)
 - [Process introspection](#process-introspection)
 - [Network utilities](#network-utilities)
@@ -45,6 +46,8 @@ readBytes(addr, count)            -- table of bytes
 readBytesHex(addr, count)         -- "48 8B 05 ..." hex string
 ```
 
+Use numeric addresses for these helpers. When starting from a string expression, normalize first with `addr()` or `getAddress()`.
+
 ## Bulk array reads
 
 Single bulk read for performance. Use for vtables, ID arrays, float buffers — much faster than a Lua loop of single reads.
@@ -66,6 +69,8 @@ writeFloat(addr, val)             writeDouble(addr, val)
 writeBool(addr, val)              writeString(addr, str, maxlen?)
 writeBytes(addr, table)
 ```
+
+Use numeric addresses for these helpers. When starting from a string expression, normalize first with `addr()` or `getAddress()`.
 
 ## Struct helpers
 
@@ -140,6 +145,16 @@ callSequence({
 ```
 
 `{result=N}` passes the RAX value from the Nth prior call (1-based) as an argument. Use `callSequenceResults` when the sequence ends in a cleanup call but you still need an earlier return value; it returns `{result=..., call_results={...}, calls_executed=N}`.
+
+## Session management
+
+```lua
+attach(target, pid?)              -- attach("Game.exe"), attach("chrome.exe", 1234), or attach(1234)
+detach()                          -- clean detach with lifecycle callbacks
+isAttached()                      -- true when a process is attached
+getAttachedProcess()              -- {pid, name, module_count} or nil
+openProcess(pid)                  -- legacy alias for attach(pid)
+```
 
 ## Hooking
 
@@ -219,7 +234,6 @@ getServices(pid?)                 -- {name, display_name, pid, state}
 isBeingDebugged(pid?)             -- boolean from PEB.BeingDebugged, or nil on access failure
 getEnvironment(pid?)              -- {KEY="value", ...} from the target's PEB
 getModulesRemote(pid?)            -- {name, base, size, path} via PEB Ldr (no attach required)
-openProcess(pid)                  -- attach to process from within a script
 ```
 
 The `pid?`-suffixed functions default to the attached process when called without arguments. PEB reads (`command_line`, `getEnvironment`, `getModulesRemote`, `isBeingDebugged`) work pre-attach on any process the server can open with `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`. See [`docs/peb.md`](peb.md) for limits (64 KiB env, 1024 modules, 32 KiB strings).
@@ -285,8 +299,8 @@ startCapture({                          -- begin capturing on the named Winsock 
     iocp = true,                        -- correlate IOCP async I/O via GQCS
     lifecycle = true,                   -- track accept/bind for server sockets
     header_only = false,                -- capture only headers (smaller entries)
-    buffer_size = 512,                  -- ring buffer entry_count
-    max_packet_size = 4096,             -- ring buffer max_data_size
+    buffer_size = 1048576,              -- total ring buffer size in bytes (default: 1 MiB)
+    max_packet_size = 4096,             -- max captured bytes per packet (default: 4 KiB)
 })
 stopCapture()
 readPackets(limit?)                     -- per-packet entries with direction, socket, parsed args
@@ -380,7 +394,7 @@ callSequence({
 
 ### Script persistence
 
-Scripts are stored as `.lua` files in `scripts/<process>/`. The first-line comment becomes the script description shown by `scripts(action="list")`. Create and edit scripts with your MCP client's file tools; run them with the `scripts` tool.
+Scripts are stored as `.lua` files in `$MEMSCOPE_HOME/scripts/<process>/`. The first-line comment becomes the script description shown by `scripts(action="list")`, and that action returns absolute paths for editing. Run scripts with `scripts(action="run", name="...")`; attach first unless you pass `process="ProcessName.exe"`.
 
 ### Example: locate a singleton from a RIP-relative reference
 

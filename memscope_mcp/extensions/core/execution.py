@@ -33,6 +33,11 @@ alloc("string")  -- Allocate string
 alloc("string", true)  -- Allocate wide string (UTF-16)
 freeMemory(addr) -- Free allocation
 ```
+
+`executeCode` and `executeCodeEx` each create a remote thread per call.
+Scripts warn after 25 calls and block after 100 unless
+`allowUnsafeCodeExecution(true)` is set for the current script.
+Prefer `callSequence` for dependent native calls.
 """.strip()
 
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:

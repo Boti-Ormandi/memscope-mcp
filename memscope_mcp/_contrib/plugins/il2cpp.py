@@ -8,8 +8,9 @@ Provides Lua functions for reading IL2CPP strings, arrays, lists, and dictionari
 Activate by copying this file to the plugins/ directory.
 """
 
-from typing import Optional
+from typing import Callable, Optional
 
+from memscope_mcp.extensions.base import ExtensionContext
 from memscope_mcp.plugins import PluginBase
 from memscope_mcp.session import SESSION
 from memscope_mcp.utils.memory_utils import is_valid_pointer
@@ -34,7 +35,7 @@ readIL2CppString(addr)  -- UTF-16 string at object+0x14, length at +0x10
 ```
 
 ### IL2CPP Array
-Layout: `+0x18` = length (uint64), `+0x20` = data start
+Layout: `+0x18` = length (int32), `+0x20` = data start
 ```lua
 local arr = readIL2CppArray(addr, "ptr", 50)  -- Read up to 50 pointer elements
 -- Returns: {length=N, elements={...}}
@@ -95,8 +96,8 @@ Scripts should discover offsets dynamically rather than hardcoding them,
 as they change between Unity/IL2CPP versions.
 """.strip()
 
-    def register(self, engine) -> dict[str, callable]:
-        self.table = engine.lua.table
+    def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
+        self.table = ctx.table_factory
         return {
             "readUnityString": self._read_string,
             "readIL2CppString": self._read_string,
@@ -179,7 +180,7 @@ as they change between Unity/IL2CPP versions.
     # =========================================================================
 
     def _read_array(self, address, element_type: str = "ptr", limit: int = 50):
-        """Read IL2CPP array. Layout: +0x18 = length, +0x20 = data start."""
+        """Read IL2CPP array. Layout: +0x18 = length (int32), +0x20 = data start."""
         try:
             addr = int(address)
             length = SESSION.read_int32(addr + 0x18)

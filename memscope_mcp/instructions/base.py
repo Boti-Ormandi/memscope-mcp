@@ -16,8 +16,8 @@ Use `lua` tool for complex operations (loops, conditionals, multi-step logic).
 Scripts can run WITHOUT an attached process for discovery tasks.
 
 Scripts are monitored via a debug hook. If the server shuts down or the client
-disconnects during execution, the script is cancelled and partial results
-(output and addResult calls made before cancellation) are preserved.
+disconnects during execution, the script is cancelled. Printed output captured
+before cancellation is preserved, but `_results` entries are not guaranteed.
 
 ## Important Notes
 
@@ -42,9 +42,9 @@ callSequence({
 ```
 
 ### Scripts Directory
-Scripts are stored as `.lua` files in `scripts/<process>/`.
-- Use `scripts(action="list")` to see available scripts
-- Use `scripts(action="run", name="x")` to run
+Scripts are stored as `.lua` files in `$MEMSCOPE_HOME/scripts/<process>/`.
+- Use `scripts(action="list")` to see available scripts (returned paths are absolute)
+- Use `scripts(action="run", name="x")` to run (requires attach unless `process=` is passed)
 - Create/edit scripts using file tools on the returned paths
 - First line comment becomes the script description
 """.strip()

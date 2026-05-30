@@ -7,7 +7,7 @@ from ...tools.lua.modules import format_address as lua_format_address
 from ...tools.lua.modules import get_module_from_address, get_modules, resolve_export_lua
 from ...tools.lua.scanning_helpers import scan_pointer, scan_string
 from ...tools.scanning import SCAN_TIMEOUT_SECONDS, scan_aob_addresses
-from ...utils.memory_utils import is_valid_pointer, parse_address
+from ...utils.memory_utils import is_valid_pointer, parse_address, parse_offset
 
 
 class ModuleScanExtension(LuaExtension):
@@ -38,8 +38,10 @@ AOBScan results carry a `metadata` table (mode, scanned_region_count, bytes_scan
 ### Pointer Chains
 
 ```lua
-readPointerChain(base, off1, off2, ...)  -- Follow chain, return final value
+readPointerChain(base, off1, off2, ...)  -- Follow chain, return final address
 ```
+
+Standard reverse-engineering semantics: add offset, dereference, repeat.
 """.strip()
 
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
@@ -154,10 +156,11 @@ readPointerChain(base, off1, off2, ...)  -- Follow chain, return final value
                 current = int(base)
 
             for offset in offsets:
-                ptr = self._session.read_ptr(current)
+                read_addr = current + parse_offset(offset)
+                ptr = self._session.read_ptr(read_addr)
                 if not is_valid_pointer(ptr):
                     return None
-                current = ptr + int(offset)
+                current = ptr
 
             return current
         except:

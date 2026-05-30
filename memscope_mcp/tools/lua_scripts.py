@@ -1,6 +1,6 @@
 """Lua script management - file-based system.
 
-Scripts are stored as .lua files in: <project>/scripts/<process>/<name>.lua
+Scripts are stored as .lua files in: $MEMSCOPE_HOME/scripts/<process>/<name>.lua
 First line comment is the description: -- Description here
 
 AI should use native file tools (Read/Write/Edit) to create and modify scripts.

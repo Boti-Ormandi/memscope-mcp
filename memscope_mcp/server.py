@@ -303,7 +303,7 @@ def processes(
 @mcp.tool()
 def attach(process_name: str, pid: Optional[int] = None) -> dict:
     """Attach to process and cache module bases.
-    Returns pid, key_modules (base/size), saved_scripts list, and log_file path.
+    Returns pid, key_modules (base/size), saved_scripts list, scripts_dir, and log_file path.
 
     Use pid parameter when multiple processes share the same name (e.g., svchost.exe).
     Use processes() tool first to find the right PID.
@@ -340,6 +340,7 @@ def attach(process_name: str, pid: Optional[int] = None) -> dict:
         "key_modules": modules_info,
         "saved_scripts": scripts_info.get("scripts", []),
         "scripts_dir": str(SCRIPTS_DIR / process_name),
+        "log_file": str(LOGGER._get_log_file()),
     }
     return _log("attach", _log_args, result, _start)
 
@@ -448,7 +449,7 @@ def scan(pattern: str, module: Optional[str] = None, limit: int = 50) -> dict:
 def lua(script: str, timeout: Optional[float] = None) -> dict:
     """Execute Lua script for complex memory operations (loops, conditionals, multi-step).
     See server instructions for full list of available Lua functions.
-    Args: script - Lua code. timeout - optional max seconds (default: no limit).
+    Args: script - Lua code. timeout - optional max seconds (default: 180 seconds).
     Returns: {success, results (dict), output (array of prints)}"""
     _start = time.perf_counter()
     result = execute_lua(script, timeout=timeout)
@@ -459,14 +460,16 @@ def lua(script: str, timeout: Optional[float] = None) -> dict:
 def scripts(
     action: str, name: str = "", process: str = "", args: Optional[dict] = None, timeout: Optional[float] = None
 ) -> dict:
-    """Lua script management. Scripts stored as .lua files in scripts/<process>/<name>.lua
+    """Lua script management. Scripts live under $MEMSCOPE_HOME/scripts/<process>/<name>.lua.
 
     Actions:
       list - Returns scripts with absolute paths. Use process='*' for all processes.
       run  - Execute by name. Pass args={} for script arguments. timeout=seconds optional.
+             Requires an attached process unless process='ProcessName.exe' is provided.
 
     CREATE/EDIT: Use file tools on paths from 'list'. First line comment = description.
-    Example: scripts(action='list') -> get scripts_dir, then Write to {scripts_dir}/<name>.lua"""
+    Example: scripts(action='list') -> get scripts_dir, then Write to {scripts_dir}/<name>.lua
+    """
     _start = time.perf_counter()
     _args = {"action": action, "name": name}
     if process:
