@@ -111,7 +111,7 @@ Addresses accept hex strings (`"0x1234"`), module+offset (`"module.dll+0x1234"`)
 | `modules` | List loaded modules with base addresses, sizes, and paths |
 | `read` | Read typed memory (int8-64, uint8-64, float, double, bool, ptr, cstring, vector2/3/4, quaternion, color, rect, bounds, matrix4x4). Supports `count` for consecutive values |
 | `write` | Write typed memory with optional pre-write verification against page protection |
-| `dump` | Smart memory dump with automatic type detection (pointers, strings, ints, floats) and confidence scoring |
+| `dump` | Smart memory dump with automatic type detection and pagination/filter knobs (`start_offset`, `pointers_only`, `non_null_only`, `max_entries`, `annotation_level`). `full` annotations include confidence |
 | `chain` | Follow pointer chains: `[[base+off0]+off1]...` with configurable final read type |
 | `scan` | AOB pattern scanning with wildcards (`??`, `?`, `**`). Supports pagination, bounds, `return_offset`, and `timeout_ms` (clamped to 100..30000 ms) |
 | `lua` | Execute Lua scripts server-side for multi-step operations |

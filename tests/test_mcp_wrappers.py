@@ -83,7 +83,7 @@ def test_scan_forwards_custom_arguments_by_keyword(monkeypatch):
     ]
 
 
-def test_dump_forwards_current_hardcoded_defaults(monkeypatch):
+def test_dump_forwards_default_arguments_by_keyword(monkeypatch):
     calls = []
 
     def fake_smart_dump(*args, **kwargs):
@@ -92,10 +92,59 @@ def test_dump_forwards_current_hardcoded_defaults(monkeypatch):
 
     monkeypatch.setattr(server, "smart_dump", fake_smart_dump)
 
-    result = server.dump("module.dll+0x20", size=0x80, pointers_only=True)
+    result = server.dump("module.dll+0x20")
 
     assert result == {"success": True, "entries": []}
-    assert calls == [(("module.dll+0x20", 0x80, 0, True, False, 100, "normal"), {})]
+    assert calls == [
+        (
+            (),
+            {
+                "address": "module.dll+0x20",
+                "size": 0x100,
+                "start_offset": 0,
+                "pointers_only": False,
+                "non_null_only": False,
+                "max_entries": 100,
+                "annotation_level": "normal",
+            },
+        )
+    ]
+
+
+def test_dump_forwards_custom_arguments_by_keyword(monkeypatch):
+    calls = []
+
+    def fake_smart_dump(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"success": True, "entries": [{"offset": "+0x10"}]}
+
+    monkeypatch.setattr(server, "smart_dump", fake_smart_dump)
+
+    result = server.dump(
+        "module.dll+0x20",
+        size=0x80,
+        pointers_only=True,
+        start_offset=0x10,
+        non_null_only=True,
+        max_entries=7,
+        annotation_level="full",
+    )
+
+    assert result == {"success": True, "entries": [{"offset": "+0x10"}]}
+    assert calls == [
+        (
+            (),
+            {
+                "address": "module.dll+0x20",
+                "size": 0x80,
+                "start_offset": 0x10,
+                "pointers_only": True,
+                "non_null_only": True,
+                "max_entries": 7,
+                "annotation_level": "full",
+            },
+        )
+    ]
 
 
 def test_modules_response_includes_module_path_and_tolerates_missing_path(monkeypatch):

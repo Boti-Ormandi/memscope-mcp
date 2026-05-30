@@ -132,13 +132,16 @@ def _looks_like_inline_string(data: bytes) -> bool:
     return printable >= len(data) * 0.8
 
 
-def analyze_memory_region(address: int, data: bytes, entry_size: int = 8) -> list[dict]:
+def analyze_memory_region(
+    address: int, data: bytes, entry_size: int = 8, include_confidence: bool = False
+) -> list[dict]:
     """Analyze a memory region and detect types for each entry.
 
     Args:
         address: Starting address
         data: Raw bytes
         entry_size: Size of each entry (default 8 for pointers)
+        include_confidence: Include the detector confidence score in each entry
 
     Returns:
         List of entry dictionaries with type info
@@ -152,15 +155,17 @@ def analyze_memory_region(address: int, data: bytes, entry_size: int = 8) -> lis
 
         detected = detect_value_type(entry_bytes, entry_addr)
 
-        entries.append(
-            {
-                "offset": f"+0x{offset:02X}",
-                "address": f"0x{entry_addr:X}",
-                "raw": f"0x{detected.raw_value:016X}",
-                "type": detected.value_type.value,
-                "annotation": detected.annotation,
-            }
-        )
+        entry = {
+            "offset": f"+0x{offset:02X}",
+            "address": f"0x{entry_addr:X}",
+            "raw": f"0x{detected.raw_value:016X}",
+            "type": detected.value_type.value,
+            "annotation": detected.annotation,
+        }
+        if include_confidence:
+            entry["confidence"] = detected.confidence
+
+        entries.append(entry)
 
         offset += entry_size
 

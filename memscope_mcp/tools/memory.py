@@ -65,6 +65,19 @@ def read_memory(address: str, size: int = 8, format: str = "hex") -> dict[str, A
         }
 
 
+_DUMP_WINDOW_SIZE = 0x1000
+_DUMP_ENTRY_SIZE = 8
+_DUMP_ANNOTATION_LEVELS = {"minimal", "normal", "full"}
+
+
+def _invalid_dump_param(error: str, detail: str) -> dict[str, Any]:
+    return {"success": False, "error": error, "error_detail": detail}
+
+
+def _is_int_param(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def smart_dump(
     address: str,
     size: int = 0x100,
@@ -78,11 +91,11 @@ def smart_dump(
 
     Args:
         address: Starting address
-        size: Bytes to dump (default 256, max 4096)
-        start_offset: Begin dump from address + start_offset
+        size: Positive byte count, clamped to the remaining 4096-byte dump window
+        start_offset: Begin dump from address + start_offset, in range 0..4095
         pointers_only: Only return entries that are valid pointers
         non_null_only: Skip null/zero entries
-        max_entries: Cap entries regardless of size
+        max_entries: Positive cap on returned entries regardless of size
         annotation_level: Detail level ("minimal" | "normal" | "full")
 
     Returns:
@@ -97,8 +110,20 @@ def smart_dump(
     if not SESSION.ensure_attached():
         return {"success": False, "error": "PROCESS_NOT_ATTACHED", "error_detail": "Call attach_process first"}
 
-    # Clamp size
-    size = min(size, 0x1000)  # Max 4096 bytes
+    if not _is_int_param(start_offset) or not 0 <= start_offset < _DUMP_WINDOW_SIZE:
+        return _invalid_dump_param("INVALID_START_OFFSET", "start_offset must be an integer in range 0..4095")
+    if not _is_int_param(size) or size <= 0:
+        return _invalid_dump_param("INVALID_SIZE", "size must be a positive integer")
+    if not _is_int_param(max_entries) or max_entries <= 0:
+        return _invalid_dump_param("INVALID_MAX_ENTRIES", "max_entries must be a positive integer")
+    if not isinstance(annotation_level, str):
+        return _invalid_dump_param("INVALID_ANNOTATION_LEVEL", "annotation_level must be one of: minimal, normal, full")
+
+    annotation_level = annotation_level.lower().strip()
+    if annotation_level not in _DUMP_ANNOTATION_LEVELS:
+        return _invalid_dump_param("INVALID_ANNOTATION_LEVEL", "annotation_level must be one of: minimal, normal, full")
+
+    effective_size = min(size, _DUMP_WINDOW_SIZE - start_offset)
 
     try:
         base_addr = parse_address(address)
@@ -108,7 +133,7 @@ def smart_dump(
     actual_addr = base_addr + start_offset
 
     try:
-        data = SESSION.read_bytes(actual_addr, size)
+        data = SESSION.read_bytes(actual_addr, effective_size)
     except Exception as e:
         return {
             "success": False,
@@ -116,62 +141,71 @@ def smart_dump(
             "error_detail": f"Cannot read memory at {format_address(actual_addr)}: {str(e)}",
         }
 
-    # Analyze the memory region
-    all_entries = analyze_memory_region(actual_addr, data, entry_size=8)
+    bytes_read = len(data)
+    all_entries = analyze_memory_region(
+        actual_addr,
+        data,
+        entry_size=_DUMP_ENTRY_SIZE,
+        include_confidence=annotation_level == "full",
+    )
 
-    # Apply filters
     filtered_entries = []
     pointers_found = []
+    processed_entries = 0
+    max_entries_reached = False
 
-    for entry in all_entries:
-        # Extract raw value for filtering
-        raw_hex = entry["raw"]
+    for source_entry in all_entries:
+        processed_entries += 1
+
+        raw_hex = source_entry["raw"]
         try:
             raw_val = int(raw_hex, 16)
         except ValueError:
             raw_val = 0
 
-        # Filter: non_null_only
         if non_null_only and raw_val == 0:
             continue
 
-        # Filter: pointers_only
-        if pointers_only:
-            if not is_valid_pointer(raw_val):
-                continue
+        if pointers_only and not is_valid_pointer(raw_val):
+            continue
 
-        # Track pointers
         if is_valid_pointer(raw_val):
             pointers_found.append(format_address(raw_val))
 
-        # Annotation level adjustments
+        entry = dict(source_entry)
         if annotation_level == "minimal":
             entry = {"offset": entry["offset"], "raw": entry["raw"], "type": entry["type"]}
         elif annotation_level == "full":
-            entry["address"] = entry.get("address", format_address(actual_addr + int(entry["offset"][1:], 16)))
+            entry.setdefault("address", format_address(actual_addr + int(entry["offset"][1:], 16)))
 
         filtered_entries.append(entry)
 
         if len(filtered_entries) >= max_entries:
+            max_entries_reached = True
             break
 
-    # Calculate pagination info
-    total_entries = len(data) // 8
-    has_more = start_offset + size < 0x1000  # Could continue dumping
+    read_end_offset = start_offset + bytes_read
+    if max_entries_reached:
+        processed_end_offset = start_offset + processed_entries * _DUMP_ENTRY_SIZE
+    else:
+        processed_end_offset = read_end_offset
+
+    has_more = processed_end_offset < _DUMP_WINDOW_SIZE
 
     return {
         "success": True,
         "address": format_address(base_addr),
         "dump_start": format_address(actual_addr),
-        "size": size,
+        "size": bytes_read,
         "entries": filtered_entries,
-        "pointers_found": pointers_found[:20],  # Limit pointer list
+        "pointers_found": pointers_found[:20],
         "_pagination": {
-            "total_size": size,
-            "dumped_range": {"start": start_offset, "end": start_offset + size},
+            "total_size": bytes_read,
+            "dumped_range": {"start": start_offset, "end": processed_end_offset},
             "entries_returned": len(filtered_entries),
-            "entries_total": total_entries,
+            "entries_total": len(all_entries),
+            "entries_scanned": processed_entries,
             "has_more": has_more,
-            "next_start_offset": start_offset + size if has_more else None,
+            "next_start_offset": processed_end_offset if has_more else None,
         },
     }

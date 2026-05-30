@@ -417,13 +417,39 @@ def write(address: str, value, type_name: str, verify: bool = False) -> dict:
 
 
 @mcp.tool()
-def dump(address: str, size: int = 0x100, pointers_only: bool = False) -> dict:
+def dump(
+    address: str,
+    size: int = 0x100,
+    pointers_only: bool = False,
+    start_offset: int = 0,
+    non_null_only: bool = False,
+    max_entries: int = 100,
+    annotation_level: str = "normal",
+) -> dict:
     """Smart memory dump with auto pointer detection.
-    For exploring unknown structures. Max 4096 bytes.
+    For exploring unknown structures. size is clamped to the remaining 4096-byte window.
+    start_offset selects a byte offset within that window. annotation_level: minimal, normal, or full.
     Returns annotated entries showing likely pointers and values."""
     _start = time.perf_counter()
-    result = smart_dump(address, size, 0, pointers_only, False, 100, "normal")
-    return _log("dump", {"address": address, "size": size, "pointers_only": pointers_only}, result, _start)
+    _log_args = {
+        "address": address,
+        "size": size,
+        "pointers_only": pointers_only,
+        "start_offset": start_offset,
+        "non_null_only": non_null_only,
+        "max_entries": max_entries,
+        "annotation_level": annotation_level,
+    }
+    result = smart_dump(
+        address=address,
+        size=size,
+        start_offset=start_offset,
+        pointers_only=pointers_only,
+        non_null_only=non_null_only,
+        max_entries=max_entries,
+        annotation_level=annotation_level,
+    )
+    return _log("dump", _log_args, result, _start)
 
 
 @mcp.tool()
