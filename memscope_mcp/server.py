@@ -438,7 +438,9 @@ def read(address: str, type_name: str, count: int = 1) -> dict:
 @mcp.tool()
 def write(address: str, value, type_name: str, verify: bool = False) -> dict:
     """Write typed data to memory. Use with caution.
-    Types: primitives and composite types (vector3 as {x,y,z} dict).
+    Types: primitives, composite types (vector3 as {x,y,z} dict), bytes, and bytes[N].
+    Bytes values accept compact hex ("DEADBEEF"), spaced hex ("DE AD BE EF"), or [222, 173, 190, 239].
+    bytes[N] requires exactly N bytes.
     Set verify=True to require a writable range check and byte-for-byte readback."""
     _start = time.perf_counter()
     result = write_typed(address, value, type_name, verify)

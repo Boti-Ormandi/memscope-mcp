@@ -109,13 +109,17 @@ Addresses accept hex strings (`"0x1234"`), module+offset (`"module.dll+0x1234"`)
 | `processes` | List/filter running processes. Filter by name, PID, parent PID, or hosted service. Auto-enumerates services for svchost processes via the Windows SCM |
 | `attach` | Attach to process, cache module bases. Auto-reconnects if the target restarts |
 | `modules` | List loaded modules with base addresses, sizes, and paths |
-| `read` | Read typed memory (int8-64, uint8-64, float, double, bool, ptr, cstring, vector2/3/4, quaternion, color, rect, bounds, matrix4x4). Supports `count` for consecutive values |
-| `write` | Write typed memory with optional fail-closed verification: writable range check, pre-image capture, and byte-for-byte readback |
+| `read` | Read typed memory (int8-64, uint8-64, char, float, double, bool, ptr, cstring, bytes/bytes[N], vector2/3/4, quaternion, color, color32, rect, bounds, matrix4x4). Supports `count` for consecutive values |
+| `write` | Write typed memory, including bytes/bytes[N], with optional fail-closed verification: writable range check, pre-image capture, and byte-for-byte readback |
 | `dump` | Smart memory dump with automatic type detection and pagination/filter knobs (`start_offset`, `pointers_only`, `non_null_only`, `max_entries`, `annotation_level`). `full` annotations include confidence |
 | `chain` | Follow pointer chains: `[[base+off0]+off1]...` with configurable final read type |
 | `scan` | AOB pattern scanning with wildcards (`??`, `?`, `**`). Supports pagination, bounds, `return_offset`, and `timeout_ms` (clamped to 100..30000 ms) |
 | `lua` | Execute Lua scripts server-side for multi-step operations |
 | `scripts` | Manage saved Lua scripts. Actions: `list` (with paths), `run` (with args and namespace checks) |
+
+### Typed byte values
+
+The `read` tool returns `bytes` and `bytes[N]` values as uppercase spaced hex. The `write` tool accepts byte payloads as JSON-friendly compact hex (`"DEADBEEF"`), whitespace-separated hex (`"DE AD BE EF"`), or integer arrays (`[222, 173, 190, 239]`). `bytes[N]` requires exactly `N` bytes. Empty payloads, `bytes[0]`, `0x` prefixes, non-whitespace separators, non-integer array elements, and integers outside `0..255` are rejected.
 
 ## Lua scripting
 

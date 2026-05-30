@@ -227,6 +227,9 @@ def test_read_write_docstrings_describe_current_basics():
     assert "writable range check" in server.write.__doc__
     assert "byte-for-byte readback" in server.write.__doc__
     assert "vector3 as {x,y,z} dict" in server.write.__doc__
+    assert "bytes[N]" in server.write.__doc__
+    assert 'compact hex ("DEADBEEF")' in server.write.__doc__
+    assert "[222, 173, 190, 239]" in server.write.__doc__
 
 
 def test_scripts_list_forwards_process_filter(monkeypatch):

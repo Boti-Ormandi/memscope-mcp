@@ -2,9 +2,10 @@
 
 Supports primitives (int8-64, float, double, bool, ptr),
 composite types (vector2/3/4, quaternion, color, rect, bounds, matrix4x4),
-null-terminated C strings, and raw byte reads.
+null-terminated C strings, raw byte reads, and strict raw byte writes.
 """
 
+import re
 import struct
 from typing import Any
 
@@ -69,6 +70,9 @@ for _canonical, _aliases in PRIMITIVE_ALIASES.items():
         PRIMITIVE_CANONICAL_TYPES[_alias] = _canonical
 
 SPECIAL_READ_TYPES = ["bytes", "bytes[N]"]
+SPECIAL_WRITE_TYPES = ["bytes", "bytes[N]"]
+_BYTES_TYPE_RE = re.compile(r"^bytes(?:\[(\d+)\])?$")
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 # Composite types: (size, component_count, component_format)
 COMPOSITE_TYPES = {
@@ -141,17 +145,18 @@ def read_typed(address: str, type_name: str, count: int = 1) -> dict[str, Any]:
 
         # Handle raw bytes
         if type_lower == "bytes" or type_lower.startswith("bytes["):
-            # Parse bytes[N] format
-            if "[" in type_lower:
-                size = int(type_lower.split("[")[1].rstrip("]"))
-            else:
-                size = count
+            try:
+                fixed_size = _parse_bytes_type_size(type_lower)
+            except ValueError as e:
+                return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name, "detail": str(e)}
+
+            size = count if fixed_size is None else fixed_size
             data = SESSION.read_bytes(addr, size)
             return {
                 "success": True,
                 "address": format_address(addr),
                 "type": "bytes",
-                "value": " ".join(f"{b:02X}" for b in data),
+                "value": format_bytes(data),
                 "size": size,
             }
 
@@ -281,15 +286,74 @@ def _read_cstring(addr: int, max_length: int = 256) -> dict:
 
 
 def _parse_bytes_type_size(type_lower: str) -> int | None:
-    if type_lower == "bytes":
-        return None
-    if not type_lower.startswith("bytes[") or not type_lower.endswith("]"):
-        raise ValueError("not a bytes type")
+    match = _BYTES_TYPE_RE.fullmatch(type_lower)
+    if match is None:
+        raise ValueError("bytes type must be 'bytes' or 'bytes[N]'")
 
-    size_text = type_lower[6:-1].strip()
-    if not size_text.isdecimal():
-        raise ValueError("bytes[N] requires a non-negative integer size")
-    return int(size_text)
+    size_text = match.group(1)
+    if size_text is None:
+        return None
+
+    size = int(size_text)
+    if size <= 0:
+        raise ValueError("bytes[N] requires a positive integer size")
+    return size
+
+
+def _format_bytes_value(data: bytes) -> str:
+    return format_bytes(data)
+
+
+def _invalid_bytes_format(detail: str) -> dict[str, Any]:
+    return {"success": False, "error": "INVALID_BYTES_FORMAT", "detail": detail}
+
+
+def _parse_hex_bytes(value: str) -> dict[str, Any]:
+    text = value.strip()
+    if not text:
+        return _invalid_bytes_format("Byte payload must not be empty")
+    if "0x" in text.lower():
+        return _invalid_bytes_format("Hex byte payloads must not include 0x prefixes")
+
+    if any(ch.isspace() for ch in text):
+        parts = text.split()
+        if any(len(part) != 2 or any(ch not in _HEX_DIGITS for ch in part) for part in parts):
+            return _invalid_bytes_format("Whitespace-separated hex payloads require two hex digits per byte")
+        return {"success": True, "data": bytes(int(part, 16) for part in parts)}
+
+    if len(text) % 2 != 0 or any(ch not in _HEX_DIGITS for ch in text):
+        return _invalid_bytes_format("Compact hex payloads require an even number of hex digits")
+
+    return {"success": True, "data": bytes(int(text[i : i + 2], 16) for i in range(0, len(text), 2))}
+
+
+def _parse_byte_list(value: list[Any]) -> dict[str, Any]:
+    if not value:
+        return _invalid_bytes_format("Byte payload must not be empty")
+
+    data = bytearray()
+    for index, item in enumerate(value):
+        if isinstance(item, bool) or not isinstance(item, int):
+            return _invalid_bytes_format(f"Byte payload element {index} must be an integer 0..255")
+        if item < 0 or item > 255:
+            return {
+                "success": False,
+                "error": "VALUE_OUT_OF_RANGE",
+                "value": item,
+                "index": index,
+                "detail": "Byte payload elements must be in range 0..255",
+            }
+        data.append(item)
+
+    return {"success": True, "data": bytes(data)}
+
+
+def _parse_bytes_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        return _parse_hex_bytes(value)
+    if isinstance(value, list):
+        return _parse_byte_list(value)
+    return _invalid_bytes_format("Byte payloads require a hex string or JSON array of integers")
 
 
 def get_type_info(type_name: str) -> dict[str, Any]:
@@ -359,6 +423,11 @@ def get_type_info(type_name: str) -> dict[str, Any]:
             "alignment": 1,
             "count_controls_size": size is None,
             "value_format": "uppercase spaced hex string",
+            "write_value_formats": [
+                "compact hex string",
+                "whitespace-separated hex string",
+                "JSON array of integers 0..255",
+            ],
         }
 
     return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
@@ -444,7 +513,34 @@ def _pack_composite_value(type_name: str, value: Any) -> dict[str, Any]:
     return {"success": True, "data": data, "new_value": value, "size": size}
 
 
+def _pack_bytes_value(type_name: str, value: Any) -> dict[str, Any]:
+    try:
+        fixed_size = _parse_bytes_type_size(type_name)
+    except ValueError as e:
+        return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name, "detail": str(e)}
+
+    parsed = _parse_bytes_payload(value)
+    if not parsed.get("success"):
+        parsed.setdefault("type", type_name)
+        return parsed
+
+    data = parsed["data"]
+    if fixed_size is not None and len(data) != fixed_size:
+        return {
+            "success": False,
+            "error": "VALUE_LENGTH_MISMATCH",
+            "type": type_name,
+            "expected": fixed_size,
+            "got": len(data),
+            "detail": f"{type_name} requires exactly {fixed_size} bytes, got {len(data)}",
+        }
+
+    return {"success": True, "data": data, "new_value": _format_bytes_value(data), "size": len(data)}
+
+
 def _pack_write_value(type_name: str, value: Any) -> dict[str, Any]:
+    if type_name == "bytes" or type_name.startswith("bytes["):
+        return _pack_bytes_value(type_name, value)
     if type_name in PRIMITIVES:
         return _pack_primitive_value(type_name, value)
     if type_name in COMPOSITE_TYPES:
@@ -459,6 +555,7 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
 
     data = packed["data"]
     size = packed["size"]
+    new_value = packed["new_value"]
     address = format_address(addr)
 
     try:
@@ -501,21 +598,23 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
             "address": address,
             "type": type_name,
             "old_value": format_bytes(old_data),
-            "new_value": value,
+            "new_value": new_value,
             "size": size,
             "detail": f"Cannot read target range after write: {e}",
         }
 
     if actual_data != data:
+        actual_value = format_bytes(actual_data)
         return {
             "success": False,
             "error": "VERIFY_MISMATCH",
             "address": address,
             "type": type_name,
             "old_value": format_bytes(old_data),
-            "new_value": value,
+            "new_value": new_value,
             "expected": format_bytes(data),
-            "actual": format_bytes(actual_data),
+            "actual": actual_value,
+            "actual_value": actual_value,
             "size": size,
             "detail": "Readback did not match requested bytes",
         }
@@ -525,7 +624,7 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
         "address": address,
         "type": type_name,
         "old_value": format_bytes(old_data),
-        "new_value": value,
+        "new_value": new_value,
         "size": size,
         "verified": True,
     }
@@ -547,6 +646,10 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
             Composite Types:
                 vector2, vector3, vector4, quaternion,
                 color, color32, rect, bounds
+
+            Special Types:
+                bytes - compact/spaced hex string or JSON array of integers 0..255
+                bytes[N] - same as bytes, with exact payload length N
 
         validate: If True, check the whole target range is writable, capture
             exact pre-write bytes, write, and byte-compare the readback
@@ -575,6 +678,10 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
         if validate:
             return _write_verified(addr, type_lower, value)
 
+        # Handle raw bytes
+        if type_lower == "bytes" or type_lower.startswith("bytes["):
+            return _write_bytes(addr, type_lower, value)
+
         # Handle primitives
         if type_lower in PRIMITIVES:
             return _write_primitive(addr, type_lower, value)
@@ -587,6 +694,21 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
 
     except Exception as e:
         return {"success": False, "error": "WRITE_ERROR", "address": format_address(addr), "detail": str(e)}
+
+
+def _write_bytes(addr: int, type_name: str, value: Any) -> dict[str, Any]:
+    packed = _pack_bytes_value(type_name, value)
+    if not packed.get("success"):
+        return packed
+
+    SESSION.write_bytes(addr, packed["data"])
+    return {
+        "success": True,
+        "address": format_address(addr),
+        "type": type_name,
+        "new_value": packed["new_value"],
+        "size": packed["size"],
+    }
 
 
 def _write_primitive(addr: int, type_name: str, value: Any) -> dict:
@@ -639,7 +761,7 @@ def _write_composite_type(addr: int, type_name: str, value: Any) -> dict:
 
 
 def list_supported_types() -> dict[str, Any]:
-    """List all supported types for read_typed.
+    """List all supported types for read_typed/write_typed.
 
     Returns:
         {"primitives": [...], "composite_types": [...], ...}
@@ -656,4 +778,5 @@ def list_supported_types() -> dict[str, Any]:
         "native_types": ["cstring"],
         "special": SPECIAL_READ_TYPES.copy(),
         "special_types": SPECIAL_READ_TYPES.copy(),
+        "writable_special_types": SPECIAL_WRITE_TYPES.copy(),
     }
