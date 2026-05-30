@@ -45,3 +45,4 @@ scripts/*/
 # User-specific config
 .mcp.json
 .claude/
+.pi/
