@@ -14,11 +14,32 @@ from ..paths import SCRIPTS_DIR
 from ..session import SESSION
 
 
-def _get_process_name() -> Optional[str]:
-    """Get current process name from session."""
-    if not SESSION.target_process:
+def _get_attached_process_name() -> Optional[str]:
+    """Get the process name only when the session has an open process handle."""
+    if SESSION.pm is None or not SESSION.target_process:
         return None
     return SESSION.target_process
+
+
+def _get_attached_pid() -> Optional[int]:
+    """Get the process ID only when the session has an open process handle."""
+    if SESSION.pm is None:
+        return None
+    return SESSION.pid or None
+
+
+def _run_metadata(
+    requested_process: Optional[str],
+    attached_process: Optional[str],
+    attached_pid: Optional[int],
+    detached_execution: bool,
+) -> dict:
+    return {
+        "requested_process": requested_process,
+        "attached_process": attached_process,
+        "attached_pid": attached_pid,
+        "detached_execution": detached_execution,
+    }
 
 
 def _extract_description(filepath: Path) -> str:
@@ -65,7 +86,7 @@ def list_scripts(process: Optional[str] = None) -> dict:
             process_dirs = []
     else:
         # Single process
-        process_name = process or _get_process_name()
+        process_name = process or _get_attached_process_name()
         if not process_name:
             return {
                 "scripts": [],
@@ -103,7 +124,7 @@ def run_script(
 
     Args:
         name: Script name (without .lua extension)
-        process: Optional process name. If None, uses current attached process.
+        process: Optional saved-script namespace. If None, uses current attached process.
         args: Optional dict of arguments passed to script as 'args' global
         timeout: Optional max execution time in seconds.
 
@@ -112,13 +133,31 @@ def run_script(
     """
     from .lua_engine import execute_lua
 
-    # Determine process
-    process_name = process or _get_process_name()
+    explicit_process = process or None
+    attached_process = _get_attached_process_name()
+    attached_pid = _get_attached_pid()
+    process_name = explicit_process or attached_process
+    detached_execution = attached_process is None and explicit_process is not None
+    metadata = _run_metadata(process_name, attached_process, attached_pid, detached_execution)
+
     if not process_name:
         return {
             "success": False,
             "error": "NOT_ATTACHED",
             "detail": "Must be attached to determine process, or pass process='ProcessName.exe'",
+            **metadata,
+        }
+
+    if explicit_process and attached_process and explicit_process.casefold() != attached_process.casefold():
+        return {
+            "success": False,
+            "error": "PROCESS_MISMATCH",
+            "detail": (
+                f"Cannot run script from process namespace '{explicit_process}' while attached to "
+                f"'{attached_process}' (pid {attached_pid}). The process parameter selects the saved-script "
+                "namespace only; it does not attach or switch targets."
+            ),
+            **metadata,
         }
 
     # Find script file
@@ -138,6 +177,7 @@ def run_script(
             "error": "SCRIPT_NOT_FOUND",
             "detail": f"Script '{name}' not found at {script_path}",
             "hint": f"Create it at: {script_path}",
+            **metadata,
         }
 
     # Read and execute
@@ -145,12 +185,13 @@ def run_script(
         with open(script_path, "r", encoding="utf-8") as f:
             script_content = f.read()
     except Exception as e:
-        return {"success": False, "error": "READ_FAILED", "detail": str(e)}
+        return {"success": False, "error": "READ_FAILED", "detail": str(e), **metadata}
 
     # Execute with args
     result = execute_lua(script_content, args, timeout=timeout)
 
     # Add metadata
+    result.update(metadata)
     result["script_name"] = name
     result["script_path"] = str(script_path)
     result["script_description"] = _extract_description(script_path)
@@ -160,7 +201,7 @@ def run_script(
 
 def get_script_count() -> int:
     """Get count of scripts for current process (for status display)."""
-    process_name = _get_process_name()
+    process_name = _get_attached_process_name()
     if not process_name:
         return 0
     process_dir = SCRIPTS_DIR / process_name

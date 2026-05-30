@@ -521,7 +521,8 @@ def scripts(
     Actions:
       list - Returns scripts with absolute paths. Use process='*' for all processes.
       run  - Execute by name. Pass args={} for script arguments. timeout=seconds optional.
-             Requires an attached process unless process='ProcessName.exe' is provided.
+             process='ProcessName.exe' selects the saved-script namespace only; it does not attach or switch.
+             Without an attachment, pass process for detached execution. When attached, process must match.
 
     CREATE/EDIT: Use file tools on paths from 'list'. First line comment = description.
     Example: scripts(action='list') -> get scripts_dir, then Write to {scripts_dir}/<name>.lua

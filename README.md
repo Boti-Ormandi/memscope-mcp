@@ -115,7 +115,7 @@ Addresses accept hex strings (`"0x1234"`), module+offset (`"module.dll+0x1234"`)
 | `chain` | Follow pointer chains: `[[base+off0]+off1]...` with configurable final read type |
 | `scan` | AOB pattern scanning with wildcards (`??`, `?`, `**`). Supports pagination, bounds, `return_offset`, and `timeout_ms` (clamped to 100..30000 ms) |
 | `lua` | Execute Lua scripts server-side for multi-step operations |
-| `scripts` | Manage saved Lua scripts. Actions: `list` (with paths), `run` (with args) |
+| `scripts` | Manage saved Lua scripts. Actions: `list` (with paths), `run` (with args and namespace checks) |
 
 ## Lua scripting
 
@@ -175,7 +175,7 @@ Logs, saved Lua scripts, and user plugins live under `MEMSCOPE_HOME`, which defa
 Subdirectories:
 
 - `$MEMSCOPE_HOME/logs/sessions/` -- per-session JSONL logs.
-- `$MEMSCOPE_HOME/scripts/<process>/` -- Lua scripts saved per attached process.
+- `$MEMSCOPE_HOME/scripts/<process>/` -- Lua scripts saved per process namespace.
 - `$MEMSCOPE_HOME/plugins/` -- user plugins (see `memscope-mcp install-plugin` for the bundled reference plugins).
 
 ### Saved scripts
@@ -193,6 +193,8 @@ scripts/
 - Version control friendly (plain text)
 - AI agents discover saved scripts on attach and reuse them automatically
 - Create scripts with your MCP client's file tools, run them with the `scripts` tool
+- For `scripts(action="run")`, `process=` selects the saved-script namespace only; it does not attach or switch targets
+- Detached runs require `process=`; when already attached, an explicit `process=` must match the attached target
 
 ASLR invalidates absolute addresses across restarts. Save the finder script, not the address.
 

@@ -44,7 +44,8 @@ callSequence({
 ### Scripts Directory
 Scripts are stored as `.lua` files in `$MEMSCOPE_HOME/scripts/<process>/`.
 - Use `scripts(action="list")` to see available scripts (returned paths are absolute)
-- Use `scripts(action="run", name="x")` to run (requires attach unless `process=` is passed)
+- Use `scripts(action="run", name="x")` to run; `process=` selects the saved-script namespace only
+- Detached runs require explicit `process=`, and attached runs reject a different `process=` value
 - Create/edit scripts using file tools on the returned paths
 - First line comment becomes the script description
 """.strip()

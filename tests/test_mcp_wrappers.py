@@ -274,6 +274,12 @@ def test_scripts_run_forwards_namespace_args_and_timeout(monkeypatch):
     assert calls == [("probe", "Target.exe", {"needle": "DE AD BE EF"}, 2.5)]
 
 
+def test_scripts_docstring_describes_process_namespace_contract():
+    assert "saved-script namespace only" in server.scripts.__doc__
+    assert "does not attach or switch" in server.scripts.__doc__
+    assert "process must match" in server.scripts.__doc__
+
+
 def test_scripts_unknown_action_reports_valid_actions(monkeypatch):
     def fail_list_scripts(*_args, **_kwargs):
         raise AssertionError("list_scripts should not be called for an unknown action")
