@@ -441,7 +441,8 @@ def write(address: str, value, type_name: str, verify: bool = False) -> dict:
     Types: primitives, composite types (vector3 as {x,y,z} dict), bytes, and bytes[N].
     Bytes values accept compact hex ("DEADBEEF"), spaced hex ("DE AD BE EF"), or [222, 173, 190, 239].
     bytes[N] requires exactly N bytes.
-    Set verify=True to require a writable range check and byte-for-byte readback."""
+    Set verify=True to require a writable range check, pre-image capture, byte-for-byte readback,
+    and a pre-image restore attempt on post-write verification failure."""
     _start = time.perf_counter()
     result = write_typed(address, value, type_name, verify)
     return _log("write", {"address": address, "value": value, "type_name": type_name, "verify": verify}, result, _start)
@@ -559,6 +560,7 @@ def scripts(
       run  - Execute by name. Pass args={} for script arguments. timeout=seconds optional.
              process='ProcessName.exe' selects the saved-script namespace only; it does not attach or switch.
              Without an attachment, pass process for detached execution. When attached, process must match.
+             Responses include requested_process, attached_process, attached_pid, and detached_execution.
 
     CREATE/EDIT: Use file tools on paths from 'list'. First line comment = description.
     Example: scripts(action='list') -> get scripts_dir, then Write to {scripts_dir}/<name>.lua

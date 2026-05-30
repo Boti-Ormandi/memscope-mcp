@@ -110,7 +110,7 @@ Addresses accept hex strings (`"0x1234"`), module+offset (`"module.dll+0x1234"`)
 | `attach` | Attach to process, cache module bases. Auto-reconnects if the target restarts |
 | `modules` | List loaded modules with base addresses, sizes, and paths |
 | `read` | Read typed memory (int8-64, uint8-64, char, float, double, bool, ptr, cstring, bytes/bytes[N], vector2/3/4, quaternion, color, color32, rect, bounds, matrix4x4). Supports `count` for consecutive values |
-| `write` | Write typed memory, including bytes/bytes[N], with optional fail-closed verification: writable range check, pre-image capture, and byte-for-byte readback |
+| `write` | Write typed memory, including bytes/bytes[N], with optional verified writes: writable range check, pre-image capture, byte-for-byte readback, and pre-image restore attempt on post-write verification failure |
 | `dump` | Smart memory dump with automatic type detection and pagination/filter knobs (`start_offset`, `pointers_only`, `non_null_only`, `max_entries`, `annotation_level`). `full` annotations include confidence |
 | `chain` | Follow pointer chains: `[[base+off0]+off1]...` with configurable final read type |
 | `scan` | AOB pattern scanning with wildcards (`??`, `?`, `**`). Supports pagination, bounds, `return_offset`, and `timeout_ms` (clamped to 100..30000 ms) |
@@ -156,7 +156,7 @@ Function categories (full reference in [`docs/lua-reference.md`](https://github.
 | Network utilities | 1 |
 | 64-bit safe comparisons | 9 |
 | Bitwise | 7 |
-| Utilities | 18 |
+| Utilities | 19 |
 
 ## Plugins
 
@@ -199,6 +199,7 @@ scripts/
 - Create scripts with your MCP client's file tools, run them with the `scripts` tool
 - For `scripts(action="run")`, `process=` selects the saved-script namespace only; it does not attach or switch targets
 - Detached runs require `process=`; when already attached, an explicit `process=` must match the attached target
+- Run responses include `requested_process` (caller-provided namespace, or `null` when implicit), `attached_process`, `attached_pid`, and `detached_execution`
 
 ASLR invalidates absolute addresses across restarts. Save the finder script, not the address.
 

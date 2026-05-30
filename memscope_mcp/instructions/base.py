@@ -15,6 +15,7 @@ Attach to any process, read/write memory, scan patterns, execute code.
 Use `lua` tool for complex operations (loops, conditionals, multi-step logic).
 Scripts can run WITHOUT an attached process for discovery tasks.
 Use `getCapabilities()`, `listLuaFunctions(owner?)`, and `getLoadedExtensions()` for runtime discovery.
+`getCapabilities().wrappers` advertises wrapper features including verified writes and typed byte writes.
 
 Scripts are monitored via a debug hook. If the server shuts down or the client
 disconnects during execution, the script is cancelled. Printed output captured
@@ -47,6 +48,7 @@ Scripts are stored as `.lua` files in `$MEMSCOPE_HOME/scripts/<process>/`.
 - Use `scripts(action="list")` to see available scripts (returned paths are absolute)
 - Use `scripts(action="run", name="x")` to run; `process=` selects the saved-script namespace only
 - Detached runs require explicit `process=`, and attached runs reject a different `process=` value
+- Run responses include `requested_process`, `attached_process`, `attached_pid`, and `detached_execution`
 - Create/edit scripts using file tools on the returned paths
 - First line comment becomes the script description
 """.strip()

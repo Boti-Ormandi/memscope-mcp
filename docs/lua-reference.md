@@ -290,7 +290,8 @@ getCapabilities()                 -- attached state, paths, and MCP wrapper capa
 ```
 
 Discovery helpers read the live registry/state, so they work before attaching and include user plugins that registered
-successfully.
+successfully. `getCapabilities().wrappers` includes flags such as `verified_writes` and `typed_byte_writes` for
+MCP wrapper features exposed outside Lua.
 
 ## Netcap plugin
 
@@ -400,7 +401,7 @@ callSequence({
 
 ### Script persistence
 
-Scripts are stored as `.lua` files in `$MEMSCOPE_HOME/scripts/<process>/`. The first-line comment becomes the script description shown by `scripts(action="list")`, and that action returns absolute paths for editing. Run scripts with `scripts(action="run", name="...")`; `process="ProcessName.exe"` selects the saved-script namespace only and does not attach or switch targets. If detached, pass `process` for detached Lua execution. If attached, an explicit `process` must match the attached target.
+Scripts are stored as `.lua` files in `$MEMSCOPE_HOME/scripts/<process>/`. The first-line comment becomes the script description shown by `scripts(action="list")`, and that action returns absolute paths for editing. Run scripts with `scripts(action="run", name="...")`; `process="ProcessName.exe"` selects the saved-script namespace only and does not attach or switch targets. If detached, pass `process` for detached Lua execution. If attached, an explicit `process` must match the attached target. Run responses include `requested_process` (the caller-provided namespace, or `nil` when implicit), `attached_process`, `attached_pid`, and `detached_execution`.
 
 ### Example: locate a singleton from a RIP-relative reference
 
