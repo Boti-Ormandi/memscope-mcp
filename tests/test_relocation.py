@@ -1,4 +1,4 @@
-"""Tests for RIP-relative instruction relocation (Phase 5b).
+"""Tests for RIP-relative instruction relocation.
 
 Covers decode_instruction(), decode_prologue_ex(), relocate_instructions(),
 and backward compatibility of instruction_length() / decode_prologue().

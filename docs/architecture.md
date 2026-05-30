@@ -55,7 +55,7 @@ Five rules shape what goes into the codebase and what stays out.
 
 **One contract, two activation paths.** Core features and user plugins both implement `LuaExtension`. Core extensions are always loaded and their registration failure is hard. User plugins are gated on file presence in `$MEMSCOPE_HOME/plugins/` and isolated on failure.
 
-**AI context is expensive.** Plugin instructions are only appended to the AI-facing documentation when the plugin is active. The MCP `instructions` channel is token-priced; the project treats it that way.
+**AI context is expensive.** `memscope_mcp/instructions/base.py` is always loaded, and extension `instructions` fragments append in registration order. Plugin instructions are only appended to the AI-facing documentation when the plugin is active. The MCP `instructions` channel is token-priced; the project treats it that way.
 
 **Scripts persist, addresses don't.** ASLR shifts everything on every restart. The persistence layer saves Lua finder scripts per process, not raw addresses. The agent reuses the finder.
 

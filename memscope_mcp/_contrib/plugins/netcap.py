@@ -4,7 +4,7 @@ Hooks ws2_32.dll send/recv/WSASend/WSARecv/sendto/recvfrom and optionally
 connect/closesocket/accept/bind to capture network traffic. Supports IOCP async
 correlation, UDP, packet filtering, and header-only mode.
 
-Built on the generic hooking infrastructure from Phase 1.
+Built on the generic inline hooking infrastructure.
 Activate by copying this file to the plugins/ directory.
 """
 

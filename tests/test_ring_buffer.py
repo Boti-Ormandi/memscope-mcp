@@ -301,7 +301,7 @@ class TestSkipWritingEntries:
 class TestMarkerEntries:
     def test_marker_is_marker_true(self, ring):
         buf, cfg, mgr = ring
-        label = b"checkpoint_alpha"
+        label = b"marker_alpha"
         write_entry(
             buf,
             cfg,
@@ -445,6 +445,109 @@ class TestExtraArgs:
         e = entries[0]
         assert e["extra_args"]["arg4"] == 0xAAAA
         assert e["data"] is None
+
+
+class TestRingBufferBoundsChecking:
+    """read_ring_buffer should handle corrupt or oversized entry fields safely."""
+
+    def test_captured_length_clamped_to_max_data_size(self, ring):
+        """If captured_length exceeds max_data_size, it should be clamped."""
+        buf, cfg, mgr = ring
+
+        off = entry_offset(cfg, 0)
+        header = bytearray(ENTRY_HEADER_SIZE)
+        struct.pack_into("<Q", header, ENTRY_SEQUENCE, 0)
+        struct.pack_into("<I", header, ENTRY_STATUS, STATUS_COMPLETE)
+        struct.pack_into("<I", header, ENTRY_HOOK_ID, 1)
+        struct.pack_into("<Q", header, ENTRY_TIMESTAMP, 1000)
+        struct.pack_into("<Q", header, ENTRY_RETURN_ADDR, 0xDEAD)
+        struct.pack_into("<QQQQ", header, ENTRY_ARG0, 1, 2, 3, 4)
+        struct.pack_into("<i", header, ENTRY_RESULT, 0)
+        struct.pack_into("<I", header, ENTRY_DATA_LENGTH, 9999)
+        struct.pack_into("<I", header, ENTRY_CAPTURED_LENGTH, 9999)
+        struct.pack_into("<I", header, ENTRY_FLAGS, 1)
+
+        buf.data[off : off + ENTRY_HEADER_SIZE] = header
+        test_data = b"ABCD" * 10
+        buf.data[off + ENTRY_DATA_OFFSET : off + ENTRY_DATA_OFFSET + len(test_data)] = test_data
+
+        set_indices(buf, 1, 0)
+
+        entries = mgr.read_ring_buffer(10)
+        assert len(entries) == 1
+        assert entries[0]["captured_length"] <= cfg.max_data_size
+
+    def test_extra_args_count_clamped_to_7(self, ring):
+        """extra_args_count > 7 should be clamped to 7."""
+        buf, cfg, mgr = ring
+
+        off = entry_offset(cfg, 0)
+        header = bytearray(ENTRY_HEADER_SIZE)
+        struct.pack_into("<Q", header, ENTRY_SEQUENCE, 0)
+        struct.pack_into("<I", header, ENTRY_STATUS, STATUS_COMPLETE)
+        struct.pack_into("<I", header, ENTRY_HOOK_ID, 1)
+        struct.pack_into("<Q", header, ENTRY_TIMESTAMP, 1000)
+        struct.pack_into("<Q", header, ENTRY_RETURN_ADDR, 0xDEAD)
+        struct.pack_into("<QQQQ", header, ENTRY_ARG0, 1, 2, 3, 4)
+        struct.pack_into("<i", header, ENTRY_RESULT, 0)
+        struct.pack_into("<I", header, ENTRY_DATA_LENGTH, 0)
+        struct.pack_into("<I", header, ENTRY_CAPTURED_LENGTH, 0)
+        struct.pack_into("<I", header, ENTRY_FLAGS, 0xF00 | 1)
+        buf.data[off : off + ENTRY_HEADER_SIZE] = header
+
+        for i in range(7):
+            struct.pack_into("<Q", buf.data, off + ENTRY_DATA_OFFSET + i * 8, 0x100 + i)
+
+        set_indices(buf, 1, 0)
+
+        entries = mgr.read_ring_buffer(10)
+        assert len(entries) == 1
+        assert len(entries[0].get("extra_args", {})) == 7
+
+    def test_prefix_plus_captured_clamped(self, ring):
+        """If extra_args prefix + captured exceeds max_data_size, captured is clamped."""
+        buf, cfg, mgr = ring
+
+        off = entry_offset(cfg, 0)
+        header = bytearray(ENTRY_HEADER_SIZE)
+        struct.pack_into("<Q", header, ENTRY_SEQUENCE, 0)
+        struct.pack_into("<I", header, ENTRY_STATUS, STATUS_COMPLETE)
+        struct.pack_into("<I", header, ENTRY_HOOK_ID, 1)
+        struct.pack_into("<Q", header, ENTRY_TIMESTAMP, 1000)
+        struct.pack_into("<Q", header, ENTRY_RETURN_ADDR, 0xDEAD)
+        struct.pack_into("<QQQQ", header, ENTRY_ARG0, 1, 2, 3, 4)
+        struct.pack_into("<i", header, ENTRY_RESULT, 0)
+        struct.pack_into("<I", header, ENTRY_DATA_LENGTH, 250)
+        struct.pack_into("<I", header, ENTRY_CAPTURED_LENGTH, 250)
+        struct.pack_into("<I", header, ENTRY_FLAGS, (3 << 8) | 1)
+        buf.data[off : off + ENTRY_HEADER_SIZE] = header
+
+        for i in range(3):
+            struct.pack_into("<Q", buf.data, off + ENTRY_DATA_OFFSET + i * 8, 0x42 + i)
+
+        prefix_end = off + ENTRY_DATA_OFFSET + 24
+        fill = b"\xaa" * 232
+        buf.data[prefix_end : prefix_end + len(fill)] = fill
+
+        set_indices(buf, 1, 0)
+
+        entries = mgr.read_ring_buffer(10)
+        assert len(entries) == 1
+        assert len(entries[0].get("extra_args", {})) == 3
+        assert entries[0]["captured_length"] <= 232
+
+    def test_normal_entry_unchanged(self, ring):
+        """Normal entries should pass through unchanged."""
+        buf, cfg, mgr = ring
+
+        test_data = b"hello world"
+        write_entry(buf, cfg, 0, data=test_data, hook_id=1)
+        set_indices(buf, 1, 0)
+
+        entries = mgr.read_ring_buffer(10)
+        assert len(entries) == 1
+        assert entries[0]["data"] == test_data
+        assert entries[0]["captured_length"] == len(test_data)
 
 
 class TestNoRingBuffer:

@@ -1,4 +1,4 @@
-"""Tests for header-only mode in the netcap plugin (Phase 3).
+"""Tests for header-only mode in the netcap plugin.
 
 All tests use mocks for HOOK_MANAGER. No process attachment required.
 """

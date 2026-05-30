@@ -76,7 +76,7 @@ The hooking layer is a core extension (`memscope_mcp/extensions/core/hooking.py`
 
 ### Ring buffer
 
-A single RW memory block allocated in the target process and shared by all hooks. Entries are distinguished by `hook_id`. Writes are claimed with `lock cmpxchg` on the write index. Overflow is non-blocking: the writer drops the entry and increments a counter rather than waiting for the reader.
+A single RW memory block is allocated lazily by `createRingBuffer` in the target process and shared by all hooks. Entries are distinguished by `hook_id`. Writes are claimed with `lock cmpxchg` on the write index. Overflow is non-blocking: the writer drops the entry and increments a counter rather than waiting for the reader. `destroyRingBuffer` refuses while hooks are still installed.
 
 Each entry has a fixed 80-byte header (sequence, status, hook_id, timestamp, return address, four register args, `result` as a signed int32 holding post-call RAX, `data_length`, `captured_length`, `flags` with bit 0 = has data and bits 8-11 = extra stack-arg count) followed by optional captured bytes. Status transitions from `WRITING` to `COMPLETE` (or `MARKER` for server-injected timeline markers). The reader stops at the first `WRITING` slot to preserve ordering of in-flight entries.
 
@@ -113,7 +113,7 @@ There are two distinct failure modes. If near (+-2 GiB) allocation for the tramp
 
 Install: validate the spec, read the prologue, prefer a near (`+-2 GiB`) trampoline allocation so a 5-byte `JMP rel32` suffices, decode the prologue, build the trampoline shellcode, write it, then patch the function entry. If near allocation fails and the prologue is RIP-relative-free, fall back to a 14-byte `JMP [RIP+0]` patch.
 
-The 14-byte patch is not atomic. Before writing it, we suspend all target threads, read each thread's RIP, and if any thread is inside the patch zone we redirect it to the equivalent offset in the trampoline stub. Then we write the patch and resume.
+The 14-byte patch is not atomic. `HookManager._safe_patch` is the only writer for 14-byte entry patches and removals. Before writing, it suspends all target threads, reads each thread's RIP, and if any thread is inside the patch zone redirects it to the equivalent offset in the trampoline stub. Then it writes the patch and resumes the threads.
 
 Remove: restore the saved prologue bytes (with the same thread-suspension safety for 14-byte patches) and defer the trampoline free until detach. The defer is intentional: another thread may still be executing inside the trampoline at the moment of removal, and freeing the memory immediately would crash it.
 

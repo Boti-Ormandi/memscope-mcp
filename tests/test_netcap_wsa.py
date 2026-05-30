@@ -5,6 +5,7 @@ WSABUF parsing, and edge cases.
 """
 
 import struct
+import time
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import patch
@@ -397,6 +398,80 @@ class TestCorrelationTableEviction:
         assert len(self.plugin._pending_io) == limit
         # Oldest key (0) was evicted
         assert 0 not in self.plugin._pending_io
+
+
+# ==================== Correlation Table TTL ====================
+
+
+class TestIOCPCorrelationTTL:
+    """Stale pending_io entries should be evicted based on TTL."""
+
+    def setup_method(self):
+        self.plugin = make_plugin()
+        self.plugin._capture_active = True
+        self.plugin._hook_ids = {"send": 1}
+        self.plugin._header_only = False
+        self.plugin._max_packet_size = 4096
+
+    def test_stale_entries_evicted_on_read_packets(self, monkeypatch):
+        """Entries older than TTL should be removed during readPackets."""
+        self.plugin._pending_io_ttl = 0.1
+        self.plugin._pending_io[0xABCD] = {
+            "socket": 0x1A4,
+            "buf_ptr": 0x5000,
+            "wsabuf_len": 100,
+            "hook_name": "WSARecv",
+            "sequence": 1,
+            "created_at": time.monotonic() - 10.0,
+        }
+        self.plugin._pending_io[0xDEAD] = {
+            "socket": 0x1A5,
+            "buf_ptr": 0x6000,
+            "wsabuf_len": 200,
+            "hook_name": "WSARecv",
+            "sequence": 2,
+            "created_at": time.monotonic(),
+        }
+
+        monkeypatch.setattr(
+            "memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
+            lambda limit: [],
+        )
+
+        self.plugin._read_packets(10)
+
+        assert 0xABCD not in self.plugin._pending_io
+        assert 0xDEAD in self.plugin._pending_io
+
+    def test_fresh_entries_not_evicted(self, monkeypatch):
+        """Entries within TTL should not be evicted."""
+        self.plugin._pending_io_ttl = 60.0
+        self.plugin._pending_io[0x1111] = {
+            "socket": 0x1A4,
+            "buf_ptr": 0x5000,
+            "wsabuf_len": 100,
+            "hook_name": "WSARecv",
+            "sequence": 1,
+            "created_at": time.monotonic(),
+        }
+
+        monkeypatch.setattr(
+            "memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
+            lambda limit: [],
+        )
+
+        self.plugin._read_packets(10)
+        assert 0x1111 in self.plugin._pending_io
+
+    def test_empty_pending_io_no_error(self, monkeypatch):
+        """Empty pending_io should not cause errors during eviction."""
+        self.plugin._pending_io = {}
+        monkeypatch.setattr(
+            "memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
+            lambda limit: [],
+        )
+
+        self.plugin._read_packets(10)
 
 
 # ==================== Server-Side Read Failure ====================

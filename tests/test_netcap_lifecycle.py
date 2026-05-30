@@ -1,4 +1,4 @@
-"""Tests for accept/bind connection tracking in the netcap plugin (Phase 3).
+"""Tests for accept/bind connection tracking in the netcap plugin.
 
 All tests use mocks for HOOK_MANAGER. No process attachment required.
 """
@@ -204,10 +204,10 @@ class TestBindProcessing:
         assert conn["local_port"] == 12345
 
 
-# ==================== getConnections Phase 3 ====================
+# ==================== getConnections ====================
 
 
-class TestGetConnectionsPhase3:
+class TestGetConnections:
     """Tests for getConnections with mixed connection types."""
 
     def setup_method(self):

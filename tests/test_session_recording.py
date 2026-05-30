@@ -441,6 +441,151 @@ class TestLoadRecording:
         assert result[1]["offset"] == 1  # first byte, 1-indexed
 
 
+class TestPaginatedLoadRecording:
+    """loadRecording should support offset and limit parameters."""
+
+    def _write_recording(self, filepath: Path, count: int = 20):
+        """Write a JSONL recording file with `count` entries."""
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            for i in range(count):
+                record = {
+                    "direction": "send",
+                    "socket": 420,
+                    "socket_hex": "0x1a4",
+                    "timestamp": 1000 + i,
+                    "sequence": i + 1,
+                    "size": 5,
+                    "captured": 5,
+                    "result": 5,
+                    "caller": "ws2_32.dll+0x1234",
+                    "hook_name": "send",
+                    "data_hex": "48 65 6C 6C 6F",
+                }
+                f.write(json.dumps(record) + "\n")
+
+    def test_load_full_recording(self, tmp_path, monkeypatch):
+        """Loading without offset/limit returns all entries."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
+
+        filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
+        self._write_recording(filepath, 20)
+
+        plugin = make_plugin()
+        result = plugin._load_recording("session1")
+
+        count = 0
+        i = 1
+        while result[i] is not None:
+            count += 1
+            i += 1
+        assert count == 20
+
+    def test_load_with_limit(self, tmp_path, monkeypatch):
+        """Loading with limit=5 returns only 5 entries."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
+
+        filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
+        self._write_recording(filepath, 20)
+
+        plugin = make_plugin()
+        opts = make_table(offset=None, limit=5)
+        result = plugin._load_recording("session1", opts)
+
+        count = 0
+        i = 1
+        while result[i] is not None:
+            count += 1
+            i += 1
+        assert count == 5
+
+    def test_load_with_offset(self, tmp_path, monkeypatch):
+        """Loading with offset=15 skips first 15 and returns remaining 5."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
+
+        filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
+        self._write_recording(filepath, 20)
+
+        plugin = make_plugin()
+        opts = make_table(offset=15, limit=None)
+        result = plugin._load_recording("session1", opts)
+
+        count = 0
+        i = 1
+        while result[i] is not None:
+            count += 1
+            i += 1
+        assert count == 5
+
+    def test_load_with_offset_and_limit(self, tmp_path, monkeypatch):
+        """Loading with offset=5, limit=3 returns entries 6-8."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
+
+        filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
+        self._write_recording(filepath, 20)
+
+        plugin = make_plugin()
+        opts = make_table(offset=5, limit=3)
+        result = plugin._load_recording("session1", opts)
+
+        count = 0
+        i = 1
+        while result[i] is not None:
+            count += 1
+            i += 1
+        assert count == 3
+        assert result[1]["sequence"] == 6
+
+    def test_offset_beyond_file(self, tmp_path, monkeypatch):
+        """Offset past end of file returns empty result."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
+
+        filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
+        self._write_recording(filepath, 5)
+
+        plugin = make_plugin()
+        opts = make_table(offset=100, limit=None)
+        result = plugin._load_recording("session1", opts)
+
+        assert result[1] is None
+
+    def test_limit_zero(self, tmp_path, monkeypatch):
+        """Limit of 0 returns no entries."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
+
+        filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
+        self._write_recording(filepath, 20)
+
+        plugin = make_plugin()
+        opts = make_table(offset=None, limit=0)
+        result = plugin._load_recording("session1", opts)
+        assert result[1] is None
+
+    def test_no_opts_backward_compatible(self, tmp_path, monkeypatch):
+        """Calling without opts still works."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
+
+        filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
+        self._write_recording(filepath, 3)
+
+        plugin = make_plugin()
+        result = plugin._load_recording("session1")
+
+        count = 0
+        i = 1
+        while result[i] is not None:
+            count += 1
+            i += 1
+        assert count == 3
+
+
 # ==================== listRecordings ====================
 
 

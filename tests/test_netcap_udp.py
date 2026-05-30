@@ -1,4 +1,4 @@
-"""Tests for sendto/recvfrom UDP processing in the netcap plugin (Phase 3).
+"""Tests for sendto/recvfrom UDP processing in the netcap plugin.
 
 All tests use mocks for HOOK_MANAGER and SESSION. No process attachment required.
 """

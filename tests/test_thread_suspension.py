@@ -1,4 +1,4 @@
-"""Tests for Phase 5c: thread suspension for safe 14-byte JMP patching.
+"""Tests for thread suspension for safe 14-byte JMP patching.
 
 Covers _safe_patch() logic, install/remove routing (14-byte vs 5-byte),
 HookInfo fields, and backward compatibility of shellcode builder return type.

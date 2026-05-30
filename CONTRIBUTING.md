@@ -11,7 +11,9 @@ git clone https://github.com/Boti-Ormandi/memscope-mcp.git
 cd memscope-mcp
 pip install -e ".[dev]"
 pre-commit install
-pytest
+pytest tests/ -v
+ruff check memscope_mcp/ tests/
+ruff format --check memscope_mcp/ tests/
 ```
 
 Pre-commit runs `ruff check --fix` and `ruff format` on every commit. CI runs the same checks plus the full pytest suite on Python 3.10 through 3.13.
@@ -62,7 +64,7 @@ Lua functions live inside extensions. Pick the right extension first.
 3. Add the Lua-name -> Python-callable mapping to the dict returned by the extension's `register(ctx)`.
 4. Update the extension's `instructions` string with a one-line AI-facing description (token-priced, terse).
 5. Document the function in [`docs/lua-reference.md`](docs/lua-reference.md) under the matching category and in [`memscope_mcp/instructions/base.py`](memscope_mcp/instructions/base.py) if a shared-guidance bullet is appropriate.
-6. Conventions: return `nil` on failure (don't raise), accept addresses as int or hex string (use `parse_address`), and use `ctx.table_factory(...)` to build Lua-side return tables.
+6. Conventions: return `nil` on failure (don't raise), accept addresses as int or hex string (use `parse_address`), and use `ctx.table_factory(...)` inside extensions or `engine.lua.table()` outside extensions to build Lua-side return tables.
 
 ## Adding an extension
 
@@ -90,12 +92,13 @@ Enforced by [ruff](https://docs.astral.sh/ruff/). Configuration in `pyproject.to
 - E722 (bare `except`) is allowed: it's deliberate in memory-read paths where any failure means "return nil"
 - Type hints on public function signatures
 - Docstrings with Args/Returns on public functions
+- Delete unused code rather than leaving dead functions or helpers
 
 ## Testing
 
 The smoke suite (`tests/test_smoke.py`) is the gating invariant: it asserts the 10-tool surface, that the Lua engine initializes, that the plugin loader runs, and that the instructions builder produces output. Most regressions show up here first.
 
-Unit tests live next to features (`test_types.py`, `test_scanning.py`, `test_lua_engine.py`, etc.). Hooking and netcap have dedicated coverage in `test_disasm.py`, `test_relocation.py`, `test_hook_shellcode.py`, `test_ring_buffer.py`, `test_pe_exports.py`, `test_thread_suspension.py`, `test_netcap_plugin.py`, `test_netcap_lifecycle.py`, `test_netcap_udp.py`, `test_netcap_wsa.py`, `test_stream_assembly.py`, `test_protocol_framing.py`, `test_filter_packets.py`, `test_header_only.py`, `test_deref_args.py`, `test_phase5_hardening.py`, `test_cross_reference.py`, `test_session_recording.py`. The extension bootstrap is pinned by `test_extension_bootstrap.py`. PEB reading is covered by `test_peb.py` (self-process tests run in CI; explorer.exe-dependent tests skip gracefully when explorer is not running). Run a focused subset with `pytest -k <pattern>`.
+Unit tests live next to features (`test_types.py`, `test_scanning.py`, `test_lua_engine.py`, etc.). Hooking and netcap have dedicated coverage in `test_disasm.py`, `test_relocation.py`, `test_hook_shellcode.py`, `test_ring_buffer.py`, `test_pe_exports.py`, `test_thread_suspension.py`, `test_netcap_plugin.py`, `test_netcap_lifecycle.py`, `test_netcap_udp.py`, `test_netcap_wsa.py`, `test_stream_assembly.py`, `test_protocol_framing.py`, `test_filter_packets.py`, `test_header_only.py`, `test_deref_args.py`, `test_hook_installation.py`, `test_cross_reference.py`, `test_session_recording.py`. The extension bootstrap is pinned by `test_extension_bootstrap.py`. PEB reading is covered by `test_peb.py` (self-process tests run in CI; explorer.exe-dependent tests skip gracefully when explorer is not running). Run a focused subset with `pytest -k <pattern>`.
 
 `tests/conftest.py` imports `memscope_mcp.server` once at collection time so the extension bootstrap runs before any test resolves a Lua function. If a new test needs the Lua surface initialized, it relies on this import side-effect -- nothing else is required.
 

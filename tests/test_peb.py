@@ -29,7 +29,7 @@ def _find_explorer_pid():
 
 
 # ===========================================================================
-# Phase 1: PEB address and basic fields
+# PEB address and basic fields
 # ===========================================================================
 
 
@@ -56,7 +56,7 @@ class TestGetPebAddress:
 
 
 class TestReadProcessPeb:
-    """Test full PEB reading (Phase 1)."""
+    """Test full PEB reading."""
 
     def test_self_process_command_line(self):
         """Can read our own command line from PEB."""
@@ -113,12 +113,12 @@ class TestReadProcessPeb:
 
 
 # ===========================================================================
-# Phase 2: Environment variables
+# Environment variables
 # ===========================================================================
 
 
 class TestReadProcessEnvironment:
-    """Test environment block reading (Phase 2)."""
+    """Test environment block reading."""
 
     def test_self_process_has_path(self):
         """Our own environment should have PATH."""
@@ -154,12 +154,12 @@ class TestReadProcessEnvironment:
 
 
 # ===========================================================================
-# Phase 3: Remote module enumeration
+# Remote module enumeration
 # ===========================================================================
 
 
 class TestReadProcessModules:
-    """Test module enumeration via PEB Ldr (Phase 3)."""
+    """Test module enumeration via PEB Ldr."""
 
     def test_self_process_has_modules(self):
         """Our own process should have loaded modules."""

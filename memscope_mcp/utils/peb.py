@@ -141,7 +141,7 @@ def _read_remote_unicode_string(process_handle: int, address: int) -> str | None
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: Command line, current directory, debugger flag
+# Command line, current directory, debugger flag
 # ---------------------------------------------------------------------------
 
 
@@ -195,7 +195,7 @@ def read_process_peb(pid: int) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: Environment variables
+# Environment variables
 # ---------------------------------------------------------------------------
 
 
@@ -277,7 +277,7 @@ def read_process_environment(pid: int) -> dict[str, str] | None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Remote module enumeration
+# Remote module enumeration
 # ---------------------------------------------------------------------------
 
 
