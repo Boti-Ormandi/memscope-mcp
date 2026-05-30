@@ -102,6 +102,37 @@ def test_run_with_matching_attached_process_executes(tmp_path, monkeypatch):
     }
 
 
+def test_run_with_implicit_attached_process_reports_no_requested_process(tmp_path, monkeypatch):
+    source = "-- implicit attached probe\nreturn 1\n"
+    script_path = write_script(tmp_path, source=source)
+    calls = []
+    monkeypatch.setattr(lua_scripts.SESSION, "pm", object())
+    monkeypatch.setattr(lua_scripts.SESSION, "target_process", "Target.exe")
+    monkeypatch.setattr(lua_scripts.SESSION, "pid", 4242)
+
+    def fake_execute_lua(script, args=None, timeout=None):
+        calls.append((script, args, timeout))
+        return {"success": True, "results": {"return": 1}, "output": []}
+
+    monkeypatch.setattr(lua_engine_compat, "execute_lua", fake_execute_lua)
+
+    result = lua_scripts.run_script("probe")
+
+    assert calls == [(source, None, None)]
+    assert result == {
+        "success": True,
+        "results": {"return": 1},
+        "output": [],
+        "requested_process": None,
+        "attached_process": "Target.exe",
+        "attached_pid": 4242,
+        "detached_execution": False,
+        "script_name": "probe",
+        "script_path": str(script_path),
+        "script_description": "implicit attached probe",
+    }
+
+
 def test_run_with_different_attached_process_fails_without_executing(tmp_path, monkeypatch):
     write_script(tmp_path, process="Other.exe")
     monkeypatch.setattr(lua_scripts.SESSION, "pm", object())
@@ -134,7 +165,7 @@ def test_script_not_found_failure_includes_run_metadata(tmp_path, monkeypatch):
 
     assert result["success"] is False
     assert result["error"] == "SCRIPT_NOT_FOUND"
-    assert result["requested_process"] == "Target.exe"
+    assert result["requested_process"] is None
     assert result["attached_process"] == "Target.exe"
     assert result["attached_pid"] == 4242
     assert result["detached_execution"] is False

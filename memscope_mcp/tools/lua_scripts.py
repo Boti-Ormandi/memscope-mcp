@@ -138,7 +138,7 @@ def run_script(
     attached_pid = _get_attached_pid()
     process_name = explicit_process or attached_process
     detached_execution = attached_process is None and explicit_process is not None
-    metadata = _run_metadata(process_name, attached_process, attached_pid, detached_execution)
+    metadata = _run_metadata(explicit_process, attached_process, attached_pid, detached_execution)
 
     if not process_name:
         return {
