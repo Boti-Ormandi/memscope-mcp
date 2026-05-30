@@ -284,7 +284,13 @@ clock()                           -- high-resolution timer (milliseconds)
 sleep(ms)                         -- pause execution
 enableDebug()  disableDebug()     -- toggle error logging into output array
 getLastError()                    -- last error message from a returning-nil call
+listLuaFunctions(owner?)          -- registered {name, owner} entries, optionally filtered by owner
+getLoadedExtensions()             -- unique Lua extension/plugin owners in first-seen order
+getCapabilities()                 -- attached state, paths, and MCP wrapper capability flags
 ```
+
+Discovery helpers read the live registry/state, so they work before attaching and include user plugins that registered
+successfully.
 
 ## Netcap plugin
 

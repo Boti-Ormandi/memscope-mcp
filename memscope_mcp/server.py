@@ -6,7 +6,7 @@ Designed for AI agents to explore memory structures dynamically.
 
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -47,11 +47,44 @@ Session log: {LOGGER._get_log_file()}""",
 )
 
 
+def _normalize_tool_result(result: Any) -> Any:
+    """Normalize MCP wrapper failure dictionaries without masking exceptions."""
+    if not isinstance(result, dict):
+        return result
+
+    is_failure = result.get("success") is False or "error" in result
+    if not is_failure:
+        return result
+
+    normalized = dict(result)
+    normalized["success"] = False
+
+    if normalized.get("error") == "PROCESS_NOT_ATTACHED":
+        normalized["error"] = "NOT_ATTACHED"
+        normalized["source_error"] = "PROCESS_NOT_ATTACHED"
+    elif "error" not in normalized or normalized["error"] is None:
+        normalized["error"] = "ERROR"
+
+    has_detail = "detail" in normalized and normalized["detail"] is not None
+    has_error_detail = "error_detail" in normalized and normalized["error_detail"] is not None
+    if has_detail and not has_error_detail:
+        normalized["error_detail"] = normalized["detail"]
+    elif has_error_detail and not has_detail:
+        normalized["detail"] = normalized["error_detail"]
+    elif not has_detail and not has_error_detail:
+        detail = str(normalized["error"])
+        normalized["detail"] = detail
+        normalized["error_detail"] = detail
+
+    return normalized
+
+
 def _log(tool: str, args: dict, result: dict, start_time: float):
     """Log a tool call with timing."""
+    normalized = _normalize_tool_result(result)
     duration_ms = (time.perf_counter() - start_time) * 1000
-    LOGGER.log(tool, args, result, duration_ms)
-    return result
+    LOGGER.log(tool, args, normalized, duration_ms)
+    return normalized
 
 
 # ============================================================================

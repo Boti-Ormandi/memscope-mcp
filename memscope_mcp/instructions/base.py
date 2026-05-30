@@ -14,6 +14,7 @@ Attach to any process, read/write memory, scan patterns, execute code.
 
 Use `lua` tool for complex operations (loops, conditionals, multi-step logic).
 Scripts can run WITHOUT an attached process for discovery tasks.
+Use `getCapabilities()`, `listLuaFunctions(owner?)`, and `getLoadedExtensions()` for runtime discovery.
 
 Scripts are monitored via a debug hook. If the server shuts down or the client
 disconnects during execution, the script is cancelled. Printed output captured

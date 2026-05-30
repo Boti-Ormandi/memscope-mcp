@@ -41,6 +41,9 @@ orEmpty(x)           -- x or ""
 isValidPointer(val)  -- Check valid user-mode pointer
 clock()              -- High-resolution timer (milliseconds)
 sleep(ms)            -- Pause execution
+listLuaFunctions(owner?)  -- Registered {name, owner} entries
+getLoadedExtensions()     -- Extension/plugin owner names in load order
+getCapabilities()         -- Attached state, paths, wrapper flags
 ```
 
 ### 64-bit Safe Comparisons
@@ -67,7 +70,10 @@ Lua 5.4 also supports native operators: `a & b`, `a | b`, `a ~ b`, `a << n`, `a 
 """.strip()
 
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
-        engine = ctx.engine
+        self._engine = ctx.engine
+        self._session = ctx.session
+        self._table = ctx.table_factory
+        engine = self._engine
 
         return {
             # Address parsing
@@ -112,4 +118,75 @@ Lua 5.4 also supports native operators: `a & b`, `a | b`, `a ~ b`, `a << n`, `a 
             "enableDebug": lambda: setattr(engine, "_debug_errors", True),
             "disableDebug": lambda: setattr(engine, "_debug_errors", False),
             "getLastError": lambda: engine._last_error,
+            # Discovery
+            "listLuaFunctions": self._list_lua_functions,
+            "getLoadedExtensions": self._get_loaded_extensions,
+            "getCapabilities": self._get_capabilities,
         }
+
+    def _mapping_table(self, values: dict):
+        result = self._table()
+        for key, value in values.items():
+            result[key] = value
+        return result
+
+    def _list_lua_functions(self, owner=None):
+        owner_filter = str(owner) if owner not in (None, "") else None
+        result = self._table()
+        index = 1
+        for name, function_owner in self._engine._function_registry.items():
+            if owner_filter is not None and function_owner != owner_filter:
+                continue
+            result[index] = self._mapping_table({"name": name, "owner": function_owner})
+            index += 1
+        return result
+
+    def _get_loaded_extensions(self):
+        result = self._table()
+        seen = set()
+        index = 1
+        for owner in self._engine._function_registry.values():
+            if owner in seen:
+                continue
+            seen.add(owner)
+            result[index] = owner
+            index += 1
+        return result
+
+    def _get_capabilities(self):
+        from ...paths import LOGS_DIR, MEMSCOPE_HOME, PLUGINS_DIR, SCRIPTS_DIR
+        from ...utils.logger import LOGGER
+
+        caps = self._table()
+        attached = self._session.pm is not None
+        caps["attached"] = attached
+
+        if attached:
+            caps["process"] = self._mapping_table(
+                {
+                    "pid": self._session.pid,
+                    "name": self._session.target_process or "",
+                    "module_count": len(self._session.modules),
+                }
+            )
+
+        caps["paths"] = self._mapping_table(
+            {
+                "memscope_home": str(MEMSCOPE_HOME),
+                "logs_dir": str(LOGS_DIR),
+                "scripts_dir": str(SCRIPTS_DIR),
+                "plugins_dir": str(PLUGINS_DIR),
+                "session_log": str(LOGGER._get_log_file()),
+            }
+        )
+        caps["wrappers"] = self._mapping_table(
+            {
+                "tool_count": 10,
+                "error_normalization": True,
+                "scan_options": True,
+                "dump_options": True,
+                "module_paths": True,
+                "script_namespace_selection": True,
+            }
+        )
+        return caps
