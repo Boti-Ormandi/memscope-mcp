@@ -29,6 +29,7 @@ in your shell before starting the server.
 The full repository layout lives in [`docs/architecture.md`](docs/architecture.md). The pieces you'll actually touch:
 
 - [`memscope_mcp/server.py`](memscope_mcp/server.py) -- `@mcp.tool()` wrappers (one per MCP tool)
+- [`memscope_mcp/scanning/`](memscope_mcp/scanning/) -- internal strict scan contracts, compiler, bounded matcher, and result collectors (not a supported public Python API)
 - [`memscope_mcp/tools/`](memscope_mcp/tools/) -- tool implementations (`memory.py`, `scanning.py`, `pointers.py`, `types.py`, `execute.py`, `hooking.py`, `lua_scripts.py`)
 - [`memscope_mcp/tools/lua/`](memscope_mcp/tools/lua/) -- Lua engine (`engine.py`) plus themed function modules: `memory_read`, `memory_write`, `process_info`, `scanning_helpers`, `struct_helpers`, `modules`, `code_execution`, `comparisons`, `utilities`, `hooking`, `network`
 - [`memscope_mcp/extensions/`](memscope_mcp/extensions/) -- `LuaExtension` ABC + bootstrap + the seven core extensions under `core/`

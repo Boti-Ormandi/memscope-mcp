@@ -7,6 +7,7 @@ A tour of the memscope-mcp codebase: where things live, the design rules that sh
 ```
 memscope_mcp/
   server.py              # MCP tool definitions (thin wrappers + session logging)
+  scanning/              # Internal strict contracts, compiler, matcher, collectors
   session.py             # Process attach/detach, memory primitives, threads,
                          #   VirtualProtect, allocate_near, suspend/resume,
                          #   lifecycle callbacks
