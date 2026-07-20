@@ -259,6 +259,7 @@ class ScanDiagnostics(StrictModel):
     unique_bytes_examined: NonNegativeInt
     physical_read_calls: NonNegativeInt
     physical_bytes_read: NonNegativeInt
+    physical_cursor_prefix_bytes: NonNegativeInt
     region_count: NonNegativeInt
     span_count: NonNegativeInt
     candidate_count: NonNegativeInt

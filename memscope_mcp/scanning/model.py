@@ -224,6 +224,7 @@ class ScanStats:
     failed_read_spans: list[tuple[int, int]] = field(default_factory=list)
     planner_query_calls: int = 0
     reader_chunk_size: int = 0
+    physical_cursor_prefix_bytes: int = 0
     region_count: int = 0
     span_count: int = 0
     candidate_count: int = 0

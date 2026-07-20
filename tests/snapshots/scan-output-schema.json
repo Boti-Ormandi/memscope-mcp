@@ -210,6 +210,11 @@
           "title": "Physical Bytes Read",
           "type": "integer"
         },
+        "physical_cursor_prefix_bytes": {
+          "minimum": 0,
+          "title": "Physical Cursor Prefix Bytes",
+          "type": "integer"
+        },
         "physical_read_calls": {
           "minimum": 0,
           "title": "Physical Read Calls",
@@ -259,6 +264,7 @@
         "unique_bytes_examined",
         "physical_read_calls",
         "physical_bytes_read",
+        "physical_cursor_prefix_bytes",
         "region_count",
         "span_count",
         "candidate_count",

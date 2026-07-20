@@ -1,7 +1,10 @@
 """Tests for Lua engine edge cases and built-in functions."""
 
+import threading
+import time
+
 from memscope_mcp.tools.lua.code_execution import parse_lua_arg
-from memscope_mcp.tools.lua.engine import LUA_ENGINE
+from memscope_mcp.tools.lua.engine import LUA_ENGINE, MemscopeLuaEngine
 
 
 class TestLuaArgParsing:
@@ -305,3 +308,63 @@ class TestLuaIsNilAndOrZero:
     def test_orEmpty_value(self):
         result = LUA_ENGINE.execute('addResult("val", orEmpty("hello"))')
         assert result["results"]["val"] == "hello"
+
+
+class TestLuaExecutionOwnership:
+    def test_mutable_runtime_is_serialized_across_threads(self):
+        engine = MemscopeLuaEngine()
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_entered = threading.Event()
+        results = []
+
+        def block():
+            first_entered.set()
+            assert release_first.wait(2)
+
+        def mark():
+            second_entered.set()
+            return 7
+
+        engine.register_functions("test", {"block": block, "mark": mark})
+        first = threading.Thread(target=lambda: results.append(engine.execute("block(); return 1")))
+        second = threading.Thread(target=lambda: results.append(engine.execute("return mark()")))
+
+        first.start()
+        assert first_entered.wait(2)
+        second.start()
+        time.sleep(0.05)
+        assert not second_entered.is_set()
+        release_first.set()
+        first.join(2)
+        second.join(2)
+
+        assert second_entered.is_set()
+        assert len(results) == 2
+        assert all(result["success"] for result in results)
+
+    def test_engine_owned_interrupt_is_stable_and_cancels_registered_work(self):
+        engine = MemscopeLuaEngine()
+        interrupt = engine.execution_interrupt
+        started = threading.Event()
+        result = []
+
+        def cooperative_work():
+            started.set()
+            while True:
+                interrupt.check()
+                time.sleep(0.001)
+
+        engine.register_functions("test", {"cooperativeWork": cooperative_work})
+        worker = threading.Thread(target=lambda: result.append(engine.execute("cooperativeWork()")))
+        worker.start()
+        assert started.wait(2)
+        assert interrupt.deadline_ns is not None
+        engine.cancel()
+        worker.join(2)
+
+        assert not worker.is_alive()
+        assert result[0]["success"] is False
+        assert result[0]["error"] == "CANCELLED"
+        assert engine.execution_interrupt is interrupt
+        assert interrupt.deadline_ns is None

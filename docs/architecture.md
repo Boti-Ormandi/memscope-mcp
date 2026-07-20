@@ -7,8 +7,9 @@ A tour of the memscope-mcp codebase: where things live, the design rules that sh
 ```
 memscope_mcp/
   server.py              # MCP tool definitions (thin wrappers + session logging)
-  scanning/              # Internal contracts, snapshots, scope planner,
-                         #   bounded reader, matcher, collectors
+  scanning/              # Internal contracts, signed cursors, snapshots,
+                         #   planner, bounded reader, matcher, collectors,
+                         #   synchronous executor and async worker adapter
   session.py             # Process attach/detach, generations, scan leases,
                          #   memory primitives, threads, VirtualProtect,
                          #   allocate_near, suspend/resume, lifecycle callbacks
@@ -69,7 +70,11 @@ The internal scanner package compiles AOB input once into canonical bytes, a mas
 
 The package is an internal engine boundary rather than a supported Python API. It also defines immutable, duplicate-aware module snapshots and stable scan leases. `DebugSession` publishes a monotonically increasing generation on each successful process open or explicit module refresh; detach, switch, reconnect, and refresh signal active leases and wait for release before closing or replacing their handle identity.
 
-Scopes are normalized against the lease snapshot before any target read. Module scopes resolve every requested basename atomically and default to readable `MEM_IMAGE` pages in deterministic base order; explicit ranges use exact half-open bounds and may include image, mapped, and private pages. The planner walks each interval with `VirtualQueryEx`, applies memory-type and executable/writable filters, and emits clipped non-overlapping spans. The bounded reader never crosses those spans, recursively salvages readable page-aligned fragments after a changed protection causes a larger read to fail, and carries a sticky gap flag when coverage is incomplete. One overlap stream retains at most `pattern_length - 1` bytes only across exact successful continuity, so AOB, string, and pointer queries can find cross-chunk and adjacent-span matches without fabricating matches across unreadable gaps. MCP formatting and Lua table construction remain outside the engine.
+Scopes are normalized against the lease snapshot before any target read. Module scopes resolve every requested basename atomically and default to readable `MEM_IMAGE` pages in deterministic base order; explicit ranges use exact half-open bounds and may include image, mapped, and private pages. The planner walks each interval with `VirtualQueryEx`, applies memory-type and executable/writable filters, and emits clipped non-overlapping spans. The bounded reader never crosses those spans, recursively salvages readable page-aligned fragments after a changed protection causes a larger read to fail, and carries a sticky gap flag when coverage is incomplete. One overlap stream retains at most `pattern_length - 1` bytes only across exact successful continuity, so AOB, string, and pointer queries can find cross-chunk and adjacent-span matches without fabricating matches across unreadable gaps.
+
+Address pagination uses authenticated, self-contained continuation state rather than offsets. A cursor carries the compiled query, normalized scope and filters, attachment identity, first unexamined candidate address, cumulative match budget, and sticky gap state. A server-local random key authenticates the bounded token; continuation replans live memory under the same generation and clips planning exactly at the resume address, so earlier candidate starts are neither read logically nor emitted again. A full page stops without searching for proof of another hit, which means a full terminal page may legitimately be followed by one empty terminal page.
+
+`ScanExecutor` owns normalization, one stable lease, planning, reading, matching, and construction of one validated mode-specific response. `execute_scan_async` runs that synchronous work in an AnyIO worker thread, starts the absolute timeout before dispatch, propagates request cancellation through a thread-safe event, and waits under cancellation shielding until the worker releases its lease. The mutable Lua runtime is separately serialized and exposes a stable engine-owned interruption capability for registered functions. MCP formatting and Lua table construction remain outside the matcher/reader engine; the currently registered `0.2.0` scan routes remain unchanged until the breaking public contract is switched as one unit.
 
 ### Inline function hooking with shared ring buffer
 

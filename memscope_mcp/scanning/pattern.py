@@ -112,6 +112,26 @@ def compile_exact_bytes(data: bytes | bytearray | memoryview) -> CompiledPattern
     return _compile_canonical(exact, b"\xff" * len(exact))
 
 
+def compile_canonical_pattern(pattern_bytes: bytes, mask: bytes) -> CompiledPattern:
+    """Rebuild a cursor-carried canonical pattern after strict structural validation."""
+
+    if not isinstance(pattern_bytes, bytes) or not isinstance(mask, bytes):
+        raise PatternCompileError(PatternErrorReason.INVALID_TYPE, "Canonical pattern and mask must be bytes")
+    if not 1 <= len(pattern_bytes) <= MAX_PATTERN_BYTES or len(mask) != len(pattern_bytes):
+        raise PatternCompileError(
+            PatternErrorReason.BYTE_LENGTH,
+            f"Compiled pattern length must be between 1 and {MAX_PATTERN_BYTES} bytes",
+        )
+    if any(value not in (0, 0xFF) for value in mask):
+        raise PatternCompileError(PatternErrorReason.INVALID_TOKEN, "Canonical mask bytes must be 0 or 255")
+    if any(value and not fixed for value, fixed in zip(pattern_bytes, mask, strict=True)):
+        raise PatternCompileError(
+            PatternErrorReason.INVALID_TOKEN,
+            "Canonical wildcard bytes must use the zero value",
+        )
+    return _compile_canonical(pattern_bytes, mask)
+
+
 def make_aob_query(pattern: str, *, alignment: int = 1) -> ScanQuery:
     return ScanQuery(kind=QueryKind.AOB, pattern=compile_aob_pattern(pattern), alignment=alignment)
 

@@ -5,7 +5,9 @@ by extensions via register_functions(), not wired here.
 """
 
 import re
+import threading
 import time
+from collections.abc import Callable
 from typing import Any, Optional
 
 from lupa import LuaError, LuaRuntime
@@ -26,6 +28,27 @@ _CANCEL_MARKER = "[CANCELLED]"
 _TIMEOUT_MARKER = "[TIMEOUT]"
 
 
+class ExecutionInterrupt:
+    """Stable engine-owned interruption capability for registered functions."""
+
+    __slots__ = ("_check", "_deadline_supplier")
+
+    def __init__(
+        self,
+        check: Callable[[], None],
+        deadline_supplier: Callable[[], int | None],
+    ) -> None:
+        self._check = check
+        self._deadline_supplier = deadline_supplier
+
+    def check(self) -> None:
+        self._check()
+
+    @property
+    def deadline_ns(self) -> int | None:
+        return self._deadline_supplier()
+
+
 class MemscopeLuaEngine:
     """Lua scripting environment for memory research.
 
@@ -41,10 +64,13 @@ class MemscopeLuaEngine:
         self._debug_errors: bool = False
         self._function_registry: dict[str, str] = {}  # func_name -> owner_name
         self._execution_guard = LuaExecutionGuard()
+        self._execution_lock = threading.Lock()
 
         # Cancellation / timeout state
-        self._cancelled: bool = False
-        self._deadline: float | None = None
+        self._cancel_event = threading.Event()
+        self._deadline_ns: int | None = None
+        self._clock = time.monotonic_ns
+        self._execution_interrupt = ExecutionInterrupt(self._check_cancel, lambda: self._deadline_ns)
 
         # Initialize per-execution Lua globals
         g = self.lua.globals()
@@ -86,24 +112,24 @@ class MemscopeLuaEngine:
     # ========== Cancellation ==========
 
     def _check_cancel(self) -> None:
-        """Called from Lua debug hook every N instructions.
+        """Called from Lua and registered Python functions at interruption checkpoints."""
 
-        Raises on cancellation or timeout, which propagates as a LuaError
-        and aborts the running script.
-        """
-        if self._cancelled:
+        if self._cancel_event.is_set():
             raise Exception(_CANCEL_MARKER)
-        if self._deadline is not None and time.monotonic() > self._deadline:
-            self._cancelled = True
+        if self._deadline_ns is not None and self._clock() >= self._deadline_ns:
+            self._cancel_event.set()
             raise Exception(_TIMEOUT_MARKER)
 
-    def cancel(self) -> None:
-        """Cancel the currently running Lua script.
+    @property
+    def execution_interrupt(self) -> ExecutionInterrupt:
+        """Return the stable interruption capability owned by this runtime."""
 
-        The script will abort at the next debug hook check point
-        (every ~10K VM instructions).
-        """
-        self._cancelled = True
+        return self._execution_interrupt
+
+    def cancel(self) -> None:
+        """Cancel the currently running Lua script at its next checkpoint."""
+
+        self._cancel_event.set()
 
     # ========== Per-Execution Helpers ==========
     # These are bound to the engine's per-execution state (_output, _last_error,
@@ -247,24 +273,31 @@ class MemscopeLuaEngine:
     # ========== Script Execution ==========
 
     def execute(self, script: str, args: Optional[dict] = None, timeout: float | None = None) -> dict[str, Any]:
-        """Execute Lua script and return results.
-
-        Scripts can run without an attached process. Process introspection
-        functions (getProcessList, getServices, etc.) work without attachment.
-        Memory functions return nil when no process is attached.
-        Use attach(name_or_pid) from Lua to attach to a process.
+        """Execute one script with exclusive ownership of the mutable Lua runtime.
 
         Args:
             script: Lua source code to execute.
-            args: Optional dict passed as the Lua 'args' global table.
-            timeout: Optional timeout in seconds. Script is aborted if exceeded.
+            args: Optional values exposed through the Lua ``args`` global.
+            timeout: Optional execution timeout in seconds.
+
+        Returns:
+            A structured success or failure dictionary.
         """
+
+        with self._execution_lock:
+            try:
+                return self._execute(script, args=args, timeout=timeout)
+            finally:
+                self._deadline_ns = None
+                self._cancel_event.clear()
+
+    def _execute(self, script: str, args: Optional[dict] = None, timeout: float | None = None) -> dict[str, Any]:
         self._output = []
         self._last_error = None
-        self._cancelled = False
+        self._cancel_event.clear()
         self._execution_guard = LuaExecutionGuard()
         effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT
-        self._deadline = time.monotonic() + effective_timeout
+        self._deadline_ns = self._clock() + int(effective_timeout * 1_000_000_000)
 
         # Preprocess script
         processed_script, conversions = self._preprocess_script(script)

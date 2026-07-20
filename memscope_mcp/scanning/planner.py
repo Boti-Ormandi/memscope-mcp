@@ -182,6 +182,7 @@ def plan_scan_regions(
     *,
     query_memory: VirtualQuery = pymem.memory.virtual_query,
     control: ScanControl | None = None,
+    resume_address: int | None = None,
 ) -> RegionPlan:
     """Walk every normalized interval through VirtualQueryEx before target reads."""
 
@@ -193,6 +194,12 @@ def plan_scan_regions(
         raise ValueError("scope and lease attachment identities do not match")
     if not callable(query_memory):
         raise TypeError("query_memory must be callable")
+    if resume_address is not None and (
+        isinstance(resume_address, bool)
+        or not isinstance(resume_address, int)
+        or not 0 <= resume_address <= _MAX_ADDRESS_EXCLUSIVE
+    ):
+        raise ValueError("resume_address must be an unsigned 64-bit address boundary or None")
     if scope.filters.section_names:
         raise ScopeNormalizationError(
             "INVALID_SCOPE",
@@ -215,7 +222,9 @@ def plan_scan_regions(
             termination_reason = reason
             break
 
-        address = scope_range.start
+        address = scope_range.start if resume_address is None else max(scope_range.start, resume_address)
+        if address >= scope_range.end_exclusive:
+            continue
         while address < scope_range.end_exclusive:
             reason = active_control.poll()
             if reason is not None:

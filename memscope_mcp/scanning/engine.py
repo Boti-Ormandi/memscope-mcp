@@ -65,8 +65,12 @@ def execute_scan_plan(
     target_alive: TargetAlive | None = None,
     chunk_size: int = PROVISIONAL_READ_CHUNK_SIZE,
     page_size: int = DEFAULT_PAGE_SIZE,
+    initial_read_gaps_detected: bool = False,
 ) -> ScanResult:
     """Stream one region plan through the bounded reader and shared matcher."""
+
+    if not isinstance(initial_read_gaps_detected, bool):
+        raise TypeError("initial_read_gaps_detected must be a bool")
 
     stats = ScanStats()
     source_kwargs = {
@@ -90,7 +94,7 @@ def execute_scan_plan(
         collector,
         control=source.control,
         stats=stats,
-        read_gap_supplier=lambda: source.read_gaps_detected,
+        read_gap_supplier=lambda: initial_read_gaps_detected or source.read_gaps_detected,
         exhaustion_reason_supplier=lambda: source.termination_reason,
     )
 
