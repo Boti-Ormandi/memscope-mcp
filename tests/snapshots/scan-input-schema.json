@@ -1,0 +1,314 @@
+{
+  "$defs": {
+    "AllModulesScopeInput": {
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/ScanFiltersInput"
+        },
+        "kind": {
+          "const": "all_modules",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "AllModulesScopeInput",
+      "type": "object"
+    },
+    "ModulesScopeInput": {
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/ScanFiltersInput"
+        },
+        "kind": {
+          "const": "modules",
+          "title": "Kind",
+          "type": "string"
+        },
+        "names": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Names",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "names"
+      ],
+      "title": "ModulesScopeInput",
+      "type": "object"
+    },
+    "RangeScopeInput": {
+      "additionalProperties": false,
+      "properties": {
+        "end_exclusive": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "End Exclusive"
+        },
+        "filters": {
+          "$ref": "#/$defs/ScanFiltersInput"
+        },
+        "kind": {
+          "const": "range",
+          "title": "Kind",
+          "type": "string"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Start"
+        }
+      },
+      "required": [
+        "kind",
+        "start",
+        "end_exclusive"
+      ],
+      "title": "RangeScopeInput",
+      "type": "object"
+    },
+    "ScanFiltersInput": {
+      "additionalProperties": false,
+      "properties": {
+        "executable": {
+          "default": "any",
+          "enum": [
+            "any",
+            "required",
+            "forbidden"
+          ],
+          "title": "Executable",
+          "type": "string"
+        },
+        "memory_types": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "image",
+                  "mapped",
+                  "private"
+                ],
+                "type": "string"
+              },
+              "maxItems": 3,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Types"
+        },
+        "sections": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sections"
+        },
+        "writable": {
+          "default": "any",
+          "enum": [
+            "any",
+            "required",
+            "forbidden"
+          ],
+          "title": "Writable",
+          "type": "string"
+        }
+      },
+      "title": "ScanFiltersInput",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Flat start-or-continuation request accepted by the strict MCP adapter.",
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "cursor"
+        ]
+      },
+      "required": [
+        "pattern"
+      ]
+    },
+    {
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "pattern"
+            ]
+          },
+          {
+            "required": [
+              "scope"
+            ]
+          },
+          {
+            "required": [
+              "mode"
+            ]
+          },
+          {
+            "required": [
+              "max_matches"
+            ]
+          }
+        ]
+      },
+      "required": [
+        "cursor"
+      ]
+    }
+  ],
+  "properties": {
+    "cursor": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cursor"
+    },
+    "diagnostics": {
+      "default": false,
+      "title": "Diagnostics",
+      "type": "boolean"
+    },
+    "limit": {
+      "anyOf": [
+        {
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limit"
+    },
+    "max_matches": {
+      "anyOf": [
+        {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Matches"
+    },
+    "mode": {
+      "default": "addresses",
+      "enum": [
+        "addresses",
+        "first",
+        "count"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "pattern": {
+      "anyOf": [
+        {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pattern"
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "all_modules": "#/$defs/AllModulesScopeInput",
+              "modules": "#/$defs/ModulesScopeInput",
+              "range": "#/$defs/RangeScopeInput"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AllModulesScopeInput"
+            },
+            {
+              "$ref": "#/$defs/ModulesScopeInput"
+            },
+            {
+              "$ref": "#/$defs/RangeScopeInput"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scope"
+    },
+    "timeout_ms": {
+      "default": 30000,
+      "maximum": 30000,
+      "minimum": 100,
+      "title": "Timeout Ms",
+      "type": "integer"
+    }
+  },
+  "title": "ScanInput",
+  "type": "object"
+}

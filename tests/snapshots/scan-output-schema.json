@@ -1,0 +1,437 @@
+{
+  "$defs": {
+    "AddressScanSuccess": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScanDiagnostics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "matches": {
+          "items": {
+            "$ref": "#/$defs/ScanHit"
+          },
+          "maxItems": 500,
+          "title": "Matches",
+          "type": "array"
+        },
+        "mode": {
+          "const": "addresses",
+          "title": "Mode",
+          "type": "string"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next Cursor"
+        },
+        "returned_count": {
+          "anyOf": [
+            {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "const": 0,
+              "type": "integer"
+            }
+          ],
+          "title": "Returned Count"
+        },
+        "sequence_returned_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Sequence Returned Count",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/ScanStatus"
+        },
+        "success": {
+          "const": true,
+          "title": "Success",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success",
+        "mode",
+        "matches",
+        "returned_count",
+        "sequence_returned_count",
+        "next_cursor",
+        "status"
+      ],
+      "title": "AddressScanSuccess",
+      "type": "object"
+    },
+    "CountScanSuccess": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "const": 0,
+              "type": "integer"
+            }
+          ],
+          "title": "Count"
+        },
+        "diagnostics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScanDiagnostics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mode": {
+          "const": "count",
+          "title": "Mode",
+          "type": "string"
+        },
+        "observation": {
+          "enum": [
+            "complete_traversal",
+            "partial_traversal"
+          ],
+          "title": "Observation",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ScanStatus"
+        },
+        "success": {
+          "const": true,
+          "title": "Success",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success",
+        "mode",
+        "count",
+        "observation",
+        "status"
+      ],
+      "title": "CountScanSuccess",
+      "type": "object"
+    },
+    "FirstScanSuccess": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScanDiagnostics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "match": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScanHit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "const": "first",
+          "title": "Mode",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ScanStatus"
+        },
+        "success": {
+          "const": true,
+          "title": "Success",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success",
+        "mode",
+        "match",
+        "status"
+      ],
+      "title": "FirstScanSuccess",
+      "type": "object"
+    },
+    "ScanDiagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_count": {
+          "minimum": 0,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "control_polls": {
+          "minimum": 0,
+          "title": "Control Polls",
+          "type": "integer"
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "number"
+        },
+        "physical_bytes_read": {
+          "minimum": 0,
+          "title": "Physical Bytes Read",
+          "type": "integer"
+        },
+        "physical_read_calls": {
+          "minimum": 0,
+          "title": "Physical Read Calls",
+          "type": "integer"
+        },
+        "region_count": {
+          "minimum": 0,
+          "title": "Region Count",
+          "type": "integer"
+        },
+        "span_count": {
+          "minimum": 0,
+          "title": "Span Count",
+          "type": "integer"
+        },
+        "strategy_counts": {
+          "additionalProperties": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxProperties": 4,
+          "propertyNames": {
+            "enum": [
+              "exact",
+              "all_wildcard",
+              "anchor",
+              "regex"
+            ]
+          },
+          "title": "Strategy Counts",
+          "type": "object"
+        },
+        "unique_bytes_examined": {
+          "minimum": 0,
+          "title": "Unique Bytes Examined",
+          "type": "integer"
+        },
+        "verification_count": {
+          "minimum": 0,
+          "title": "Verification Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "duration_ms",
+        "strategy_counts",
+        "unique_bytes_examined",
+        "physical_read_calls",
+        "physical_bytes_read",
+        "region_count",
+        "span_count",
+        "candidate_count",
+        "verification_count",
+        "control_polls"
+      ],
+      "title": "ScanDiagnostics",
+      "type": "object"
+    },
+    "ScanFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "error": {
+          "enum": [
+            "INVALID_PATTERN",
+            "INVALID_SCOPE",
+            "INVALID_MODE",
+            "INVALID_ARGUMENT",
+            "MODULE_NOT_FOUND",
+            "AMBIGUOUS_MODULE",
+            "SECTION_NOT_FOUND",
+            "PROCESS_NOT_ATTACHED",
+            "INVALID_CURSOR",
+            "CURSOR_STALE",
+            "TARGET_CHANGED",
+            "INTERNAL_SCAN_ERROR"
+          ],
+          "title": "Error",
+          "type": "string"
+        },
+        "field": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Field"
+        },
+        "hint": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hint"
+        },
+        "success": {
+          "const": false,
+          "default": false,
+          "title": "Success",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "error",
+        "detail"
+      ],
+      "title": "ScanFailure",
+      "type": "object"
+    },
+    "ScanHit": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "pattern": "^0x(?:0|[1-9A-F][0-9A-F]*)$",
+          "title": "Address",
+          "type": "string"
+        },
+        "module": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Module"
+        },
+        "module_offset": {
+          "anyOf": [
+            {
+              "pattern": "^0x(?:0|[1-9A-F][0-9A-F]*)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Module Offset"
+        }
+      },
+      "required": [
+        "address",
+        "module",
+        "module_offset"
+      ],
+      "title": "ScanHit",
+      "type": "object"
+    },
+    "ScanStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "read_gaps_detected": {
+          "title": "Read Gaps Detected",
+          "type": "boolean"
+        },
+        "termination": {
+          "enum": [
+            "scope_exhausted",
+            "page_limit",
+            "match_limit",
+            "first_hit",
+            "timeout",
+            "cancelled",
+            "target_changed",
+            "reader_error"
+          ],
+          "title": "Termination",
+          "type": "string"
+        }
+      },
+      "required": [
+        "termination",
+        "read_gaps_detected"
+      ],
+      "title": "ScanStatus",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "discriminator": {
+        "mapping": {
+          "addresses": "#/$defs/AddressScanSuccess",
+          "count": "#/$defs/CountScanSuccess",
+          "first": "#/$defs/FirstScanSuccess"
+        },
+        "propertyName": "mode"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AddressScanSuccess"
+        },
+        {
+          "$ref": "#/$defs/FirstScanSuccess"
+        },
+        {
+          "$ref": "#/$defs/CountScanSuccess"
+        }
+      ]
+    },
+    {
+      "$ref": "#/$defs/ScanFailure"
+    }
+  ],
+  "title": "ScanResponse"
+}
