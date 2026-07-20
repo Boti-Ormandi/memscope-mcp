@@ -7,10 +7,11 @@ A tour of the memscope-mcp codebase: where things live, the design rules that sh
 ```
 memscope_mcp/
   server.py              # MCP tool definitions (thin wrappers + session logging)
-  scanning/              # Internal strict contracts, hybrid matcher, collectors
-  session.py             # Process attach/detach, memory primitives, threads,
-                         #   VirtualProtect, allocate_near, suspend/resume,
-                         #   lifecycle callbacks
+  scanning/              # Internal contracts, attachment snapshots, matcher,
+                         #   collectors
+  session.py             # Process attach/detach, generations, scan leases,
+                         #   memory primitives, threads, VirtualProtect,
+                         #   allocate_near, suspend/resume, lifecycle callbacks
   extensions/            # Generic LuaExtension contract + bootstrap
     base.py              # LuaExtension ABC and ExtensionContext
     bootstrap.py         # Core extension + user plugin registration
@@ -66,7 +67,7 @@ Five rules shape what goes into the codebase and what stays out.
 
 The internal scanner package compiles AOB input once into canonical bytes, a mask, maximal fixed segments, and an overlapping regex fallback. Exact patterns use `bytes.find`; all-wildcard patterns generate eligible addresses arithmetically; masked patterns sample a constant-size beginning/middle/end slice, rank every fixed segment for anchor selectivity, then choose either C-level anchor search with ordered segment verification or the precompiled regex when anchor candidates would be too dense. Result collectors own first-hit, page, count, and bounded-address stopping, so matching stops at the committed boundary without constructing an unbounded result list or searching for a pagination lookahead hit.
 
-The package is an internal engine boundary rather than a supported Python API. Process leasing, region planning, target reads, MCP formatting, and Lua table construction remain outside the matcher.
+The package is an internal engine boundary rather than a supported Python API. It also defines immutable, duplicate-aware module snapshots and stable scan leases. `DebugSession` publishes a monotonically increasing generation on each successful process open or explicit module refresh; detach, switch, reconnect, and refresh signal active leases and wait for release before closing or replacing their handle identity. Region planning, target reads, MCP formatting, and Lua table construction remain outside the matcher.
 
 ### Inline function hooking with shared ring buffer
 
@@ -98,7 +99,7 @@ The contract is what makes hooking, PEB introspection, netcap, and any future do
 
 ### Transparent reconnection
 
-A reverse-engineering session typically outlives the target process. `DebugSession.ensure_attached` ([`memscope_mcp/session.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/session.py)) polls the cached handle with `GetExitCodeProcess` on every tool call; if the process has exited, it transparently re-opens by name and re-caches modules. Tools never surface a "process disappeared" error on a transient restart.
+A reverse-engineering session typically outlives the target process. `DebugSession.ensure_attached` ([`memscope_mcp/session.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/session.py)) polls the cached handle with `GetExitCodeProcess` on every tool call; if the process has exited, it retires active scan leases, closes the old handle only after they release, and transparently re-opens by name. Every successful reopen receives a new attachment generation and immutable module snapshot. The `modules` tool can explicitly rebuild that snapshot with `refresh=true`; a successful refresh advances the generation without firing process attach/detach callbacks or reopening the handle.
 
 ### Lua large-hex preprocessor
 

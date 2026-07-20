@@ -186,6 +186,32 @@ def test_modules_filter_and_limit_apply_before_formatting(monkeypatch):
     assert result["total"] == 3
 
 
+def test_modules_refreshes_snapshot_when_requested(monkeypatch):
+    calls = []
+    monkeypatch.setattr(server.SESSION, "pm", object())
+    monkeypatch.setattr(server.SESSION, "modules", {"target.exe": {"base": 0x1000, "size": 0x2000}})
+    monkeypatch.setattr(server.SESSION, "_module_snapshot", None)
+    monkeypatch.setattr(server.SESSION, "refresh_modules", lambda: calls.append("refresh") or True)
+
+    result = server.modules(refresh=True)
+
+    assert result["success"] is True
+    assert calls == ["refresh"]
+
+
+def test_modules_reports_refresh_failure(monkeypatch):
+    monkeypatch.setattr(server.SESSION, "pm", object())
+    monkeypatch.setattr(server.SESSION, "refresh_modules", lambda: False)
+
+    result = server.modules(refresh=True)
+
+    assert result == {
+        "success": False,
+        "error": "MODULE_REFRESH_FAILED",
+        "detail": "Could not rebuild the loaded-module snapshot",
+    }
+
+
 def test_read_wrapper_forwards_to_read_typed(monkeypatch):
     calls = []
 

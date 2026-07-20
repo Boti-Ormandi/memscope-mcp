@@ -2,6 +2,9 @@
 
 import ctypes
 import logging
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from ctypes import wintypes
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -10,6 +13,14 @@ import pymem
 import pymem.memory
 import pymem.process
 import pymem.ressources.structure as structs
+
+from .scanning.lifecycle import (
+    AttachmentState,
+    ModuleSnapshot,
+    ScanLease,
+    ScanLeaseUnavailable,
+    build_module_records,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +190,18 @@ class DebugSession:
     # Track remote allocations for cleanup on detach
     _tracked_allocations: set[int] = field(default_factory=set)
 
+    # Stable scanner attachment identity and lease retirement.
+    _attachment_state: AttachmentState = field(default=AttachmentState.DETACHED, init=False, repr=False)
+    _generation_counter: int = field(default=0, init=False, repr=False)
+    _attachment_generation: int = field(default=0, init=False, repr=False)
+    _module_snapshot: ModuleSnapshot | None = field(default=None, init=False, repr=False)
+    _lifecycle_cancel: threading.Event | None = field(default=None, init=False, repr=False)
+    _active_scan_leases: int = field(default=0, init=False, repr=False)
+    _lifecycle_condition: threading.Condition = field(
+        default_factory=lambda: threading.Condition(threading.RLock()), init=False, repr=False
+    )
+    _lifecycle_mutation_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+
     # ========== Lifecycle Callback Registration ==========
 
     def register_on_attach(self, name: str, callback: Callable[["DebugSession"], None]) -> None:
@@ -226,70 +249,198 @@ class DebugSession:
 
     # ========== Process Switching ==========
 
+    @property
+    def attachment_state(self) -> AttachmentState:
+        """Return the current lease-visible attachment state."""
+
+        with self._lifecycle_condition:
+            return self._attachment_state
+
+    @property
+    def attachment_generation(self) -> int:
+        """Return the current generation, or zero while detached."""
+
+        with self._lifecycle_condition:
+            return self._attachment_generation
+
+    @property
+    def module_snapshot(self) -> ModuleSnapshot | None:
+        """Return the immutable module snapshot for the current generation."""
+
+        with self._lifecycle_condition:
+            return self._module_snapshot
+
+    @property
+    def active_scan_leases(self) -> int:
+        """Return the number of active stable-handle scan leases."""
+
+        with self._lifecycle_condition:
+            return self._active_scan_leases
+
     def switch_process(self, process_name: str, pid: int = 0) -> bool:
-        """Canonical process switch with lifecycle callbacks.
+        """Canonical process switch with serialized lifecycle transitions."""
 
-        Detaches from current process (firing detach callbacks),
-        opens the new process, and fires attach callbacks on success.
-
-        Args:
-            process_name: Target process name (e.g. "Game.exe").
-            pid: Optional PID for disambiguation.
-
-        Returns:
-            True if the new process was opened successfully.
-        """
-        self.detach()
-        self.target_process = process_name
-        self.pid = pid
-
-        if not self._open_process():
-            return False
-
-        self._fire_attach()
-        return True
+        with self._lifecycle_mutation_lock:
+            self._detach_locked()
+            self.target_process = process_name
+            self.pid = pid
+            if not self._open_process_locked():
+                return False
+            self._fire_attach()
+            return True
 
     def ensure_attached(self) -> bool:
-        """Re-attach if process restarted. Returns True if connected."""
-        if self.pm is None:
-            if not self._open_process():
-                return False
-            self._fire_attach()
+        """Re-attach if the process restarted. Returns True if connected."""
+
+        with self._lifecycle_mutation_lock:
+            if self.pm is None or self._attachment_state is not AttachmentState.ATTACHED:
+                if not self._open_process_locked():
+                    return False
+                self._fire_attach()
+                return True
+
+            if not self._is_process_alive():
+                self._detach_locked()
+                if not self._open_process_locked():
+                    return False
+                self._fire_attach()
+                return True
+
             return True
 
-        # Check if process is still alive (no memory read needed)
-        if not self._is_process_alive():
-            self.detach()
-            if not self._open_process():
+    @contextmanager
+    def acquire_scan_lease(self) -> Iterator[ScanLease]:
+        """Borrow one stable process handle and module snapshot for a scan."""
+
+        with self._lifecycle_condition:
+            if self._attachment_state is AttachmentState.RETIRING:
+                raise ScanLeaseUnavailable("TARGET_CHANGED", "Process attachment is changing")
+            if (
+                self._attachment_state is not AttachmentState.ATTACHED
+                or self.pm is None
+                or self._module_snapshot is None
+                or self._lifecycle_cancel is None
+            ):
+                raise ScanLeaseUnavailable("PROCESS_NOT_ATTACHED", "Call attach first")
+
+            process_handle = getattr(self.pm.process_handle, "value", self.pm.process_handle)
+            if isinstance(process_handle, bool) or not isinstance(process_handle, int) or process_handle <= 0:
+                raise ScanLeaseUnavailable("PROCESS_NOT_ATTACHED", "Attached process handle is unavailable")
+
+            self._active_scan_leases += 1
+            lease = ScanLease(
+                generation=self._attachment_generation,
+                pid=self.pid,
+                process_handle=process_handle,
+                target_process=self.target_process,
+                modules=self._module_snapshot,
+                lifecycle_cancel=self._lifecycle_cancel,
+            )
+
+        try:
+            yield lease
+        finally:
+            with self._lifecycle_condition:
+                self._active_scan_leases -= 1
+                if self._active_scan_leases < 0:
+                    self._active_scan_leases = 0
+                    raise RuntimeError("scan lease count underflow")
+                if self._active_scan_leases == 0:
+                    self._lifecycle_condition.notify_all()
+
+    def refresh_modules(self) -> bool:
+        """Atomically publish a new immutable module snapshot and generation."""
+
+        with self._lifecycle_mutation_lock:
+            with self._lifecycle_condition:
+                if self._attachment_state is not AttachmentState.ATTACHED or self.pm is None:
+                    return False
+                candidate_pm = self.pm
+                next_generation = self._generation_counter + 1
+
+            try:
+                records = build_module_records(candidate_pm.list_modules())
+                snapshot = ModuleSnapshot.create(records, next_generation)
+            except Exception as exc:
+                logger.warning("Module refresh failed before publication: %s", exc)
                 return False
-            self._fire_attach()
+
+            interruption = self._begin_retirement_locked()
+            with self._lifecycle_condition:
+                self._generation_counter = next_generation
+                self._attachment_generation = next_generation
+                self._module_snapshot = snapshot
+                self.modules = snapshot.to_legacy_dict()
+                self._lifecycle_cancel = threading.Event()
+                self._attachment_state = AttachmentState.ATTACHED
+                self._lifecycle_condition.notify_all()
+
+            if interruption is not None:
+                raise interruption
             return True
 
-        return True
+    def _open_process_locked(self) -> bool:
+        """Open and fully validate a candidate process before publication."""
 
-    def _open_process(self) -> bool:
-        """Open the target process and cache modules.
-
-        Uses Pymem(pid_or_name) constructor so check_wow64() runs AFTER
-        the process handle is opened (not against a null handle).
-        """
         if not self.target_process and not self.pid:
             return False
+
+        candidate_pm: pymem.Pymem | None = None
         try:
-            if self.pid:
-                self.pm = pymem.Pymem(self.pid)
-            else:
-                self.pm = pymem.Pymem(self.target_process)
-                self.pid = self.pm.process_id
-            self._cache_modules()
-            return True
-        except Exception:
-            self.pm = None
+            candidate_pm = pymem.Pymem(self.pid if self.pid else self.target_process)
+            candidate_pid = int(candidate_pm.process_id)
+            records = build_module_records(candidate_pm.list_modules())
+            next_generation = self._generation_counter + 1
+            snapshot = ModuleSnapshot.create(records, next_generation)
+        except Exception as exc:
+            logger.debug("Process open failed before publication: %s", exc)
+            if candidate_pm is not None:
+                try:
+                    candidate_pm.close_process()
+                except BaseException:
+                    pass
+            with self._lifecycle_condition:
+                self.pm = None
+                self._module_snapshot = None
+                self._lifecycle_cancel = None
+                self.modules.clear()
+                self._attachment_generation = 0
+                self._attachment_state = AttachmentState.DETACHED
+                self._lifecycle_condition.notify_all()
             return False
+
+        with self._lifecycle_condition:
+            self.pm = candidate_pm
+            self.pid = candidate_pid
+            self._generation_counter = next_generation
+            self._attachment_generation = next_generation
+            self._module_snapshot = snapshot
+            self.modules = snapshot.to_legacy_dict()
+            self._lifecycle_cancel = threading.Event()
+            self._attachment_state = AttachmentState.ATTACHED
+            self._lifecycle_condition.notify_all()
+        return True
+
+    def _begin_retirement_locked(self) -> BaseException | None:
+        """Cancel leases and wait for their release without abandoning cleanup."""
+
+        interruption: BaseException | None = None
+        with self._lifecycle_condition:
+            self._attachment_state = AttachmentState.RETIRING
+            if self._lifecycle_cancel is not None:
+                self._lifecycle_cancel.set()
+            while self._active_scan_leases:
+                try:
+                    self._lifecycle_condition.wait()
+                except BaseException as exc:
+                    if interruption is None:
+                        interruption = exc
+        return interruption
 
     def _is_process_alive(self) -> bool:
         """Check if the attached process is still running."""
-        if self.pm is None or not self.pm.process_handle:
+
+        if self.pm is None or not getattr(self.pm, "process_handle", None):
             return False
         try:
             exit_code = wintypes.DWORD()
@@ -299,19 +450,6 @@ class DebugSession:
             return exit_code.value == STILL_ACTIVE
         except Exception:
             return False
-
-    def _cache_modules(self) -> None:
-        """Cache all loaded module base addresses."""
-        if self.pm is None:
-            return
-
-        self.modules.clear()
-        for module in self.pm.list_modules():
-            self.modules[module.name] = {
-                "base": module.lpBaseOfDll,
-                "size": module.SizeOfImage,
-                "path": module.filename,
-            }
 
     def _find_module(self, module_name: str) -> Optional[dict]:
         """Case-insensitive module lookup."""
@@ -786,20 +924,20 @@ class DebugSession:
             raise OSError(f"SetThreadContext failed: error {ctypes.get_last_error()}")
 
     def detach(self) -> None:
-        """Detach from the process. Preserves target_process for reconnection.
+        """Detach after retiring every active stable-handle scan lease."""
 
-        Cleanup order:
-        1. Fire detach callbacks (extensions restore hooks, free their allocations)
-        2. Free remaining tracked allocations (orphaned Lua alloc() calls etc.)
-        3. Close the process handle
-        """
+        with self._lifecycle_mutation_lock:
+            self._detach_locked()
+
+    def _detach_locked(self) -> None:
+        """Run the serialized detach transition while preserving callback order."""
+
+        interruption: BaseException | None = None
         if self.pm is not None:
+            interruption = self._begin_retirement_locked()
             alive = self._is_process_alive()
             self._fire_detach(alive)
 
-            # Free orphaned allocations not cleaned up by callbacks.
-            # Hook cleanup already freed its allocations via self.free(),
-            # which removed them from the set. Only true orphans remain.
             if alive and self._tracked_allocations:
                 orphaned = len(self._tracked_allocations)
                 for addr in list(self._tracked_allocations):
@@ -813,18 +951,25 @@ class DebugSession:
 
             try:
                 self.pm.close_process()
-            except Exception:
-                pass
-            self.pm = None
+            except BaseException as exc:
+                logger.warning("Process handle close failed during detach: %s", exc)
 
-        # Always clear local state, even if pm was already None
-        self._tracked_allocations.clear()
-        self.pid = 0
-        self.modules.clear()
+        with self._lifecycle_condition:
+            self.pm = None
+            self._tracked_allocations.clear()
+            self.pid = 0
+            self.modules.clear()
+            self._module_snapshot = None
+            self._lifecycle_cancel = None
+            self._attachment_generation = 0
+            self._attachment_state = AttachmentState.DETACHED
+            self._lifecycle_condition.notify_all()
 
         from .utils.logger import LOGGER
 
         LOGGER.clear_process()
+        if interruption is not None:
+            raise interruption
 
 
 # Global session instance

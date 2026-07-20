@@ -108,7 +108,7 @@ Addresses accept hex strings (`"0x1234"`), module+offset (`"module.dll+0x1234"`)
 |------|---------|
 | `processes` | List/filter running processes. Filter by name, PID, parent PID, or hosted service. Auto-enumerates services for svchost processes via the Windows SCM |
 | `attach` | Attach to process, cache module bases. Auto-reconnects if the target restarts |
-| `modules` | List loaded modules with base addresses, sizes, and paths |
+| `modules` | List loaded modules with base addresses, sizes, and paths. Set `refresh=true` to rebuild the immutable module snapshot and advance its attachment generation |
 | `read` | Read typed memory (int8-64, uint8-64, char, float, double, bool, ptr, cstring, bytes/bytes[N], vector2/3/4, quaternion, color, color32, rect, bounds, matrix4x4). Supports `count` for consecutive values |
 | `write` | Write typed memory, including bytes/bytes[N], with optional verified writes: writable range check, pre-image capture, byte-for-byte readback, and pre-image restore attempt on post-write verification failure |
 | `dump` | Smart memory dump with automatic type detection and pagination/filter knobs (`start_offset`, `pointers_only`, `non_null_only`, `max_entries`, `annotation_level`). `full` annotations include confidence |

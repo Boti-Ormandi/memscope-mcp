@@ -380,32 +380,48 @@ def attach(process_name: str, pid: Optional[int] = None) -> dict:
 
 
 @mcp.tool()
-def modules(filter: Optional[str] = None, limit: int = 30) -> dict:
+def modules(filter: Optional[str] = None, limit: int = 30, refresh: bool = False) -> dict:
     """List loaded modules with base addresses, sizes, and paths.
-    Use filter for substring match. Returns modules array."""
+    Set refresh to rebuild the module snapshot and advance its generation."""
     _start = time.perf_counter()
+    log_args = {"filter": filter, "limit": limit, "refresh": refresh}
     if SESSION.pm is None:
         return _log(
             "modules",
-            {"filter": filter, "limit": limit},
+            log_args,
             {"success": False, "error": "NOT_ATTACHED", "detail": "Call attach first"},
             _start,
         )
+    if refresh and not SESSION.refresh_modules():
+        return _log(
+            "modules",
+            log_args,
+            {
+                "success": False,
+                "error": "MODULE_REFRESH_FAILED",
+                "detail": "Could not rebuild the loaded-module snapshot",
+            },
+            _start,
+        )
+
+    snapshot = SESSION.module_snapshot
+    if snapshot is None:
+        records = [(name, info["base"], info["size"], info.get("path", "")) for name, info in SESSION.modules.items()]
+    else:
+        records = [(record.name, record.base, record.size, record.path) for record in snapshot.ordered_by_base]
 
     mods = []
-    for name, info in SESSION.modules.items():
+    for name, base, size, path in records:
         if filter and filter.lower() not in name.lower():
             continue
-        mods.append(
-            {"name": name, "base": format_address(info["base"]), "size": info["size"], "path": info.get("path", "")}
-        )
+        mods.append({"name": name, "base": format_address(base), "size": size, "path": path})
         if len(mods) >= limit:
             break
 
     return _log(
         "modules",
-        {"filter": filter, "limit": limit},
-        {"success": True, "modules": mods, "total": len(SESSION.modules)},
+        log_args,
+        {"success": True, "modules": mods, "total": len(records)},
         _start,
     )
 
