@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol
 
 from memscope_mcp.scanning.model import ScanHit, TerminationReason
@@ -29,7 +30,35 @@ class CollectorResult:
     termination_reason: TerminationReason
 
 
+class CollectorMode(Enum):
+    """Internal result policies that influence masked-strategy selection."""
+
+    ADDRESSES = "addresses"
+    PAGE = "page"
+    FIRST = "first"
+    COUNT = "count"
+
+
+@dataclass(frozen=True, slots=True)
+class CollectorStrategyHint:
+    """Stable matcher-facing policy without exposing collector implementation state."""
+
+    mode: CollectorMode
+    remaining_matches: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, CollectorMode):
+            raise TypeError("mode must be a CollectorMode")
+        if isinstance(self.remaining_matches, bool) or not isinstance(self.remaining_matches, int):
+            raise TypeError("remaining_matches must be an integer")
+        if self.remaining_matches < 1:
+            raise ValueError("remaining_matches must be positive")
+
+
 class ScanCollector(Protocol):
+    @property
+    def strategy_hint(self) -> CollectorStrategyHint: ...
+
     def offer(self, hit: ScanHit) -> CollectorDecision: ...
 
     def finish(self, reason: TerminationReason) -> CollectorResult: ...
@@ -72,6 +101,12 @@ class _BaseCollector:
         self._stop_reason = reason
         return CollectorDecision(stop=True, reason=reason)
 
+    def _remaining_budget(self, total: int) -> int:
+        remaining = total - self._observed_count
+        if remaining < 1:
+            raise RuntimeError("collector has already reached its stopping boundary")
+        return remaining
+
 
 class BoundedAddressCollector(_BaseCollector):
     """Retain a bounded address sequence without continuation semantics."""
@@ -81,6 +116,10 @@ class BoundedAddressCollector(_BaseCollector):
     def __init__(self, limit: int) -> None:
         super().__init__()
         self.limit = _positive_int("limit", limit)
+
+    @property
+    def strategy_hint(self) -> CollectorStrategyHint:
+        return CollectorStrategyHint(CollectorMode.ADDRESSES, self._remaining_budget(self.limit))
 
     def offer(self, hit: ScanHit) -> CollectorDecision:
         self._record(hit, retain=True)
@@ -101,6 +140,11 @@ class PageCollector(_BaseCollector):
             None if remaining_matches is None else _positive_int("remaining_matches", remaining_matches)
         )
 
+    @property
+    def strategy_hint(self) -> CollectorStrategyHint:
+        total = self.page_limit if self.remaining_matches is None else min(self.page_limit, self.remaining_matches)
+        return CollectorStrategyHint(CollectorMode.PAGE, self._remaining_budget(total))
+
     def offer(self, hit: ScanHit) -> CollectorDecision:
         self._record(hit, retain=True)
         if self.remaining_matches is not None and self._observed_count >= self.remaining_matches:
@@ -115,6 +159,10 @@ class FirstHitCollector(_BaseCollector):
 
     __slots__ = ()
 
+    @property
+    def strategy_hint(self) -> CollectorStrategyHint:
+        return CollectorStrategyHint(CollectorMode.FIRST, self._remaining_budget(1))
+
     def offer(self, hit: ScanHit) -> CollectorDecision:
         self._record(hit, retain=True)
         return self._stop(TerminationReason.FIRST_HIT)
@@ -128,6 +176,10 @@ class CountCollector(_BaseCollector):
     def __init__(self, max_matches: int) -> None:
         super().__init__()
         self.max_matches = _positive_int("max_matches", max_matches)
+
+    @property
+    def strategy_hint(self) -> CollectorStrategyHint:
+        return CollectorStrategyHint(CollectorMode.COUNT, self._remaining_budget(self.max_matches))
 
     def offer(self, hit: ScanHit) -> CollectorDecision:
         self._record(hit, retain=False)

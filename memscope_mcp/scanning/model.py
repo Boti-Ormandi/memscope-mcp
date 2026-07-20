@@ -220,7 +220,14 @@ class ScanStats:
     span_count: int = 0
     candidate_count: int = 0
     verification_count: int = 0
+    anchor_candidates: int = 0
+    segment_verifications: int = 0
+    regex_candidates: int = 0
+    verified_matches: int = 0
     committed_matches: int = 0
+    selector_invocations: int = 0
+    selector_sampled_bytes: int = 0
+    selector_estimated_candidates: int = 0
     control_polls: int = 0
     matcher_invocations: int = 0
     find_calls: int = 0

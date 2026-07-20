@@ -7,7 +7,7 @@ A tour of the memscope-mcp codebase: where things live, the design rules that sh
 ```
 memscope_mcp/
   server.py              # MCP tool definitions (thin wrappers + session logging)
-  scanning/              # Internal strict contracts, compiler, matcher, collectors
+  scanning/              # Internal strict contracts, hybrid matcher, collectors
   session.py             # Process attach/detach, memory primitives, threads,
                          #   VirtualProtect, allocate_near, suspend/resume,
                          #   lifecycle callbacks
@@ -61,6 +61,12 @@ Five rules shape what goes into the codebase and what stays out.
 **Scripts persist, addresses don't.** ASLR shifts everything on every restart. The persistence layer saves Lua finder scripts per process, not raw addresses. The agent reuses the finder.
 
 ## Subsystems
+
+### Bounded hybrid scanning core
+
+The internal scanner package compiles AOB input once into canonical bytes, a mask, maximal fixed segments, and an overlapping regex fallback. Exact patterns use `bytes.find`; all-wildcard patterns generate eligible addresses arithmetically; masked patterns sample a constant-size beginning/middle/end slice, rank every fixed segment for anchor selectivity, then choose either C-level anchor search with ordered segment verification or the precompiled regex when anchor candidates would be too dense. Result collectors own first-hit, page, count, and bounded-address stopping, so matching stops at the committed boundary without constructing an unbounded result list or searching for a pagination lookahead hit.
+
+The package is an internal engine boundary rather than a supported Python API. Process leasing, region planning, target reads, MCP formatting, and Lua table construction remain outside the matcher.
 
 ### Inline function hooking with shared ring buffer
 

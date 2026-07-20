@@ -17,9 +17,10 @@ from memscope_mcp.scanning.collectors import (
     PageCollector,
 )
 from memscope_mcp.scanning.engine import execute_scan_windows
-from memscope_mcp.scanning.matcher import UnsupportedMatcherError
+from memscope_mcp.scanning.matcher import select_masked_strategy
 from memscope_mcp.scanning.model import (
     FixedSegment,
+    MatcherStrategy,
     ModuleRecord,
     ScanControl,
     ScanHit,
@@ -361,13 +362,163 @@ def test_engine_rejects_overlapping_window_candidate_ownership():
         )
 
 
-def test_masked_query_is_not_routed_through_an_incorrect_temporary_matcher():
-    with pytest.raises(UnsupportedMatcherError, match="hybrid matcher"):
-        execute_scan_windows(
-            make_aob_query("AA ??"),
-            [SearchWindow(0, b"\xaa\x01", 0, 2)],
-            BoundedAddressCollector(10),
-        )
+def test_masked_selector_prefers_rare_short_segment_over_common_long_segment():
+    data = bytearray(b"A" * 20_000)
+    for index in (64, 10_000, 19_000):
+        data[index] = ord("Z")
+    query = make_aob_query("41 41 41 41 ?? 5A")
+    window = SearchWindow(0x1000, data, 0x1000, 0x1000 + len(data))
+
+    selection = select_masked_strategy(query, window, BoundedAddressCollector(100).strategy_hint)
+
+    assert selection.anchor == FixedSegment(offset=5, literal=b"Z")
+    assert selection.strategy is MatcherStrategy.ANCHOR
+    assert selection.sampled_bytes <= 6144
+
+
+def test_masked_selector_uses_stable_offset_tie_break():
+    query = make_aob_query("41 ?? 42")
+    window = SearchWindow(0, b"\0" * 8192, 0, 8192)
+
+    selection = select_masked_strategy(query, window, BoundedAddressCollector(100).strategy_hint)
+
+    assert selection.anchor == FixedSegment(offset=0, literal=b"A")
+
+
+def test_common_masked_anchor_selects_regex_fallback():
+    query = make_aob_query("00 ?? 00")
+    window = SearchWindow(0, b"\0" * 65536, 0, 65536)
+
+    selection = select_masked_strategy(query, window, CountCollector(5000).strategy_hint)
+    result = execute_scan_windows(query, [window], CountCollector(5000))
+
+    assert selection.strategy is MatcherStrategy.REGEX
+    assert result.stats.strategy_counts == {MatcherStrategy.REGEX: 1}
+    assert result.stats.regex_candidates == 5000
+    assert result.stats.anchor_candidates == 0
+
+
+def test_common_overlapping_multibyte_anchor_selects_regex_fallback():
+    query = make_aob_query("41 41 41 41 ?? 41 41 41 41")
+    window = SearchWindow(0, b"A" * 65536, 0, 65536)
+
+    selection = select_masked_strategy(query, window, CountCollector(5000).strategy_hint)
+
+    assert selection.strategy is MatcherStrategy.REGEX
+    assert selection.anchor == FixedSegment(offset=0, literal=b"AAAA")
+
+
+def test_masked_selector_accounts_for_collector_policy_and_remaining_budget():
+    data = bytearray((b"Z" + b"-" * 19 + b"Y" + b"-" * 19) * 2000)
+    data[:3] = b"Z-Y"
+    query = make_aob_query("5A ?? 59")
+    window = SearchWindow(0, data, 0, len(data))
+
+    first = select_masked_strategy(query, window, FirstHitCollector().strategy_hint)
+    counted = select_masked_strategy(query, window, CountCollector(5000).strategy_hint)
+
+    assert first.strategy is MatcherStrategy.ANCHOR
+    assert counted.strategy is MatcherStrategy.REGEX
+
+
+def test_masked_anchor_preserves_overlaps_alignment_and_page_resume():
+    base = 0xD100
+    data = (b"Zx" + b"-" * 30) * 20
+    query = make_aob_query("5A ??", alignment=2)
+    window = SearchWindow(base, data, base, base + len(data))
+
+    selection = select_masked_strategy(query, window, PageCollector(10).strategy_hint)
+    result = execute_scan_windows(query, [window], PageCollector(10))
+
+    assert selection.strategy is MatcherStrategy.ANCHOR
+    assert [hit.address for hit in result.hits] == [base + index * 32 for index in range(10)]
+    assert result.next_candidate_start == base + 9 * 32 + 1
+    assert result.stats.anchor_candidates == 10
+    assert result.stats.regex_candidates == 0
+    assert result.stats.candidate_count == 10
+
+
+def test_regex_masked_path_preserves_newlines_metacharacters_and_overlap():
+    base = 0xD800
+    data = b".\n*" * 2000
+    query = make_aob_query("2E ?? 2A")
+    window = SearchWindow(base, data, base, base + len(data))
+
+    result = execute_scan_windows(query, [window], BoundedAddressCollector(10))
+
+    assert [hit.address for hit in result.hits] == [base + index * 3 for index in range(10)]
+    assert result.termination_reason is TerminationReason.MATCH_LIMIT
+    assert result.next_candidate_start == base + 28
+    assert result.stats.strategy_counts == {MatcherStrategy.REGEX: 1}
+    assert result.stats.regex_candidates == 10
+    assert result.stats.candidate_count == 10
+    assert result.stats.find_calls == 10
+
+
+def test_dense_masked_page_allocation_is_independent_of_possible_matches():
+    data = b"\0" * 1_000_000
+    window = SearchWindow(0, data, 0, len(data))
+
+    gc.collect()
+    tracemalloc.start()
+    try:
+        result = execute_scan_windows(make_aob_query("00 ?? 00"), [window], PageCollector(100))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert result.termination_reason is TerminationReason.PAGE_LIMIT
+    assert result.stats.strategy_counts == {MatcherStrategy.REGEX: 1}
+    assert result.stats.regex_candidates == 100
+    assert peak < 512_000
+
+
+def test_masked_anchor_and_regex_poll_cooperative_cancellation():
+    checks = 0
+
+    def cancelled():
+        nonlocal checks
+        checks += 1
+        return checks >= 2
+
+    anchor_block = b"Zx-" + b"-" * 12 + b"Y" + b"-" * 16
+    anchor_data = anchor_block * 100
+    anchor = execute_scan_windows(
+        make_aob_query("5A ?? 59"),
+        [SearchWindow(0, anchor_data, 0, len(anchor_data))],
+        BoundedAddressCollector(100),
+        control=ScanControl(cancel_checks=(cancelled,), poll_interval=2),
+    )
+
+    checks = 0
+    regex = execute_scan_windows(
+        make_aob_query("00 ?? 00"),
+        [SearchWindow(0, b"\0" * 4096, 0, 4096)],
+        CountCollector(4096),
+        control=ScanControl(cancel_checks=(cancelled,), poll_interval=2),
+    )
+
+    assert anchor.termination_reason is TerminationReason.CANCELLED
+    assert anchor.stats.strategy_counts == {MatcherStrategy.ANCHOR: 1}
+    assert anchor.stats.anchor_candidates == 2
+    assert regex.termination_reason is TerminationReason.CANCELLED
+    assert regex.stats.strategy_counts == {MatcherStrategy.REGEX: 1}
+    assert regex.stats.regex_candidates == 2
+
+
+def test_masked_regex_polls_deadline_inside_current_window():
+    clock_values = iter((0, 10))
+    result = execute_scan_windows(
+        make_aob_query("00 ?? 00"),
+        [SearchWindow(0, b"\0" * 4096, 0, 4096)],
+        CountCollector(4096),
+        control=ScanControl(deadline_ns=5, clock=lambda: next(clock_values), poll_interval=2),
+    )
+
+    assert result.termination_reason is TerminationReason.TIMEOUT
+    assert result.next_candidate_start is None
+    assert result.stats.strategy_counts == {MatcherStrategy.REGEX: 1}
+    assert result.stats.regex_candidates == 2
 
 
 def test_randomized_exact_engine_parity_with_oracle():
@@ -529,3 +680,46 @@ def test_collector_boundary_wins_after_hit_is_already_committed():
 
     assert result.termination_reason is TerminationReason.FIRST_HIT
     assert result.next_candidate_start == base + 1
+
+
+def test_randomized_masked_engine_parity_with_oracle():
+    rng = random.Random(0xA0B5CA1)
+
+    for _ in range(400):
+        alphabet_size = rng.choice((2, 4, 16, 256))
+        data = bytes(rng.randrange(alphabet_size) for _ in range(rng.randrange(0, 160)))
+        length = rng.randrange(2, 16)
+        wildcard_index = rng.randrange(length)
+        fixed_index = rng.randrange(length)
+        while fixed_index == wildcard_index:
+            fixed_index = rng.randrange(length)
+        tokens = []
+        for index in range(length):
+            if index == wildcard_index or (index != fixed_index and rng.random() < 0.35):
+                tokens.append("??")
+            else:
+                tokens.append(f"{rng.randrange(alphabet_size):02X}")
+
+        pattern = " ".join(tokens)
+        base = rng.randrange(0, 64)
+        alignment = rng.randrange(1, 9)
+        eligible_start = base + rng.randrange(0, len(data) + 1)
+        eligible_end = base + rng.randrange(0, len(data) + 1)
+        eligible_start, eligible_end = sorted((eligible_start, eligible_end))
+        cap = rng.randrange(1, 30)
+        result = execute_scan_windows(
+            make_aob_query(pattern, alignment=alignment),
+            [SearchWindow(base, data, eligible_start, eligible_end)],
+            BoundedAddressCollector(cap),
+        )
+        expected = find_oracle_matches(
+            data,
+            parse_oracle_pattern(pattern),
+            base_address=base,
+            eligible_start=eligible_start,
+            eligible_end=eligible_end,
+            alignment=alignment,
+            max_matches=cap,
+        )
+
+        assert [hit.address for hit in result.hits] == expected
