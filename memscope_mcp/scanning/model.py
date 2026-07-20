@@ -215,7 +215,15 @@ class ScanStats:
     strategy_counts: dict[MatcherStrategy, int] = field(default_factory=dict)
     unique_bytes_examined: int = 0
     physical_read_calls: int = 0
+    physical_bytes_requested: int = 0
     physical_bytes_read: int = 0
+    unique_bytes_read: int = 0
+    logical_read_chunks: int = 0
+    read_gap_count: int = 0
+    failed_read_bytes: int = 0
+    failed_read_spans: list[tuple[int, int]] = field(default_factory=list)
+    planner_query_calls: int = 0
+    reader_chunk_size: int = 0
     region_count: int = 0
     span_count: int = 0
     candidate_count: int = 0
@@ -255,6 +263,7 @@ class ScanControl:
     """Cooperative deadline, cancellation, and outer-runtime interruption state."""
 
     deadline_ns: int | None = None
+    target_change_checks: tuple[Callable[[], bool], ...] = ()
     cancel_checks: tuple[Callable[[], bool], ...] = ()
     interrupt_check: Callable[[], None] | None = None
     clock: Callable[[], int] = time.monotonic_ns
@@ -263,6 +272,10 @@ class ScanControl:
     def __post_init__(self) -> None:
         if self.deadline_ns is not None:
             _require_non_negative_int("deadline_ns", self.deadline_ns)
+        if not isinstance(self.target_change_checks, tuple) or any(
+            not callable(check) for check in self.target_change_checks
+        ):
+            raise TypeError("target_change_checks must be a tuple of callables")
         if not isinstance(self.cancel_checks, tuple) or any(not callable(check) for check in self.cancel_checks):
             raise TypeError("cancel_checks must be a tuple of callables")
         if self.interrupt_check is not None and not callable(self.interrupt_check):
@@ -274,6 +287,8 @@ class ScanControl:
     def poll(self) -> TerminationReason | None:
         if self.interrupt_check is not None:
             self.interrupt_check()
+        if any(check() for check in self.target_change_checks):
+            return TerminationReason.TARGET_CHANGED
         if self.deadline_ns is not None and self.clock() >= self.deadline_ns:
             return TerminationReason.TIMEOUT
         if any(check() for check in self.cancel_checks):

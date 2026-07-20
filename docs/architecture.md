@@ -7,8 +7,8 @@ A tour of the memscope-mcp codebase: where things live, the design rules that sh
 ```
 memscope_mcp/
   server.py              # MCP tool definitions (thin wrappers + session logging)
-  scanning/              # Internal contracts, attachment snapshots, matcher,
-                         #   collectors
+  scanning/              # Internal contracts, snapshots, scope planner,
+                         #   bounded reader, matcher, collectors
   session.py             # Process attach/detach, generations, scan leases,
                          #   memory primitives, threads, VirtualProtect,
                          #   allocate_near, suspend/resume, lifecycle callbacks
@@ -67,7 +67,9 @@ Five rules shape what goes into the codebase and what stays out.
 
 The internal scanner package compiles AOB input once into canonical bytes, a mask, maximal fixed segments, and an overlapping regex fallback. Exact patterns use `bytes.find`; all-wildcard patterns generate eligible addresses arithmetically; masked patterns sample a constant-size beginning/middle/end slice, rank every fixed segment for anchor selectivity, then choose either C-level anchor search with ordered segment verification or the precompiled regex when anchor candidates would be too dense. Result collectors own first-hit, page, count, and bounded-address stopping, so matching stops at the committed boundary without constructing an unbounded result list or searching for a pagination lookahead hit.
 
-The package is an internal engine boundary rather than a supported Python API. It also defines immutable, duplicate-aware module snapshots and stable scan leases. `DebugSession` publishes a monotonically increasing generation on each successful process open or explicit module refresh; detach, switch, reconnect, and refresh signal active leases and wait for release before closing or replacing their handle identity. Region planning, target reads, MCP formatting, and Lua table construction remain outside the matcher.
+The package is an internal engine boundary rather than a supported Python API. It also defines immutable, duplicate-aware module snapshots and stable scan leases. `DebugSession` publishes a monotonically increasing generation on each successful process open or explicit module refresh; detach, switch, reconnect, and refresh signal active leases and wait for release before closing or replacing their handle identity.
+
+Scopes are normalized against the lease snapshot before any target read. Module scopes resolve every requested basename atomically and default to readable `MEM_IMAGE` pages in deterministic base order; explicit ranges use exact half-open bounds and may include image, mapped, and private pages. The planner walks each interval with `VirtualQueryEx`, applies memory-type and executable/writable filters, and emits clipped non-overlapping spans. The bounded reader never crosses those spans, recursively salvages readable page-aligned fragments after a changed protection causes a larger read to fail, and carries a sticky gap flag when coverage is incomplete. One overlap stream retains at most `pattern_length - 1` bytes only across exact successful continuity, so AOB, string, and pointer queries can find cross-chunk and adjacent-span matches without fabricating matches across unreadable gaps. MCP formatting and Lua table construction remain outside the engine.
 
 ### Inline function hooking with shared ring buffer
 
