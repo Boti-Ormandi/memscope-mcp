@@ -264,6 +264,9 @@ def _injection_positions(case: BenchmarkCase, size: int, pattern_length: int) ->
             position = max(0, size // 2 - pattern_length // 2)
         elif label == "late":
             position = max(0, size - pattern_length - 4096)
+        elif label == "split_boundary":
+            boundary = ((size // 2 + 4095) // 4096) * 4096
+            position = max(0, min(size - pattern_length, boundary - pattern_length // 2))
         else:
             raise ValueError(f"unknown injection position {label!r}")
         positions.append(position)

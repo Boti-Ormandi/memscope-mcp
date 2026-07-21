@@ -20,7 +20,7 @@ from memscope_mcp.scanning.model import (
 )
 from memscope_mcp.scanning.planner import PlannedSpan, RegionPlan
 
-PROVISIONAL_READ_CHUNK_SIZE = 128 * 1024
+READ_CHUNK_SIZE = 256 * 1024
 DEFAULT_PAGE_SIZE = 0x1000
 STILL_ACTIVE = 259
 
@@ -65,7 +65,7 @@ class RegionReader:
         control: ScanControl | None = None,
         read_memory: ReadMemory = pymem.memory.read_bytes,
         target_alive: TargetAlive | None = None,
-        chunk_size: int = PROVISIONAL_READ_CHUNK_SIZE,
+        chunk_size: int = READ_CHUNK_SIZE,
         page_size: int = DEFAULT_PAGE_SIZE,
     ) -> None:
         if not isinstance(lease, ScanLease):
@@ -213,7 +213,7 @@ class SearchWindowSource:
         control: ScanControl | None = None,
         read_memory: ReadMemory = pymem.memory.read_bytes,
         target_alive: TargetAlive | None = None,
-        chunk_size: int = PROVISIONAL_READ_CHUNK_SIZE,
+        chunk_size: int = READ_CHUNK_SIZE,
         page_size: int = DEFAULT_PAGE_SIZE,
     ) -> None:
         if not isinstance(query, ScanQuery):

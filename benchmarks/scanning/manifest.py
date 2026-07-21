@@ -56,6 +56,11 @@ class BenchmarkCase:
             return self.size_bytes
         if profile != "smoke":
             raise ValueError("profile must be 'smoke' or 'release'")
+        smoke_override = self.parameters.get("smoke_size_bytes")
+        if smoke_override is not None:
+            if isinstance(smoke_override, bool) or not isinstance(smoke_override, int) or smoke_override < 1:
+                raise ValueError("smoke_size_bytes must be a positive integer")
+            return smoke_override
         return max(64 * 1024, min(4 * 1024 * 1024, self.size_bytes // 16))
 
     def semantic_descriptor(self, profile: str) -> dict[str, Any]:
@@ -229,6 +234,76 @@ def semantic_fingerprint(
 MIB = 1024 * 1024
 KIB = 1024
 
+_CHUNK_SWEEP_SIZES: tuple[tuple[str, int], ...] = (
+    ("16k", 16 * KIB),
+    ("32k", 32 * KIB),
+    ("64k", 64 * KIB),
+    ("128k", 128 * KIB),
+    ("256k", 256 * KIB),
+    ("512k", 512 * KIB),
+    ("1m", 1 * MIB),
+    ("2m", 2 * MIB),
+    ("4m", 4 * MIB),
+)
+
+
+def _chunk_sweep_cases() -> tuple[BenchmarkCase, ...]:
+    cases: list[BenchmarkCase] = []
+    for label, chunk_size in _CHUNK_SWEEP_SIZES:
+        shared = {
+            "group": "Chunk sweep",
+            "layer": "process",
+            "comparison_class": "new_capability",
+            "tier": "coverage",
+            "headline": False,
+            "process_timeout_s": 30.0,
+        }
+        cases.extend(
+            (
+                BenchmarkCase(
+                    case_id=f"chunk.exact.nohit.{label}",
+                    kind="chunk_sweep",
+                    primary_metric="throughput",
+                    distribution="uniform",
+                    pattern="DE AD BE EF 01 23 45 67 89 AB CD EF 10 32 54 76",
+                    mode="count",
+                    size_bytes=64 * MIB,
+                    max_matches=5000,
+                    parameters={"chunk_size": chunk_size},
+                    **shared,
+                ),
+                BenchmarkCase(
+                    case_id=f"chunk.salvage.holes.{label}",
+                    kind="chunk_salvage",
+                    primary_metric="latency",
+                    distribution="uniform",
+                    pattern="DE AD BE EF 01 23 45 67 89 AB CD EF 10 32 54 76",
+                    mode="count",
+                    size_bytes=16 * MIB,
+                    max_matches=5000,
+                    parameters={"chunk_size": chunk_size},
+                    **shared,
+                ),
+                BenchmarkCase(
+                    case_id=f"chunk.timeout100.masked.{label}",
+                    kind="chunk_timeout",
+                    primary_metric="overshoot",
+                    distribution="x86_skew",
+                    pattern="48 ?? ?? ?? 00 ?? ?? ?? 90 ?? ?? ?? FF ?? ?? ??",
+                    mode="count",
+                    size_bytes=64 * MIB,
+                    max_matches=100_000,
+                    timeout_ms=100,
+                    parameters={"chunk_size": chunk_size, "smoke_size_bytes": 64 * MIB},
+                    **shared,
+                ),
+            )
+        )
+    return tuple(cases)
+
+
+_CHUNK_SWEEP_CASES = _chunk_sweep_cases()
+
 CASES: tuple[BenchmarkCase, ...] = (
     BenchmarkCase(
         case_id="compile.exact16",
@@ -356,6 +431,7 @@ CASES: tuple[BenchmarkCase, ...] = (
         size_bytes=64 * MIB,
         parameters={"chunk_size": 128 * KIB},
     ),
+    *_CHUNK_SWEEP_CASES,
     BenchmarkCase(
         case_id="e2e.exact16.late.contiguous64m",
         group="Contiguous end-to-end",
@@ -397,6 +473,20 @@ CASES: tuple[BenchmarkCase, ...] = (
         size_bytes=16 * MIB,
         max_matches=5000,
         parameters={"hole_every_pages": 16, "injections": ["early", "late"]},
+    ),
+    BenchmarkCase(
+        case_id="e2e.boundary.split_protection.exact",
+        group="Fragmented end-to-end",
+        layer="process",
+        kind="boundary",
+        comparison_class="apples_to_apples",
+        primary_metric="latency",
+        distribution="uniform",
+        pattern="DE AD BE EF 01 23 45 67 89 AB CD EF 10 32 54 76",
+        mode="count",
+        size_bytes=16 * MIB,
+        max_matches=5000,
+        parameters={"injections": ["split_boundary"]},
     ),
     BenchmarkCase(
         case_id="result.first.early.exact",

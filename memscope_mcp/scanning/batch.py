@@ -20,7 +20,7 @@ from memscope_mcp.scanning.model import (
 from memscope_mcp.scanning.planner import RegionPlan
 from memscope_mcp.scanning.reader import (
     DEFAULT_PAGE_SIZE,
-    PROVISIONAL_READ_CHUNK_SIZE,
+    READ_CHUNK_SIZE,
     ReadMemory,
     RegionReader,
     TargetAlive,
@@ -80,7 +80,7 @@ def execute_scan_batch_plan(
     control: ScanControl,
     read_memory: ReadMemory,
     target_alive: TargetAlive | None = None,
-    chunk_size: int = PROVISIONAL_READ_CHUNK_SIZE,
+    chunk_size: int = READ_CHUNK_SIZE,
     page_size: int = DEFAULT_PAGE_SIZE,
 ) -> BatchScanResult:
     """Read each planned byte once while advancing every active query."""

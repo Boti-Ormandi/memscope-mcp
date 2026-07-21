@@ -66,7 +66,7 @@ from memscope_mcp.scanning.pattern import PatternCompileError, make_aob_query
 from memscope_mcp.scanning.planner import VirtualQuery, plan_scan_regions
 from memscope_mcp.scanning.reader import (
     DEFAULT_PAGE_SIZE,
-    PROVISIONAL_READ_CHUNK_SIZE,
+    READ_CHUNK_SIZE,
     ReadMemory,
     TargetAlive,
 )
@@ -119,7 +119,7 @@ class ScanExecutor:
         read_memory: ReadMemory = pymem.memory.read_bytes,
         target_alive: TargetAlive | None = None,
         section_cache: SectionCache | None = None,
-        chunk_size: int = PROVISIONAL_READ_CHUNK_SIZE,
+        chunk_size: int = READ_CHUNK_SIZE,
         page_size: int = DEFAULT_PAGE_SIZE,
         clock: Callable[[], int] = time.monotonic_ns,
     ) -> None:

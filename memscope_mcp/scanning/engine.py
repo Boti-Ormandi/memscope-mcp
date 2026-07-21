@@ -19,7 +19,7 @@ from memscope_mcp.scanning.model import (
 from memscope_mcp.scanning.planner import RegionPlan
 from memscope_mcp.scanning.reader import (
     DEFAULT_PAGE_SIZE,
-    PROVISIONAL_READ_CHUNK_SIZE,
+    READ_CHUNK_SIZE,
     ReadMemory,
     SearchWindowSource,
     TargetAlive,
@@ -63,7 +63,7 @@ def execute_scan_plan(
     control: ScanControl | None = None,
     read_memory: ReadMemory | None = None,
     target_alive: TargetAlive | None = None,
-    chunk_size: int = PROVISIONAL_READ_CHUNK_SIZE,
+    chunk_size: int = READ_CHUNK_SIZE,
     page_size: int = DEFAULT_PAGE_SIZE,
     initial_read_gaps_detected: bool = False,
 ) -> ScanResult:
