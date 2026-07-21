@@ -142,6 +142,55 @@ def git_identity(root: Path) -> dict[str, Any]:
     return {"root": str(root), "commit": commit, "tree": tree, "dirty": bool(status)}
 
 
+def _execution_policy_metadata() -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "process_affinity_mask": None,
+        "process_priority_class": None,
+        "power_plan": None,
+    }
+    if sys.platform != "win32":
+        return metadata
+
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.GetProcessAffinityMask.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        kernel32.GetProcessAffinityMask.restype = ctypes.c_int
+        kernel32.GetPriorityClass.argtypes = [ctypes.c_void_p]
+        kernel32.GetPriorityClass.restype = ctypes.c_uint32
+        process = kernel32.GetCurrentProcess()
+        process_mask = ctypes.c_size_t()
+        system_mask = ctypes.c_size_t()
+        if kernel32.GetProcessAffinityMask(process, ctypes.byref(process_mask), ctypes.byref(system_mask)):
+            metadata["process_affinity_mask"] = f"0x{int(process_mask.value):X}"
+        priority = int(kernel32.GetPriorityClass(process))
+        if priority:
+            metadata["process_priority_class"] = priority
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        completed = subprocess.run(
+            ["powercfg", "/getactivescheme"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
+        metadata["power_plan"] = " ".join(completed.stdout.split()) or None
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        pass
+    return metadata
+
+
 def environment_metadata(*, target_root: Path, implementation: str, profile: str) -> dict[str, Any]:
     uname = platform.uname()
     packages: dict[str, str | None] = {}
@@ -174,6 +223,7 @@ def environment_metadata(*, target_root: Path, implementation: str, profile: str
             "processor": platform.processor(),
             "logical_count": os.cpu_count(),
         },
+        "execution_policy": _execution_policy_metadata(),
         "git": git_identity(target_root),
     }
 

@@ -281,6 +281,8 @@ def _inject(data: bytearray, position: int, pattern: ParsedPattern) -> None:
 
 
 def _oracle_limit(case: BenchmarkCase) -> int | None:
+    if case.kind == "cursor":
+        return case.max_matches
     if case.mode == "first":
         return 1
     if case.mode == "addresses":

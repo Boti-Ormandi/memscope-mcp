@@ -44,6 +44,57 @@ def test_controlled_process_target_has_stable_topology_and_exit_command():
         assert second.process.poll() == 0
 
 
+def test_controlled_process_target_publishes_batch_expectations():
+    case = next(case for case in CASES if case.case_id == "batch.first16.early")
+
+    with ControlledProcessTarget(case, "smoke") as target:
+        assert target.metadata is not None
+        expected = target.metadata.batch_expected
+        assert len(expected) == 16
+        assert all(len(addresses) == 1 for addresses in expected.values())
+        assert all(
+            target.metadata.base_address <= addresses[0] < target.metadata.end_exclusive
+            for addresses in expected.values()
+        )
+
+
+def test_process_runner_executes_declared_live_timeout_case():
+    repo_root = Path(__file__).resolve().parents[1]
+
+    artifact = run_process_suite(
+        repo_root=repo_root,
+        profile="smoke",
+        warmups=0,
+        repetitions=1,
+        implementation_label="test-candidate",
+        case_ids=("control.timeout100.common_masked",),
+    )
+
+    case = artifact["cases"][0]
+    observation = case["observations"][0]
+    assert case["summary"]["all_correct"] is True
+    assert observation["work"]["termination"] == "timeout"
+    assert observation["work"]["timeout_overshoot_ns"] >= 0
+
+
+def test_process_runner_supports_warm_section_evidence():
+    repo_root = Path(__file__).resolve().parents[1]
+
+    artifact = run_process_suite(
+        repo_root=repo_root,
+        profile="smoke",
+        warmups=0,
+        repetitions=1,
+        implementation_label="test-candidate",
+        case_ids=("scope.section.text.current_exe.warm",),
+    )
+
+    case = artifact["cases"][0]
+    assert case["case_id"] == "scope.section.text.current_exe.warm"
+    assert case["summary"]["all_correct"] is True
+    assert case["observations"][0]["work"]["sections"] == [".text"]
+
+
 def test_process_runner_emits_schema_valid_reader_and_e2e_artifact():
     repo_root = Path(__file__).resolve().parents[1]
 

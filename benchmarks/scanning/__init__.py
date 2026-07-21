@@ -2,4 +2,4 @@
 
 BENCHMARK_SCHEMA_VERSION = 1
 CORPUS_VERSION = "scanning-corpus-v1"
-MANIFEST_VERSION = "scanning-manifest-v2"
+MANIFEST_VERSION = "scanning-manifest-v3"

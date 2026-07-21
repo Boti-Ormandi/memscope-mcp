@@ -18,7 +18,13 @@ from typing import Any, TextIO
 
 from benchmarks.scanning import CORPUS_VERSION
 from benchmarks.scanning.common import address_checksum, sha256_bytes, sha256_json
-from benchmarks.scanning.corpus import Corpus, build_corpus, build_distribution
+from benchmarks.scanning.corpus import (
+    Corpus,
+    build_batch_patterns,
+    build_corpus,
+    build_distribution,
+    inject_batch_patterns,
+)
 from benchmarks.scanning.manifest import CASE_BY_ID, BenchmarkCase
 
 TARGET_FIXTURE_VERSION = "scanning-process-target-v1"
@@ -60,6 +66,7 @@ class TargetMetadata:
     corpus_sha256: str
     expected_addresses: tuple[int, ...]
     expected_checksum: str
+    batch_expected: dict[str, tuple[int, ...]]
     inaccessible_ranges: tuple[tuple[int, int], ...]
     readonly_ranges: tuple[tuple[int, int], ...]
     split_address: int | None
@@ -81,6 +88,10 @@ class TargetMetadata:
             corpus_sha256=str(payload["corpus_sha256"]),
             expected_addresses=tuple(int(value) for value in payload["expected_addresses"]),
             expected_checksum=str(payload["expected_checksum"]),
+            batch_expected={
+                str(key): tuple(int(value) for value in values)
+                for key, values in dict(payload.get("batch_expected", {})).items()
+            },
             inaccessible_ranges=tuple((int(start), int(end)) for start, end in payload["inaccessible_ranges"]),
             readonly_ranges=tuple((int(start), int(end)) for start, end in payload["readonly_ranges"]),
             split_address=None if payload["split_address"] is None else int(payload["split_address"]),
@@ -255,7 +266,26 @@ class _ChildAllocation:
         self.case = case
         self.profile = profile
         effective_size = case.effective_size(profile)
-        if case.kind in {"timeout", "chunk_timeout"}:
+        self.batch_expected_offsets: dict[str, tuple[int, ...]] = {}
+        if case.kind == "batch":
+            patterns = build_batch_patterns(int(case.parameters["patterns"]))
+            data = bytearray(build_distribution(case.distribution, max(64 * 1024, effective_size), case.case_id))
+            positions = inject_batch_patterns(data, patterns) if case.parameters.get("inject_all") else ()
+            self.batch_expected_offsets = {
+                key: (() if not positions else (int(positions[index]),))
+                for index, (key, _pattern) in enumerate(patterns)
+            }
+            payload = bytes(data)
+            self.corpus = Corpus(
+                data=payload,
+                base_address=0,
+                pattern_bytes=b"",
+                mask=b"",
+                expected_addresses=(),
+                data_sha256=sha256_bytes(payload),
+                expected_checksum=address_checksum(()),
+            )
+        elif case.kind in {"timeout", "chunk_timeout"}:
             data = build_distribution(case.distribution, max(64 * 1024, effective_size), case.case_id)
             self.corpus = Corpus(
                 data=data,
@@ -336,6 +366,10 @@ class _ChildAllocation:
             )
         ]
         expected_addresses = tuple(self.base_address + offset for offset in expected_offsets)
+        batch_expected = {
+            key: tuple(self.base_address + offset for offset in offsets)
+            for key, offsets in self.batch_expected_offsets.items()
+        }
         topology = {
             "fixture_version": TARGET_FIXTURE_VERSION,
             "corpus_version": CORPUS_VERSION,
@@ -366,6 +400,7 @@ class _ChildAllocation:
             "corpus_sha256": self.corpus.data_sha256,
             "expected_addresses": list(expected_addresses),
             "expected_checksum": address_checksum(expected_addresses),
+            "batch_expected": {key: list(values) for key, values in batch_expected.items()},
             "inaccessible_ranges": [list(item) for item in self.inaccessible_ranges],
             "readonly_ranges": [list(item) for item in self.readonly_ranges],
             "split_address": self.split_address,

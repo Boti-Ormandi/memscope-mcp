@@ -36,8 +36,29 @@ python -m benchmarks.scanning.process_scan --profile release --warmups 2 --repet
 
 The controlled matrix covers contiguous and fragmented ranges, a match crossing a chunk/protection boundary, post-plan protection changes and page-aligned read salvage, dense/first/page/count collectors, writable and PE-section filters, peak Python allocation, and chunk sizes from 16 KiB through 4 MiB. The child protocol also exposes deterministic protection-change and target-exit controls for lifecycle tests.
 
-When all chunk cases run with the release profile, at least one warmup, and at least three repetitions, the raw artifact records the production recommendation. The policy chooses the smallest chunk within 10% of the best end-to-end median only when it preserves the provisional 128 KiB baseline's salvage p95 and timeout-overshoot p95 within the declared tolerance. Lower-sample runs retain their measurements but are marked insufficient for production selection.
+The current production reader chunk is 256 KiB. When all chunk cases run with the release profile, at least one warmup, and at least three repetitions, the raw artifact records a fresh production recommendation. The policy chooses the smallest chunk within 10% of the best end-to-end median only when it preserves the provisional 128 KiB baseline's salvage p95 and timeout-overshoot p95 within the declared tolerance. Lower-sample runs retain their measurements but are marked insufficient for production selection.
 
 Use `--case-id <id>` repeatedly to select specific cases. Generated artifacts live under `benchmark-results/`, which is ignored by Git.
 
 Correctness and expected strategy checks are performed before an artifact is accepted. Raw artifacts are not historical comparisons or publication claims by themselves; paired baseline execution and generated publication reports are separate benchmark surfaces.
+
+## Paired historical comparison
+
+The paired runner compares the frozen historical implementation with the current checkout in deterministic randomized AB/BA blocks. Historical and candidate observations run in separate subprocesses. The historical source is mounted through a benchmark-owned detached worktree with an ownership record; cleanup refuses dirty, moved, or commit-mismatched worktrees.
+
+Quick diagnostic bundle:
+
+```powershell
+python -m benchmarks.scanning.run --before-ref c534fbd --profile smoke --blocks 1 --output benchmark-results/scanning-smoke
+```
+
+Clean release bundle:
+
+```powershell
+python -m benchmarks.scanning.run --before-ref c534fbd --profile release --output benchmark-results/scanning-release
+```
+
+Use `--case <case_id>` or `--group <group>` repeatedly for partial diagnostics. `--before-root` accepts an already materialized historical tree when worktree creation is intentionally managed elsewhere. Release-profile evidence rejects a dirty candidate tree unless `--allow-dirty-release` is supplied for diagnostics.
+
+The bundle contains raw artifacts for both sides, JSON and CSV comparison tables, a complete Markdown report, a concise post draft, and deterministic SVG charts. Historical timeouts are censored lower bounds. Candidate errors, semantic incompatibility, or incorrect results are blocking. Missing, neutral, censored, and regressing rows remain visible by stable `case_id`.
+

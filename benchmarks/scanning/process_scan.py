@@ -46,6 +46,8 @@ PROCESS_CASE_KINDS = frozenset(
         "allocation",
         "writable_filter",
         "section_filter",
+        "section_filter_warm",
+        "timeout",
         "chunk_sweep",
         "chunk_salvage",
         "chunk_timeout",
@@ -361,6 +363,8 @@ def _run_case(
             raise BenchmarkFailure(f"{case.case_id}: could not attach to controlled child {metadata.pid}")
         try:
             _preflight(case, target, metadata, session)
+            if case.kind == "section_filter_warm":
+                _measure_case_once(case, metadata, session, trace_allocations=False)
             for _ in range(warmups):
                 _measure_case_once(case, metadata, session, trace_allocations=False)
             observations = [
@@ -436,7 +440,7 @@ def _preflight(
             if reader.sha256 != metadata.corpus_sha256:
                 raise BenchmarkFailure(f"{case.case_id}: raw reader corpus hash mismatch")
         return
-    if case.kind in {"chunk_timeout"}:
+    if case.kind in {"timeout", "chunk_timeout"}:
         return
 
     io = _InstrumentedIO()
@@ -529,8 +533,9 @@ def _measure_case_once(
         raise BenchmarkFailure(f"{case.case_id}: candidate scan failed: {payload}")
 
     termination = str(payload["status"]["termination"])
-    timeout_case = case.kind == "chunk_timeout"
-    if timeout_case:
+    if case.kind == "timeout":
+        correct = termination == "timeout"
+    elif case.kind == "chunk_timeout":
         correct = termination in {"timeout", "scope_exhausted", "match_limit"}
     else:
         correct = _response_matches_expected(case, payload, metadata)
@@ -557,6 +562,7 @@ def _measure_case_once(
             "sections": list(diagnostics.get("sections", [])),
             "read_gaps_detected": bool(payload["status"]["read_gaps_detected"]),
             "termination": termination,
+            "timed_out": termination == "timeout",
             "actual_count": _response_count(payload),
             "expected_count": len(metadata.expected_addresses),
             "actual_checksum": address_checksum(_response_addresses(payload)) if case.mode != "count" else None,
@@ -605,7 +611,7 @@ def _scan_request(
     mode_override: str | None = None,
 ) -> ScanInput:
     mode = mode_override or case.mode
-    if case.kind == "section_filter":
+    if case.kind in {"section_filter", "section_filter_warm"}:
         scope: dict[str, Any] = {
             "kind": "modules",
             "names": [str(metadata.module["name"])],

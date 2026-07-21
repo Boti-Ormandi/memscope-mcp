@@ -36,7 +36,7 @@ memscope_mcp/
     peb.py               # PEB reader: cmdline, env, debugger, remote modules
     memory_utils.py heuristics.py logger.py pointers.py
   _contrib/plugins/      # Bundled reference plugins (il2cpp, netcap)
-benchmarks/scanning/     # Deterministic matcher and controlled-process evidence tooling
+benchmarks/scanning/     # Deterministic matcher, controlled-process, and paired evidence tooling
 scripts/                 # Saved Lua scripts per process (gitignored)
 logs/                    # Session logs in JSONL format (gitignored)
 docs/
