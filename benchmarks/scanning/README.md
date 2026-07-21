@@ -46,7 +46,7 @@ Correctness and expected strategy checks are performed before an artifact is acc
 
 ## Paired historical comparison
 
-The paired runner compares the frozen historical implementation with the current checkout in deterministic randomized AB/BA blocks. Historical and candidate observations run in separate subprocesses. The historical source is mounted through a benchmark-owned detached worktree with an ownership record; cleanup refuses dirty, moved, or commit-mismatched worktrees.
+The paired runner compares the frozen historical implementation with the current checkout in deterministic randomized AB/BA blocks. Historical and candidate observations run in separate subprocesses. The historical source is mounted through a benchmark-owned detached worktree with an ownership record; cleanup refuses dirty, moved, or commit-mismatched worktrees. Recovery recreates the bounded ownership root after removing the last stale run so the next comparison can allocate its worktree safely.
 
 Quick diagnostic bundle:
 

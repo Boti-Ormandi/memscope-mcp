@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from copy import deepcopy
@@ -330,6 +331,39 @@ def test_stale_owned_worktree_detection_uses_bounded_cleanup(tmp_path: Path, mon
     _cleanup_stale_owned_worktrees(repo_root, owned_root)
 
     assert calls == [(repo_root, owned_root, run_root)]
+
+
+def test_stale_cleanup_recreates_owned_root_for_the_next_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    repo_root = (tmp_path / "repo").resolve()
+    repo_root.mkdir()
+    owned_root = (tmp_path / "owned").resolve()
+    run_root = owned_root / "run-stale"
+    worktree = run_root / "before"
+    worktree.mkdir(parents=True)
+    (run_root / "owner.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "repo_root": str(repo_root),
+                "worktree": str(worktree),
+                "expected_commit": "a" * 40,
+                "owner_pid": 123456789,
+                "state": "active",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("benchmarks.scanning.run._pid_is_running", lambda _pid: False)
+    monkeypatch.setattr(
+        "benchmarks.scanning.run._cleanup_owned_worktree",
+        lambda _repo, owned, _run, _owner: shutil.rmtree(owned),
+    )
+
+    _cleanup_stale_owned_worktrees(repo_root, owned_root)
+
+    assert owned_root.is_dir()
+    assert list(owned_root.iterdir()) == []
 
 
 def _paired_artifacts() -> tuple[dict, dict]:

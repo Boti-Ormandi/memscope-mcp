@@ -475,6 +475,7 @@ def _cleanup_stale_owned_worktrees(repo_root: Path, owned_root: Path) -> None:
         if isinstance(owner_pid, int) and _pid_is_running(owner_pid):
             continue
         _cleanup_owned_worktree(repo_root, owned_root, run_root, owner)
+    owned_root.mkdir(parents=True, exist_ok=True)
 
 
 def _cleanup_owned_worktree(
