@@ -30,14 +30,37 @@ def test_engine_evidence_records_exact_cursor_batch_and_control_invariants(tmp_p
     assert cursor["post_limit_candidate_work"] == 0
     assert cursor["lease_released"] is True
 
+    safety = by_id["cursor.safety.stale_gap_cap"]["observations"][0]["work"]
+    assert safety["cumulative_sequence_returned_count"] == 3
+    assert safety["cumulative_termination"] == "match_limit"
+    assert safety["cumulative_next_cursor"] is None
+    assert safety["cumulative_candidate_count"] == 1
+    assert safety["sticky_gap_status"] is True
+    assert safety["sticky_gap_cursor_state"] is True
+    assert safety["stale_error"] == "CURSOR_STALE"
+    assert safety["stale_physical_read_calls"] == 0
+    assert safety["all_leases_released"] is True
+
     first = by_id["batch.first16.one_pass"]["observations"][0]["work"]
     assert first["batch_values"] == first["independent_values"]
     assert first["region_passes"] == 1
+    assert first["batch_statuses"] == first["independent_statuses"]
+    assert set(first["batch_statuses"].values()) == {"first_hit"}
     assert first["batch_physical_bytes_read"] < first["separate_physical_bytes_read"]
 
     count = by_id["batch.count4.one_pass"]["observations"][0]["work"]
     assert count["batch_values"] == count["independent_values"]
+    assert count["batch_statuses"] == count["independent_statuses"]
+    assert set(count["batch_statuses"].values()) == {"scope_exhausted"}
     assert count["batch_physical_bytes_read"] * 4 == count["separate_physical_bytes_read"]
+
+    capped = by_id["batch.count2.independent_caps"]["observations"][0]["work"]
+    assert capped["batch_values"] == {"single": 2, "triple": 2}
+    assert capped["batch_values"] == capped["independent_values"]
+    assert capped["batch_statuses"] == {"single": "match_limit", "triple": "match_limit"}
+    assert capped["batch_statuses"] == capped["independent_statuses"]
+    assert capped["shared_termination"] == "match_limit"
+    assert capped["batch_physical_bytes_read"] * 2 == capped["separate_physical_bytes_read"]
 
     deadline = by_id["control.injected_deadline"]["observations"][0]["work"]
     assert deadline["termination"] == "timeout"

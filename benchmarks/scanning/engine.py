@@ -7,7 +7,7 @@ import asyncio
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -26,6 +26,7 @@ from memscope_mcp.scanning.contract import (
     CountScanManySuccess,
     CountScanSuccess,
     FirstScanManySuccess,
+    FirstScanSuccess,
     RangeScopeInput,
     ScanFailure,
     ScanInput,
@@ -74,6 +75,12 @@ CASES: tuple[EvidenceCase, ...] = (
         ),
     ),
     EvidenceCase(
+        "cursor.safety.stale_gap_cap",
+        "Cursor",
+        "new_capability",
+        "Cursor evidence covers stale identity rejection, sticky read-gap state, and cumulative match caps.",
+    ),
+    EvidenceCase(
         "batch.first16.one_pass",
         "Batch",
         "eliminated_work",
@@ -84,6 +91,12 @@ CASES: tuple[EvidenceCase, ...] = (
         "Batch",
         "eliminated_work",
         "Four no-hit count queries share one traversal and avoid repeated physical reads.",
+    ),
+    EvidenceCase(
+        "batch.count2.independent_caps",
+        "Batch",
+        "new_capability",
+        "Two dense count queries reach independent caps with matching per-item completion status.",
     ),
     EvidenceCase(
         "control.injected_deadline",
@@ -347,6 +360,108 @@ def _cursor_pages() -> dict[str, Any]:
     }
 
 
+def _cursor_safety() -> dict[str, Any]:
+    memory = b"AAAAA"
+    started = time.perf_counter_ns()
+
+    cap_executor, cap_session, cap_reads, cap_scope = _make_executor(memory, chunk_size=2)
+    first_cap = cap_executor.execute(
+        ScanInput(
+            pattern="41 41",
+            scope=cap_scope,
+            mode="addresses",
+            limit=2,
+            max_matches=3,
+            diagnostics=True,
+        )
+    )
+    if not isinstance(first_cap.root, AddressScanSuccess) or first_cap.root.next_cursor is None:
+        raise EvidenceFailure("cumulative-cap evidence did not produce its first continuation")
+    second_cap = cap_executor.execute(ScanInput(cursor=first_cap.root.next_cursor, limit=2, diagnostics=True))
+    if not isinstance(second_cap.root, AddressScanSuccess) or second_cap.root.diagnostics is None:
+        raise EvidenceFailure("cumulative-cap continuation returned the wrong response")
+    cap_addresses = [int(hit.address, 16) for hit in second_cap.root.matches]
+    cap_correct = (
+        cap_addresses == [_BASE_ADDRESS + 2]
+        and second_cap.root.sequence_returned_count == 3
+        and second_cap.root.status.termination == "match_limit"
+        and second_cap.root.next_cursor is None
+        and second_cap.root.diagnostics.candidate_count == 1
+        and cap_session.active == 0
+        and cap_session.released.is_set()
+    )
+
+    sticky_executor, sticky_session, _sticky_reads, sticky_scope = _make_executor(memory, chunk_size=2)
+    first_sticky = sticky_executor.execute(ScanInput(pattern="41 41", scope=sticky_scope, mode="addresses", limit=2))
+    if not isinstance(first_sticky.root, AddressScanSuccess) or first_sticky.root.next_cursor is None:
+        raise EvidenceFailure("sticky-gap evidence did not produce its first continuation")
+    sticky_state = sticky_executor.cursor_codec.decode(first_sticky.root.next_cursor)
+    sticky_cursor = sticky_executor.cursor_codec.encode(replace(sticky_state, read_gaps_detected=True))
+    second_sticky = sticky_executor.execute(ScanInput(cursor=sticky_cursor, limit=2))
+    if not isinstance(second_sticky.root, AddressScanSuccess) or second_sticky.root.next_cursor is None:
+        raise EvidenceFailure("sticky-gap continuation returned the wrong response")
+    carried_state = sticky_executor.cursor_codec.decode(second_sticky.root.next_cursor)
+    sticky_correct = (
+        second_sticky.root.status.read_gaps_detected
+        and carried_state.read_gaps_detected
+        and sticky_session.active == 0
+        and sticky_session.released.is_set()
+    )
+
+    source_executor, source_session, _source_reads, source_scope = _make_executor(memory)
+    source = source_executor.execute(ScanInput(pattern="41", scope=source_scope, mode="addresses", limit=1))
+    if not isinstance(source.root, AddressScanSuccess) or source.root.next_cursor is None:
+        raise EvidenceFailure("stale-identity evidence did not produce a source cursor")
+    stale_codec = CursorCodec(secret=b"e" * 32, instance_id=b"x" * 16)
+    stale_executor, stale_session, stale_reads, _stale_scope = _make_executor(memory, cursor_codec=stale_codec)
+    stale = stale_executor.execute(ScanInput(cursor=source.root.next_cursor, limit=1))
+    stale_correct = (
+        isinstance(stale.root, ScanFailure)
+        and stale.root.error == "CURSOR_STALE"
+        and stale_reads == []
+        and source_session.active == 0
+        and source_session.released.is_set()
+        and stale_session.active == 0
+        and stale_session.acquire_count == 0
+    )
+
+    duration_ns = time.perf_counter_ns() - started
+    correct = cap_correct and sticky_correct and stale_correct
+    if not correct:
+        raise EvidenceFailure("cursor safety evidence differs from the fixed invariants")
+    return {
+        "duration_ns": duration_ns,
+        "throughput_mib_s": 0.0,
+        "corpus": {"kind": "dense-bytes", "size": len(memory), "sha256": sha256_bytes(memory)},
+        "expected": {
+            "cumulative_count": 3,
+            "cumulative_termination": "match_limit",
+            "sticky_gap_carried": True,
+            "stale_error": "CURSOR_STALE",
+            "stale_physical_read_calls": 0,
+        },
+        "work": {
+            "correct": correct,
+            "cumulative_addresses": cap_addresses,
+            "cumulative_sequence_returned_count": second_cap.root.sequence_returned_count,
+            "cumulative_termination": second_cap.root.status.termination,
+            "cumulative_next_cursor": second_cap.root.next_cursor,
+            "cumulative_candidate_count": second_cap.root.diagnostics.candidate_count,
+            "cumulative_physical_read_calls": len(cap_reads),
+            "sticky_gap_status": second_sticky.root.status.read_gaps_detected,
+            "sticky_gap_cursor_state": carried_state.read_gaps_detected,
+            "stale_error": stale.root.error,
+            "stale_physical_read_calls": len(stale_reads),
+            "all_leases_released": (
+                cap_session.released.is_set()
+                and sticky_session.released.is_set()
+                and source_session.released.is_set()
+                and stale_session.acquire_count == 0
+            ),
+        },
+    }
+
+
 def _batch_first() -> dict[str, Any]:
     memory = bytearray(4096)
     patterns: list[tuple[str, str, int]] = []
@@ -362,6 +477,15 @@ def _batch_count() -> dict[str, Any]:
     memory = bytes(4096)
     patterns = [(f"p{index:02d}", bytes((0xF0, index + 1, 0xEE)).hex(" ").upper(), 0) for index in range(4)]
     return _batch_observation(memory, patterns, mode="count", max_matches=5000)
+
+
+def _batch_caps() -> dict[str, Any]:
+    memory = b"AAAAAA"
+    patterns = [
+        ("single", "41", 2),
+        ("triple", "41 41 41", 2),
+    ]
+    return _batch_observation(memory, patterns, mode="count", max_matches=2)
 
 
 def _batch_observation(
@@ -390,14 +514,18 @@ def _batch_observation(
         raise EvidenceFailure("batch evidence requires shared diagnostics")
 
     batch_values: dict[str, int] = {}
+    batch_statuses: dict[str, str] = {}
     if isinstance(batch_response.root, FirstScanManySuccess):
         for item in batch_response.root.results:
             batch_values[item.key] = 0 if item.match is None else int(item.match.address, 16)
+            batch_statuses[item.key] = item.status.termination
     else:
         for item in batch_response.root.results:
             batch_values[item.key] = item.count
+            batch_statuses[item.key] = item.status.termination
 
     separate_values: dict[str, int] = {}
+    separate_statuses: dict[str, str] = {}
     separate_reads = 0
     separate_bytes = 0
     separate_duration_ns = 0
@@ -416,21 +544,44 @@ def _batch_observation(
         response = executor.execute(request)
         separate_duration_ns += time.perf_counter_ns() - started
         if mode == "first":
-            if response.root.mode != "first":
+            if not isinstance(response.root, FirstScanSuccess):
                 raise EvidenceFailure("independent first scan returned the wrong mode")
             separate_values[key] = 0 if response.root.match is None else int(response.root.match.address, 16)
+            separate_statuses[key] = response.root.status.termination
         else:
             if not isinstance(response.root, CountScanSuccess):
                 raise EvidenceFailure("independent count scan returned the wrong mode")
             separate_values[key] = response.root.count
+            separate_statuses[key] = response.root.status.termination
         separate_reads += len(reads)
         separate_bytes += sum(size for _address, size in reads)
         if session.active != 0 or not session.released.is_set():
             raise EvidenceFailure("independent scan retained its lease")
 
-    expected_values = {key: (expected if mode == "first" else 0) for key, _pattern, expected in patterns}
+    expected_values = {key: expected for key, _pattern, expected in patterns}
+    expected_statuses = {
+        key: (
+            "first_hit"
+            if mode == "first" and expected
+            else "match_limit"
+            if mode == "count" and max_matches is not None and expected == max_matches
+            else "scope_exhausted"
+        )
+        for key, _pattern, expected in patterns
+    }
+    expected_shared_termination = (
+        "first_hit"
+        if mode == "first" and all(expected_values.values())
+        else "match_limit"
+        if mode == "count" and all(status == "match_limit" for status in expected_statuses.values())
+        else "scope_exhausted"
+    )
     batch_bytes = sum(size for _address, size in batch_reads)
-    correct = batch_values == expected_values == separate_values
+    correct = (
+        batch_values == expected_values == separate_values
+        and batch_statuses == expected_statuses == separate_statuses
+        and shared.termination == expected_shared_termination
+    )
     if not correct:
         raise EvidenceFailure("batch and independent scans differ")
     if not batch_reads or separate_reads <= len(batch_reads) or separate_bytes <= batch_bytes:
@@ -447,6 +598,8 @@ def _batch_observation(
             "mode": mode,
             "patterns": len(patterns),
             "values": expected_values,
+            "per_item_statuses": expected_statuses,
+            "shared_termination": expected_shared_termination,
             "region_passes": 1,
         },
         "work": {
@@ -455,6 +608,9 @@ def _batch_observation(
             "patterns": len(patterns),
             "batch_values": batch_values,
             "independent_values": separate_values,
+            "batch_statuses": batch_statuses,
+            "independent_statuses": separate_statuses,
+            "shared_termination": shared.termination,
             "batch_duration_ns": batch_duration_ns,
             "separate_duration_ns": separate_duration_ns,
             "batch_physical_read_calls": len(batch_reads),
@@ -683,6 +839,7 @@ def _make_executor(
     chunk_size: int = 128 * 1024,
     clock: Callable[[], int] = time.monotonic_ns,
     read_hook: Callable[[int, int], None] | None = None,
+    cursor_codec: CursorCodec | None = None,
 ) -> tuple[ScanExecutor, TrackingSession, list[tuple[int, int]], RangeScopeInput]:
     session = TrackingSession(_make_lease())
     reads: list[tuple[int, int]] = []
@@ -707,7 +864,7 @@ def _make_executor(
 
     executor = ScanExecutor(
         session,
-        cursor_codec=CursorCodec(secret=b"e" * 32, instance_id=b"v" * 16),
+        cursor_codec=cursor_codec or CursorCodec(secret=b"e" * 32, instance_id=b"v" * 16),
         query_memory=query,
         read_memory=read,
         target_alive=lambda _handle: True,
@@ -720,8 +877,10 @@ def _make_executor(
 
 _EXERCISES: dict[str, Callable[[], dict[str, Any]]] = {
     "cursor.pages10.limit50.no_earlier_work": _cursor_pages,
+    "cursor.safety.stale_gap_cap": _cursor_safety,
     "batch.first16.one_pass": _batch_first,
     "batch.count4.one_pass": _batch_count,
+    "batch.count2.independent_caps": _batch_caps,
     "control.injected_deadline": _injected_deadline,
     "control.in_band_cancellation": _in_band_cancellation,
     "control.target_change": _target_change,

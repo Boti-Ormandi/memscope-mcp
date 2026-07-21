@@ -17,7 +17,8 @@ python -m benchmarks.scanning.engine `
 The artifact records:
 
 - every cursor page's exact candidate count and resume address;
-- physical reads performed by a shared batch versus equivalent independent scans;
+- cumulative match-cap termination, sticky read-gap propagation, and stale-instance rejection without target reads;
+- physical reads and per-item completion status for a shared batch versus equivalent independent scans;
 - injected logical deadline overshoot and control-poll counts;
 - cancellation and target-change results, cursor suppression, and lease release;
 - proof that a blocked scan worker permits unrelated request-loop progress;
