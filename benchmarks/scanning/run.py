@@ -23,6 +23,8 @@ from benchmarks.scanning.compare import CSV_FIELDS, compare_artifacts, compariso
 from benchmarks.scanning.manifest import BenchmarkCase, select_cases
 from benchmarks.scanning.report import generate_bundle
 
+_CANDIDATE_PROCESS_TIMEOUT_FLOOR_S = 30.0
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -228,7 +230,7 @@ def _run_observation(
     ]
     environment = os.environ.copy()
     environment.update({"PYTHONHASHSEED": "0", "PYTHONNOUSERSITE": "1", "PYTHONUTF8": "1"})
-    timeout_seconds = case.process_timeout_s
+    timeout_seconds = _observation_timeout_seconds(case, implementation)
     started = time.perf_counter_ns()
     try:
         completed = subprocess.run(
@@ -242,7 +244,7 @@ def _run_observation(
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as error:
-        return {
+        result: dict[str, Any] = {
             "case_id": case.case_id,
             "implementation": implementation,
             "profile": profile,
@@ -250,14 +252,31 @@ def _run_observation(
             "pair_order": pair_order,
             "semantic_fingerprint": case.semantic_fingerprint(profile),
             "semantic_descriptor": case.semantic_descriptor(profile),
-            "status": "censored",
-            "correct": None,
-            "lower_bound_duration_ns": int(timeout_seconds * 1_000_000_000),
             "wall_duration_ns": time.perf_counter_ns() - started,
             "timeout_seconds": timeout_seconds,
             "stdout": _bounded_text(error.stdout),
             "stderr": _bounded_text(error.stderr),
         }
+        if implementation == "before":
+            result.update(
+                {
+                    "status": "censored",
+                    "correct": None,
+                    "lower_bound_duration_ns": int(timeout_seconds * 1_000_000_000),
+                }
+            )
+        else:
+            result.update(
+                {
+                    "status": "driver_error",
+                    "correct": False,
+                    "error": (
+                        "candidate benchmark subprocess exceeded its protocol deadline "
+                        f"of {timeout_seconds:.1f} seconds"
+                    ),
+                }
+            )
+        return result
 
     observation = _parse_driver_output(
         completed.stdout,
@@ -280,6 +299,14 @@ def _run_observation(
             }
         )
     return observation
+
+
+def _observation_timeout_seconds(case: BenchmarkCase, implementation: str) -> float:
+    if implementation == "before":
+        return case.process_timeout_s
+    if implementation == "after":
+        return max(case.process_timeout_s, _CANDIDATE_PROCESS_TIMEOUT_FLOOR_S)
+    raise ValueError(f"unsupported implementation {implementation!r}")
 
 
 def _parse_driver_output(

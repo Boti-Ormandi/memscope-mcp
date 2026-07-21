@@ -60,5 +60,5 @@ python -m benchmarks.scanning.run --before-ref c534fbd --profile release --outpu
 
 Use `--case <case_id>` or `--group <group>` repeatedly for partial diagnostics. `--before-root` accepts an already materialized historical tree when worktree creation is intentionally managed elsewhere. Release-profile evidence rejects a dirty candidate tree unless `--allow-dirty-release` is supplied for diagnostics.
 
-The bundle contains raw artifacts for both sides, JSON and CSV comparison tables, a complete Markdown report, a concise post draft, and deterministic SVG charts. Historical timeouts are censored lower bounds. Candidate errors, semantic incompatibility, or incorrect results are blocking. Missing, neutral, censored, and regressing rows remain visible by stable `case_id`.
+The bundle contains raw artifacts for both sides, JSON and CSV comparison tables, a complete Markdown report, a concise post draft, and deterministic SVG charts. Historical case timeouts are censored lower bounds. Candidate observations use a separate minimum 30-second outer watchdog; expiry is a blocking driver error rather than censorship. Candidate errors, semantic incompatibility, or incorrect results are blocking. Missing, neutral, censored, and regressing rows remain visible by stable `case_id`.
 

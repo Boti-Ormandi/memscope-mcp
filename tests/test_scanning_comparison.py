@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -12,13 +13,15 @@ import pytest
 
 from benchmarks.scanning import BENCHMARK_SCHEMA_VERSION, CORPUS_VERSION, MANIFEST_VERSION
 from benchmarks.scanning.compare import compare_artifacts
-from benchmarks.scanning.manifest import CASES
+from benchmarks.scanning.manifest import CASE_BY_ID, CASES
 from benchmarks.scanning.report import generate_bundle
 from benchmarks.scanning.run import (
     _cleanup_owned_worktree,
     _cleanup_stale_owned_worktrees,
     _environment_metadata_for_python,
+    _observation_timeout_seconds,
     _parse_driver_output,
+    _run_observation,
 )
 
 
@@ -165,6 +168,57 @@ def test_report_bundle_keeps_every_declared_case_visible(tmp_path: Path):
         "matcher-throughput.svg",
         "read-reduction.svg",
     } == {path.name for path in (tmp_path / "charts").iterdir()}
+
+
+def test_candidate_process_deadline_has_margin_but_historical_censorship_stays_fixed():
+    case = CASE_BY_ID["matcher.sparse_common16.skew"]
+
+    assert _observation_timeout_seconds(case, "before") == case.process_timeout_s
+    assert _observation_timeout_seconds(case, "after") == 30.0
+
+
+def test_candidate_subprocess_timeout_is_blocking_not_censored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    case = CASE_BY_ID["matcher.sparse_common16.skew"]
+
+    def expire(*args, **kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=args[0],
+            timeout=kwargs["timeout"],
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+
+    monkeypatch.setattr("benchmarks.scanning.run.subprocess.run", expire)
+
+    candidate = _run_observation(
+        repo_root=tmp_path,
+        python=Path(sys.executable),
+        target_root=tmp_path,
+        case=case,
+        implementation="after",
+        profile="release",
+        block=0,
+        pair_order="AB",
+    )
+    historical = _run_observation(
+        repo_root=tmp_path,
+        python=Path(sys.executable),
+        target_root=tmp_path,
+        case=case,
+        implementation="before",
+        profile="release",
+        block=0,
+        pair_order="AB",
+    )
+
+    assert candidate["status"] == "driver_error"
+    assert candidate["correct"] is False
+    assert candidate["timeout_seconds"] == 30.0
+    assert "candidate benchmark subprocess exceeded" in candidate["error"]
+    assert historical["status"] == "censored"
+    assert historical["correct"] is None
+    assert historical["timeout_seconds"] == case.process_timeout_s
+    assert historical["lower_bound_duration_ns"] == int(case.process_timeout_s * 1_000_000_000)
 
 
 def test_driver_protocol_rejects_mismatched_identity():
