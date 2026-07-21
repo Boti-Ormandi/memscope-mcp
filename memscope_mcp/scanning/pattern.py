@@ -140,6 +140,18 @@ def make_exact_query(data: bytes | bytearray | memoryview, *, alignment: int = 1
     return ScanQuery(kind=QueryKind.EXACT, pattern=compile_exact_bytes(data), alignment=alignment)
 
 
+def make_pointer_query(target: int, *, alignment: int = 8) -> ScanQuery:
+    """Compile one little-endian x64 pointer target with absolute alignment."""
+
+    if isinstance(target, bool) or not isinstance(target, int) or not 0 <= target < (1 << 64):
+        raise PatternCompileError(PatternErrorReason.INVALID_TYPE, "Pointer target must be an unsigned 64-bit address")
+    return ScanQuery(
+        kind=QueryKind.POINTER,
+        pattern=compile_exact_bytes(target.to_bytes(8, "little", signed=False)),
+        alignment=alignment,
+    )
+
+
 def format_canonical_pattern(pattern: CompiledPattern) -> str:
     """Render one canonical uppercase token per compiled byte."""
 

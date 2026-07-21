@@ -113,7 +113,6 @@ def test_failure_summary_preserves_bounded_extras(tmp_path, monkeypatch):
         "success": False,
         "error": "BAD_INPUT",
         "detail": "invalid input",
-        "error_detail": "lower-layer detail",
         "hint": "check address syntax",
         "output": [long_output],
         "expected": 4,
@@ -127,7 +126,6 @@ def test_failure_summary_preserves_bounded_extras(tmp_path, monkeypatch):
     assert entry["success"] is False
     assert entry["error"] == "BAD_INPUT"
     assert entry["detail"] == "invalid input"
-    assert entry["failure"]["error_detail"] == "lower-layer detail"
     assert entry["failure"]["hint"] == "check address syntax"
     assert entry["failure"]["expected"] == 4
     assert entry["failure"]["got"] == 3

@@ -54,7 +54,7 @@ def test_smart_dump_rejects_invalid_parameters_before_reading(monkeypatch, kwarg
 
     assert result["success"] is False
     assert result["error"] == error
-    assert result["error_detail"]
+    assert result["detail"]
     assert session.reads == []
 
 

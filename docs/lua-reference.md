@@ -101,13 +101,25 @@ resolveExport("mod.dll", "func")  -- PE export resolution, follows forwarders (d
 ## Scanning
 
 ```lua
-AOBScan(pattern, start?, end?, limit?, timeout_ms?)  -- modules by default; with bounds, scans readable regions
-AOBScanModule(mod, pattern, limit?, timeout_ms?)     -- scan one module
-scanString(str, module?, wide?)         -- find string (ASCII or UTF-16)
-scanPointer(target, module?)            -- find all pointers to target address (xrefs)
+AOBScan(pattern, options?)       -- strict AOB pattern; ?? is the only wildcard
+scanString(text, options?)       -- encoding: "ascii" or "utf-16le"
+scanPointer(target, options?)    -- pointer alignment defaults to 8
 ```
 
-Bounded `AOBScan` walks committed readable regions via `VirtualQueryEx`, including MEM_PRIVATE heap pages. Results include `hits.metadata` with region counts, bytes scanned, timeout state, and result count. `timeout_ms` defaults to 30000 and is clamped to 100..30000 ms.
+Common named options are `scope`, `mode`, `max_matches`, `timeout_ms`, and `diagnostics`. `scanString` additionally accepts `encoding`; `scanPointer` additionally accepts `alignment` in `1..4096`. Scope kinds are `all_modules`, `modules`, and half-open `range`; modes are `addresses`, `first`, and `count`.
+
+```lua
+local hits, err = AOBScan("48 8B 05 ?? ?? ?? ??", {
+  scope = {kind = "modules", names = {"target.dll"}},
+  mode = "addresses",
+  max_matches = 100
+})
+if not hits then
+  print(err.error, err.detail)
+end
+```
+
+Address mode returns numeric entries and metadata, defaults to 100 matches, and permits at most 5000. First mode returns zero or one numeric entry. Count mode returns no numeric entries and places `count` and `observation` under `result.metadata`. Expected input/domain failures return `nil, error_table`; valid no-match scans return a non-nil empty table with explicit status. Full MCP/Lua scope, status, continuation, and migration details are in [`scanning.md`](scanning.md).
 
 ## Pointer chains
 
@@ -403,11 +415,17 @@ callSequence({
 
 Scripts are stored as `.lua` files in `$MEMSCOPE_HOME/scripts/<process>/`. The first-line comment becomes the script description shown by `scripts(action="list")`, and that action returns absolute paths for editing. Run scripts with `scripts(action="run", name="...")`; `process="ProcessName.exe"` selects the saved-script namespace only and does not attach or switch targets. If detached, pass `process` for detached Lua execution. If attached, an explicit `process` must match the attached target. Run responses include `requested_process` (the caller-provided namespace, or `nil` when implicit), `attached_process`, `attached_pid`, and `detached_execution`.
 
+Saved scripts are not rewritten automatically when scan contracts change. For the 0.3 scanning migration, search user scripts for `AOBScanModule`, positional `AOBScan` arguments, and `scanString` boolean encoding arguments; replace them with named options as documented in [`scanning.md`](scanning.md).
+
 ### Example: locate a singleton from a RIP-relative reference
 
 ```lua
 local pattern = "48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B D8"
-local matches = AOBScanModule("target.dll", pattern)
+local matches, err = AOBScan(pattern, {
+  scope = {kind = "modules", names = {"target.dll"}},
+  mode = "first"
+})
+if not matches then error(err.detail) end
 
 if #matches > 0 then
   local rip_offset = readInteger(matches[1] + 3)

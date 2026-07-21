@@ -21,7 +21,7 @@ class TestLuaErrors:
     def test_runtime_error(self):
         result = LUA_ENGINE.execute('error("intentional error")')
         assert result["success"] is False
-        assert "intentional error" in result.get("error_detail", "")
+        assert "intentional error" in result.get("detail", "")
 
     def test_nil_variable_access(self):
         result = LUA_ENGINE.execute("local x = nil; addResult('val', x)")

@@ -4,6 +4,7 @@ A minimal MCP server for low-level memory research and reverse engineering.
 Designed for AI agents to explore memory structures dynamically.
 """
 
+import hashlib
 import logging
 import time
 from typing import Any, Optional
@@ -12,6 +13,9 @@ from mcp.server.fastmcp import FastMCP
 
 from .extensions.bootstrap import bootstrap_extensions
 from .instructions import build_instructions
+from .scanning.boundary import register_strict_model_tool
+from .scanning.contract import ScanInput, ScanResponse, scan_input_validation_failure
+from .scanning.execution import ScanExecutor, execute_scan_async
 from .session import SESSION
 from .tools.lua.engine import LUA_ENGINE, execute_lua
 from .tools.lua_scripts import (
@@ -23,7 +27,6 @@ from .tools.lua_scripts import (
 # Import tool functions
 from .tools.memory import smart_dump
 from .tools.pointers import resolve_pointer_chain
-from .tools.scanning import scan_aob
 from .tools.types import read_typed, write_typed
 from .utils.logger import LOGGER
 from .utils.memory_utils import format_address
@@ -48,7 +51,7 @@ Session log: {LOGGER._get_log_file()}""",
 
 
 def _normalize_tool_result(result: Any) -> Any:
-    """Normalize MCP wrapper failure dictionaries without masking exceptions."""
+    """Normalize public wrapper failures to one flat application envelope."""
     if not isinstance(result, dict):
         return result
 
@@ -58,24 +61,12 @@ def _normalize_tool_result(result: Any) -> Any:
 
     normalized = dict(result)
     normalized["success"] = False
-
-    if normalized.get("error") == "PROCESS_NOT_ATTACHED":
-        normalized["error"] = "NOT_ATTACHED"
-        normalized["source_error"] = "PROCESS_NOT_ATTACHED"
-    elif "error" not in normalized or normalized["error"] is None:
+    if normalized.get("error") is None:
         normalized["error"] = "ERROR"
-
-    has_detail = "detail" in normalized and normalized["detail"] is not None
-    has_error_detail = "error_detail" in normalized and normalized["error_detail"] is not None
-    if has_detail and not has_error_detail:
-        normalized["error_detail"] = normalized["detail"]
-    elif has_error_detail and not has_detail:
-        normalized["detail"] = normalized["error_detail"]
-    elif not has_detail and not has_error_detail:
-        detail = str(normalized["error"])
-        normalized["detail"] = detail
-        normalized["error_detail"] = detail
-
+    elif normalized["error"] == "PROCESS_NOT_ATTACHED":
+        normalized["error"] = "NOT_ATTACHED"
+    detail = result.get("detail")
+    normalized["detail"] = str(detail if detail is not None else normalized["error"])
     return normalized
 
 
@@ -515,38 +506,77 @@ def chain(base: str, offsets: list[int | str], read_final: str = "ptr") -> dict:
     return _log("chain", {"base": base, "offsets": offsets, "read_final": read_final}, result, _start)
 
 
-@mcp.tool()
-def scan(
-    pattern: str,
-    module: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
-    summary_only: bool = False,
-    address_min: Optional[str] = None,
-    address_max: Optional[str] = None,
-    max_results: int = 5000,
-    return_offset: bool = False,
-    timeout_ms: int = 30000,
-) -> dict:
-    """Scan for byte pattern (AOB). Use ?? for wildcards.
-    Faster with module specified. address_min/address_max bound the scan range.
-    timeout_ms is clamped by the scanner to 100..30000 ms.
-    Returns absolute matching addresses; return_offset=True adds module_offset."""
-    _start = time.perf_counter()
-    _log_args = {
-        "pattern": pattern,
-        "module": module,
-        "limit": limit,
-        "offset": offset,
-        "summary_only": summary_only,
-        "address_min": address_min,
-        "address_max": address_max,
-        "max_results": max_results,
-        "return_offset": return_offset,
-        "timeout_ms": timeout_ms,
+SCAN_EXECUTOR = ScanExecutor(SESSION)
+
+
+def _scan_log_args(request: ScanInput) -> dict:
+    """Return bounded scan arguments without logging opaque cursor contents."""
+    args = {
+        "mode": request.mode,
+        "limit": request.limit,
+        "max_matches": request.max_matches,
+        "timeout_ms": request.timeout_ms,
+        "diagnostics": request.diagnostics,
     }
-    result = scan_aob(**_log_args)
-    return _log("scan", _log_args, result, _start)
+    if request.pattern is not None:
+        encoded = request.pattern.encode("utf-8", errors="replace")
+        args["pattern"] = {
+            "type": "scan_pattern",
+            "length": len(request.pattern),
+            "preview": request.pattern[:160] + ("..." if len(request.pattern) > 160 else ""),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+        }
+        args["scope"] = None if request.scope is None else request.scope.model_dump(mode="python")
+    if request.cursor is not None:
+        encoded = request.cursor.encode("utf-8", errors="replace")
+        args["cursor"] = {
+            "type": "scan_cursor",
+            "length": len(encoded),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+        }
+    return args
+
+
+def _scan_log_result(response: ScanResponse) -> dict:
+    """Return a validated scan result with any continuation token summarized."""
+    result = response.root.model_dump(mode="python", exclude_none=False)
+    cursor = result.get("next_cursor")
+    if cursor is not None:
+        encoded = cursor.encode("utf-8", errors="replace")
+        result["next_cursor"] = {
+            "type": "scan_cursor",
+            "length": len(encoded),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+        }
+    return result
+
+
+async def _scan_handler(request: ScanInput, _context) -> ScanResponse:
+    """Execute one validated scan request outside the async request loop."""
+    started = time.perf_counter()
+    response = await execute_scan_async(SCAN_EXECUTOR, request)
+    duration_ms = (time.perf_counter() - started) * 1000
+    LOGGER.log(
+        "scan",
+        _scan_log_args(request),
+        _scan_log_result(response),
+        duration_ms,
+    )
+    return response
+
+
+register_strict_model_tool(
+    mcp,
+    name="scan",
+    description=(
+        "Scan target memory with strict AOB patterns. Supports address pages with authenticated cursor "
+        "continuation, first-hit mode, count mode, structured scopes, planner filters, and bounded diagnostics."
+    ),
+    input_model=ScanInput,
+    output_model=ScanResponse,
+    handler=_scan_handler,
+    validation_failure_mapper=scan_input_validation_failure,
+)
 
 
 # ============================================================================

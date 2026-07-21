@@ -89,7 +89,12 @@ These are typical but may vary by Unity version:
 Use pattern scans to find IL2CPP runtime functions, then call them:
 ```lua
 -- Example: Find class by name
-local class_from_name = AOBScanModule("GameAssembly.dll", "48 89 5C 24 08 57 48 83 EC 20 ...")[1]
+local hits, err = AOBScan("48 89 5C 24 08 57 48 83 EC 20 ...", {
+  scope = {kind = "modules", names = {"GameAssembly.dll"}},
+  mode = "first"
+})
+if not hits then error(err.detail) end
+local class_from_name = hits[1]
 ```
 
 Scripts should discover offsets dynamically rather than hardcoding them,

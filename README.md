@@ -80,8 +80,8 @@ Everything happens through MCP tool calls. A typical exploration session:
 
 **Scan for a pattern, follow pointers:**
 ```
-> scan(pattern="48 8B 05 ?? ?? ?? ??", module="target.dll", return_offset=True)
-  {data: [{address: "0x7FF6A1A208D8", module_offset: "target.dll+0x1A208D8"}], _pagination: {total: 1}}
+> scan(pattern="48 8B 05 ?? ?? ?? ??", scope={"kind": "modules", "names": ["target.dll"]}, mode="first")
+  {success: true, mode: "first", match: {address: "0x7FF6A1A208D8", module: "target.dll", module_offset: "0x1A208D8"}, status: {termination: "first_hit", read_gaps_detected: false}}
 
 > chain(base="0x183C13300", offsets=["0x50", "0x18", "0x100"], read_final="float")
   {final_address: "0x184A52118", final_value: 100.0}
@@ -90,7 +90,12 @@ Everything happens through MCP tool calls. A typical exploration session:
 **Run a multi-step Lua script in one call:**
 ```
 > lua(script="""
-    local matches = AOBScanModule("target.dll", "48 8B 05 ?? ?? ?? ??")
+    local matches, err = AOBScan("48 8B 05 ?? ?? ?? ??", {
+      scope = {kind = "modules", names = {"target.dll"}},
+      mode = "addresses",
+      max_matches = 100
+    })
+    if not matches then error(err.detail) end
     for i, addr in ipairs(matches) do
       local ptr = readPointer(addr + 3)
       local val = readFloat(ptr + 0x100)
@@ -113,7 +118,7 @@ Addresses accept hex strings (`"0x1234"`), module+offset (`"module.dll+0x1234"`)
 | `write` | Write typed memory, including bytes/bytes[N], with optional verified writes: writable range check, pre-image capture, byte-for-byte readback, and pre-image restore attempt on post-write verification failure |
 | `dump` | Smart memory dump with automatic type detection and pagination/filter knobs (`start_offset`, `pointers_only`, `non_null_only`, `max_entries`, `annotation_level`). `full` annotations include confidence |
 | `chain` | Follow pointer chains: `[[base+off0]+off1]...` with configurable final read type |
-| `scan` | AOB pattern scanning with wildcards (`??`, `?`, `**`). Supports pagination, bounds, `return_offset`, and `timeout_ms` (clamped to 100..30000 ms) |
+| `scan` | Strict AOB scanning with `??` wildcards, address/first/count modes, authenticated cursor continuation, structured scopes and planner filters, bounded diagnostics, and explicit termination status |
 | `lua` | Execute Lua scripts server-side for multi-step operations |
 | `scripts` | Manage saved Lua scripts. Actions: `list` (with paths), `run` (with args and namespace checks) |
 
@@ -127,7 +132,11 @@ A server-side Lua 5.4 environment with ~110 always-loaded functions exposing mem
 
 ```lua
 -- Find a RIP-relative singleton reference and read fields off it
-local matches = AOBScanModule("target.dll", "48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B D8")
+local matches, err = AOBScan("48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B D8", {
+  scope = {kind = "modules", names = {"target.dll"}},
+  mode = "first"
+})
+if not matches then error(err.detail) end
 if #matches > 0 then
   local rip_offset = readInteger(matches[1] + 3)
   local singleton = matches[1] + 7 + rip_offset
@@ -140,6 +149,8 @@ if #matches > 0 then
 end
 ```
 
+The MCP and Lua scan contracts, continuation rules, and 0.2.x migration table are documented in [`docs/scanning.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/scanning.md).
+
 Function categories (full reference in [`docs/lua-reference.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/lua-reference.md)):
 
 | Category | Functions |
@@ -148,7 +159,7 @@ Function categories (full reference in [`docs/lua-reference.md`](https://github.
 | Memory write | 13 |
 | Struct helpers (vectors, matrix, declarative struct read) | 5 |
 | Module / address resolution (incl. `resolveExport`) | 7 |
-| Scanning (AOB, string, pointer xrefs) | 4 |
+| Scanning (AOB, string, pointer xrefs) | 3 |
 | Pointer chains | 1 |
 | Code execution (shellcode, alloc, callSequence) | 8 |
 | Hooking (inline hooks + ring buffer) | 8 |

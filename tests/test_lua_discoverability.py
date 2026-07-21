@@ -87,6 +87,9 @@ def test_get_capabilities_reports_detached_state_paths_and_wrapper_flags(monkeyp
         addResult("has_session_log", caps.paths.session_log ~= nil)
         addResult("tool_count", caps.wrappers.tool_count)
         addResult("error_normalization", caps.wrappers.error_normalization)
+        addResult("strict_scan_contract", caps.wrappers.strict_scan_contract)
+        addResult("scan_cursor_continuation", caps.wrappers.scan_cursor_continuation)
+        addResult("lua_scan_options", caps.wrappers.lua_scan_options)
         addResult("script_namespace_selection", caps.wrappers.script_namespace_selection)
         addResult("verified_writes", caps.wrappers.verified_writes)
         addResult("typed_byte_writes", caps.wrappers.typed_byte_writes)
@@ -101,6 +104,9 @@ def test_get_capabilities_reports_detached_state_paths_and_wrapper_flags(monkeyp
     assert result["results"]["has_session_log"] is True
     assert result["results"]["tool_count"] == 10
     assert result["results"]["error_normalization"] is True
+    assert result["results"]["strict_scan_contract"] is True
+    assert result["results"]["scan_cursor_continuation"] is True
+    assert result["results"]["lua_scan_options"] is True
     assert result["results"]["script_namespace_selection"] is True
     assert result["results"]["verified_writes"] is True
     assert result["results"]["typed_byte_writes"] is True

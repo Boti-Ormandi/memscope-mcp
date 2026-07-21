@@ -1,8 +1,11 @@
 """Direct tests for the public MCP wrapper functions."""
 
+import asyncio
+
 import pytest
 
 import memscope_mcp.server as server
+from memscope_mcp.scanning.contract import AddressScanSuccess, ScanHit, ScanResponse, ScanStatus
 
 
 @pytest.fixture(autouse=True)
@@ -10,77 +13,96 @@ def disable_session_logging(monkeypatch):
     monkeypatch.setattr(server, "_log", lambda _tool, _args, result, _start_time: result)
 
 
-def test_scan_forwards_default_arguments_by_keyword(monkeypatch):
-    calls = []
-
-    def fake_scan_aob(*args, **kwargs):
-        calls.append((args, kwargs))
-        return {"success": True, "data": [{"address": "0x1000"}]}
-
-    monkeypatch.setattr(server, "scan_aob", fake_scan_aob)
-
-    result = server.scan("48 8B ??")
-
-    assert result == {"success": True, "data": [{"address": "0x1000"}]}
-    assert calls == [
-        (
-            (),
-            {
-                "pattern": "48 8B ??",
-                "module": None,
-                "limit": 50,
-                "offset": 0,
-                "summary_only": False,
-                "address_min": None,
-                "address_max": None,
-                "max_results": 5000,
-                "return_offset": False,
-                "timeout_ms": 30000,
-            },
+def _empty_scan_response() -> ScanResponse:
+    return ScanResponse.model_validate(
+        AddressScanSuccess(
+            success=True,
+            mode="addresses",
+            matches=[],
+            returned_count=0,
+            sequence_returned_count=0,
+            next_cursor=None,
+            status=ScanStatus(termination="scope_exhausted", read_gaps_detected=False),
         )
-    ]
-
-
-def test_scan_forwards_custom_arguments_by_keyword(monkeypatch):
-    calls = []
-
-    def fake_scan_aob(*args, **kwargs):
-        calls.append((args, kwargs))
-        return {"success": True, "data": [{"address": "0x1000", "module_offset": "target.dll+0x10"}]}
-
-    monkeypatch.setattr(server, "scan_aob", fake_scan_aob)
-
-    result = server.scan(
-        "48 8B ??",
-        module="target.dll",
-        limit=7,
-        offset=2,
-        summary_only=True,
-        address_min="target.dll+0x100",
-        address_max="target.dll+0x200",
-        max_results=123,
-        return_offset=True,
-        timeout_ms=1500,
     )
 
-    assert result == {"success": True, "data": [{"address": "0x1000", "module_offset": "target.dll+0x10"}]}
-    assert calls == [
-        (
-            (),
-            {
-                "pattern": "48 8B ??",
-                "module": "target.dll",
-                "limit": 7,
-                "offset": 2,
-                "summary_only": True,
-                "address_min": "target.dll+0x100",
-                "address_max": "target.dll+0x200",
-                "max_results": 123,
-                "return_offset": True,
-                "timeout_ms": 1500,
-            },
+
+def test_registered_scan_uses_strict_async_executor_and_redacted_logging(monkeypatch):
+    calls = []
+    logs = []
+
+    async def fake_execute(executor, request):
+        calls.append((executor, request))
+        return _empty_scan_response()
+
+    monkeypatch.setattr(server, "execute_scan_async", fake_execute)
+    monkeypatch.setattr(server.LOGGER, "log", lambda *args: logs.append(args))
+
+    _content, structured = asyncio.run(server.mcp.call_tool("scan", {"pattern": "48 8B ??"}))
+
+    assert structured["success"] is True
+    assert len(calls) == 1
+    assert calls[0][0] is server.SCAN_EXECUTOR
+    request = calls[0][1]
+    assert request.pattern == "48 8B ??"
+    assert request.limit is None
+    assert request.max_matches is None
+    assert logs[0][0] == "scan"
+    assert logs[0][1]["pattern"]["type"] == "scan_pattern"
+    assert logs[0][1]["pattern"]["sha256"]
+
+
+def test_scan_log_args_never_include_raw_cursor():
+    cursor = "m1.header.secret-signature"
+
+    args = server._scan_log_args(server.ScanInput(cursor=cursor))
+
+    assert args["cursor"]["type"] == "scan_cursor"
+    assert args["cursor"]["length"] == len(cursor)
+    assert args["cursor"]["sha256"]
+    assert cursor not in repr(args)
+
+
+def test_scan_log_result_never_includes_raw_next_cursor():
+    cursor = "m1.header.secret-signature"
+    response = ScanResponse.model_validate(
+        AddressScanSuccess(
+            success=True,
+            mode="addresses",
+            matches=[ScanHit(address="0x1000", module=None, module_offset=None)],
+            returned_count=1,
+            sequence_returned_count=1,
+            next_cursor=cursor,
+            status=ScanStatus(termination="page_limit", read_gaps_detected=False),
         )
-    ]
+    )
+
+    result = server._scan_log_result(response)
+
+    assert result["next_cursor"]["type"] == "scan_cursor"
+    assert result["next_cursor"]["length"] == len(cursor)
+    assert result["next_cursor"]["sha256"]
+    assert cursor not in repr(result)
+
+
+def test_registered_scan_rejects_removed_fields_before_execution(monkeypatch):
+    calls = []
+
+    async def fake_execute(_executor, _request):
+        calls.append(True)
+        return _empty_scan_response()
+
+    monkeypatch.setattr(server, "execute_scan_async", fake_execute)
+
+    _content, structured = asyncio.run(server.mcp.call_tool("scan", {"pattern": "48 8B ??", "offset": 1}))
+
+    assert structured == {
+        "success": False,
+        "error": "INVALID_ARGUMENT",
+        "detail": "Unknown scan argument 'offset'",
+        "field": "offset",
+    }
+    assert calls == []
 
 
 def test_dump_forwards_default_arguments_by_keyword(monkeypatch):

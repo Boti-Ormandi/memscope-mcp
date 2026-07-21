@@ -31,12 +31,12 @@ def read_memory(address: str, size: int = 8, format: str = "hex") -> dict[str, A
         }
     """
     if not SESSION.ensure_attached():
-        return {"success": False, "error": "PROCESS_NOT_ATTACHED", "error_detail": "Call attach_process first"}
+        return {"success": False, "error": "PROCESS_NOT_ATTACHED", "detail": "Call attach_process first"}
 
     try:
         addr = parse_address(address)
     except ValueError as e:
-        return {"success": False, "error": "INVALID_ADDRESS", "error_detail": str(e)}
+        return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
     try:
         # Read raw bytes for display
@@ -61,7 +61,7 @@ def read_memory(address: str, size: int = 8, format: str = "hex") -> dict[str, A
         return {
             "success": False,
             "error": "ACCESS_VIOLATION",
-            "error_detail": f"Cannot read memory at {format_address(addr)}: {str(e)}",
+            "detail": f"Cannot read memory at {format_address(addr)}: {str(e)}",
         }
 
 
@@ -71,7 +71,7 @@ _DUMP_ANNOTATION_LEVELS = {"minimal", "normal", "full"}
 
 
 def _invalid_dump_param(error: str, detail: str) -> dict[str, Any]:
-    return {"success": False, "error": error, "error_detail": detail}
+    return {"success": False, "error": error, "detail": detail}
 
 
 def _is_int_param(value: object) -> bool:
@@ -108,7 +108,7 @@ def smart_dump(
         }
     """
     if not SESSION.ensure_attached():
-        return {"success": False, "error": "PROCESS_NOT_ATTACHED", "error_detail": "Call attach_process first"}
+        return {"success": False, "error": "PROCESS_NOT_ATTACHED", "detail": "Call attach_process first"}
 
     if not _is_int_param(start_offset) or not 0 <= start_offset < _DUMP_WINDOW_SIZE:
         return _invalid_dump_param("INVALID_START_OFFSET", "start_offset must be an integer in range 0..4095")
@@ -128,7 +128,7 @@ def smart_dump(
     try:
         base_addr = parse_address(address)
     except ValueError as e:
-        return {"success": False, "error": "INVALID_ADDRESS", "error_detail": str(e)}
+        return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
     actual_addr = base_addr + start_offset
 
@@ -138,7 +138,7 @@ def smart_dump(
         return {
             "success": False,
             "error": "ACCESS_VIOLATION",
-            "error_detail": f"Cannot read memory at {format_address(actual_addr)}: {str(e)}",
+            "detail": f"Cannot read memory at {format_address(actual_addr)}: {str(e)}",
         }
 
     bytes_read = len(data)

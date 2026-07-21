@@ -351,14 +351,14 @@ class MemscopeLuaEngine:
                 return {
                     "success": False,
                     "error": "CANCELLED",
-                    "error_detail": "Script was cancelled",
+                    "detail": "Script was cancelled",
                     "output": self._output,
                 }
             if _TIMEOUT_MARKER in error_msg:
                 return {
                     "success": False,
                     "error": "TIMEOUT",
-                    "error_detail": "Script exceeded execution time limit",
+                    "detail": "Script exceeded execution time limit",
                     "output": self._output,
                 }
 
@@ -368,7 +368,7 @@ class MemscopeLuaEngine:
                     return {
                         "success": False,
                         "error": "LUA_PARSE_ERROR",
-                        "error_detail": (
+                        "detail": (
                             f"Large hex literals detected: {', '.join(large_hex[:3])}. "
                             f'Use addr() function instead: addr("{large_hex[0]}")'
                         ),
@@ -382,7 +382,7 @@ class MemscopeLuaEngine:
             return {
                 "success": False,
                 "error": "LUA_ERROR",
-                "error_detail": error_msg,
+                "detail": error_msg,
                 "output": self._output,
             }
         except Exception as e:
@@ -394,14 +394,14 @@ class MemscopeLuaEngine:
                 return {
                     "success": False,
                     "error": "CANCELLED",
-                    "error_detail": "Script was cancelled",
+                    "detail": "Script was cancelled",
                     "output": self._output,
                 }
             if _TIMEOUT_MARKER in error_msg:
                 return {
                     "success": False,
                     "error": "TIMEOUT",
-                    "error_detail": "Script exceeded execution time limit",
+                    "detail": "Script exceeded execution time limit",
                     "output": self._output,
                 }
 
@@ -409,7 +409,7 @@ class MemscopeLuaEngine:
                 return {
                     "success": False,
                     "error": "EXECUTION_ERROR",
-                    "error_detail": f"Lua numeric overflow with 64-bit value: {error_msg}",
+                    "detail": f"Lua numeric overflow with 64-bit value: {error_msg}",
                     "output": self._output,
                     "hint": (
                         "64-bit integer comparison overflow. Solutions:\n"
@@ -425,7 +425,7 @@ class MemscopeLuaEngine:
             return {
                 "success": False,
                 "error": "EXECUTION_ERROR",
-                "error_detail": error_msg,
+                "detail": error_msg,
                 "output": self._output,
             }
 

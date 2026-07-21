@@ -41,12 +41,12 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
     offsets = [parse_offset(o) for o in offsets]
 
     if not SESSION.ensure_attached():
-        return {"success": False, "error": "PROCESS_NOT_ATTACHED", "error_detail": "Call attach_process first"}
+        return {"success": False, "error": "PROCESS_NOT_ATTACHED", "detail": "Call attach_process first"}
 
     try:
         current_addr = parse_address(base)
     except ValueError as e:
-        return {"success": False, "error": "INVALID_ADDRESS", "error_detail": str(e)}
+        return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
     chain = []
     current = current_addr
@@ -76,7 +76,7 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
                 "final_value": None,
                 "error_at_step": step,
                 "error": "ACCESS_VIOLATION",
-                "error_detail": f"Step {step}: Cannot read at {format_address(read_addr)}",
+                "detail": f"Step {step}: Cannot read at {format_address(read_addr)}",
             }
 
         chain.append(
@@ -102,7 +102,7 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
                 "final_value": None,
                 "error_at_step": step,
                 "error": "INVALID_POINTER",
-                "error_detail": f"Step {step}: Read value 0x{ptr_value:X} is not a valid pointer",
+                "detail": f"Step {step}: Read value 0x{ptr_value:X} is not a valid pointer",
             }
 
         current = ptr_value  # Continue from read value
@@ -139,7 +139,7 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
             "final_value": None,
             "error_at_step": len(offsets),
             "error": "ACCESS_VIOLATION",
-            "error_detail": f"Cannot read final value at {format_address(final_read_addr)}: {str(e)}",
+            "detail": f"Cannot read final value at {format_address(final_read_addr)}: {str(e)}",
         }
 
 
@@ -158,12 +158,12 @@ def read_pointer(address: str) -> dict[str, Any]:
         }
     """
     if not SESSION.ensure_attached():
-        return {"success": False, "error": "PROCESS_NOT_ATTACHED", "error_detail": "Call attach_process first"}
+        return {"success": False, "error": "PROCESS_NOT_ATTACHED", "detail": "Call attach_process first"}
 
     try:
         addr = parse_address(address)
     except ValueError as e:
-        return {"success": False, "error": "INVALID_ADDRESS", "error_detail": str(e)}
+        return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
     try:
         ptr_value = SESSION.read_ptr(addr)
@@ -190,5 +190,5 @@ def read_pointer(address: str) -> dict[str, Any]:
         return {
             "success": False,
             "error": "ACCESS_VIOLATION",
-            "error_detail": f"Cannot read at {format_address(addr)}: {str(e)}",
+            "detail": f"Cannot read at {format_address(addr)}: {str(e)}",
         }

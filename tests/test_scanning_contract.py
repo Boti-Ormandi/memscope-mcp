@@ -8,6 +8,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 from pydantic import ValidationError
 
+import memscope_mcp.server as public_server
 from memscope_mcp.scanning.boundary import register_strict_model_tool
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
@@ -142,6 +143,14 @@ def test_real_fastmcp_scan_schemas_match_snapshots():
     }
     assert "result" not in tools[0].outputSchema.get("properties", {})
     assert "anyOf" in tools[0].outputSchema
+
+
+def test_registered_public_scan_schemas_match_snapshots():
+    tools = asyncio.run(public_server.mcp.list_tools())
+    scan_tool = next(tool for tool in tools if tool.name == "scan")
+
+    assert scan_tool.inputSchema == _load_snapshot("scan-input-schema.json")
+    assert scan_tool.outputSchema == _load_snapshot("scan-output-schema.json")
 
 
 @pytest.mark.parametrize(

@@ -1,176 +1,264 @@
-"""Tests for AOB scanning region selection and metadata."""
+"""Production Lua scanning cutover tests over the unified engine."""
 
-from dataclasses import dataclass
+from __future__ import annotations
 
-from memscope_mcp.tools import scanning
-from memscope_mcp.tools.lua import engine as lua_engine_module
+import threading
+import time
+from contextlib import contextmanager
+from types import SimpleNamespace
 
-
-@dataclass
-class FakeMbi:
-    BaseAddress: int
-    RegionSize: int
-    State: int
-    Protect: int
-    Type: int = 0x20000  # MEM_PRIVATE
-
-
-class FakePm:
-    process_handle = 1
+import memscope_mcp.server as server
+from memscope_mcp.scanning.execution import ScanExecutor
+from memscope_mcp.scanning.lifecycle import ModuleSnapshot, ScanLease, build_module_records
+from memscope_mcp.scanning.planner import MEM_COMMIT, MEM_IMAGE, PAGE_READWRITE
+from memscope_mcp.tools.lua.engine import LUA_ENGINE
 
 
 class FakeSession:
-    def __init__(self, memory: dict[int, bytes], modules: dict[str, dict]):
-        self.pm = FakePm()
-        self.memory = memory
-        self.modules = modules
+    def __init__(self, lease: ScanLease) -> None:
+        self.lease = lease
 
-    def ensure_attached(self):
-        return True
-
-    def read_bytes(self, address: int, size: int) -> bytes:
-        for base, data in self.memory.items():
-            end = base + len(data)
-            if base <= address and address + size <= end:
-                offset = address - base
-                return data[offset : offset + size]
-        raise OSError(f"unmapped read: 0x{address:X}+0x{size:X}")
+    @contextmanager
+    def acquire_scan_lease(self):
+        yield self.lease
 
 
-def make_virtual_query(regions: list[FakeMbi]):
-    def fake_virtual_query(_handle, address: int):
-        for region in regions:
-            start = region.BaseAddress
-            end = start + region.RegionSize
-            if start <= address < end:
-                return region
-        raise OSError(f"unmapped query: 0x{address:X}")
-
-    return fake_virtual_query
-
-
-def install_fake_target(monkeypatch, regions: list[FakeMbi]):
-    module_data = bytearray(0x100)
-    module_data[0x10:0x14] = b"\xde\xad\xbe\xef"
-
-    heap_data = bytearray(0x1000)
-    heap_data[0x20:0x24] = b"\xde\xad\xbe\xef"
-    heap_data[0x40:0x44] = b"\xde\xad\xbe\xef"
-
-    second_heap = bytearray(0x1000)
-    second_heap[0x20:0x24] = b"\xde\xad\xbe\xef"
-
-    fake_session = FakeSession(
-        {
-            0x1000: bytes(module_data),
-            0x5000: bytes(heap_data),
-            0x7000: bytes(second_heap),
-        },
-        {"target.dll": {"base": 0x1000, "size": len(module_data), "path": "target.dll"}},
+def make_executor(
+    memory: bytes,
+    *,
+    base: int = 0x1000,
+    chunk_size: int = 128 * 1024,
+    read_hook=None,
+    clock=time.monotonic_ns,
+) -> ScanExecutor:
+    module = SimpleNamespace(
+        name="target.dll",
+        lpBaseOfDll=base,
+        SizeOfImage=len(memory),
+        filename=r"C:\Target\target.dll",
+    )
+    modules = ModuleSnapshot.create(build_module_records((module,)), generation=1)
+    lease = ScanLease(
+        generation=1,
+        pid=123,
+        process_handle=1,
+        target_process="Target.exe",
+        modules=modules,
+        lifecycle_cancel=threading.Event(),
     )
 
-    monkeypatch.setattr(scanning, "SESSION", fake_session)
-    monkeypatch.setattr(lua_engine_module, "SESSION", fake_session)
-    monkeypatch.setattr(scanning.pymem.memory, "virtual_query", make_virtual_query(regions))
-    return fake_session
+    def query(_handle: int, address: int):
+        if not base <= address < base + len(memory):
+            raise OSError(f"unmapped address 0x{address:X}")
+        return SimpleNamespace(
+            BaseAddress=base,
+            RegionSize=len(memory),
+            State=MEM_COMMIT,
+            Protect=PAGE_READWRITE,
+            Type=MEM_IMAGE,
+        )
 
+    def read(_handle: int, address: int, size: int) -> bytes:
+        if read_hook is not None:
+            read_hook(address, size)
+        offset = address - base
+        return memory[offset : offset + size]
 
-def test_unbounded_aob_scan_keeps_module_only_behavior(monkeypatch):
-    install_fake_target(monkeypatch, [])
-
-    result = scanning.scan_aob_addresses("DE AD BE EF", max_results=10)
-
-    assert result["success"] is True
-    assert result["matches"] == [0x1010]
-    assert result["metadata"]["mode"] == "modules"
-    assert result["metadata"]["scanned_region_count"] == 1
-    assert result["metadata"]["result_count"] == 1
-
-
-def test_bounded_aob_scan_uses_readable_private_regions(monkeypatch):
-    install_fake_target(
-        monkeypatch,
-        [FakeMbi(0x5000, 0x100, scanning.MEM_COMMIT, 0x04)],
+    return ScanExecutor(
+        FakeSession(lease),
+        query_memory=query,
+        read_memory=read,
+        target_alive=lambda _handle: True,
+        chunk_size=chunk_size,
+        page_size=1,
+        clock=clock,
     )
 
-    result = scanning.scan_aob_addresses("DE AD BE EF", start_addr=0x5000, end_addr=0x50FF, max_results=10)
 
-    assert result["success"] is True
-    assert result["matches"] == [0x5020, 0x5040]
-    assert result["metadata"]["mode"] == "range"
-    assert result["metadata"]["scanned_region_count"] == 1
-    assert result["metadata"]["skipped_region_count"] == 0
-    assert result["metadata"]["bytes_scanned"] == 0x100
-    assert result["metadata"]["result_count"] == 2
-
-
-def test_bounded_aob_scan_clips_to_requested_bounds(monkeypatch):
-    install_fake_target(
-        monkeypatch,
-        [FakeMbi(0x5000, 0x100, scanning.MEM_COMMIT, 0x04)],
+def install_executor(
+    monkeypatch,
+    memory: bytes,
+    *,
+    base: int = 0x1000,
+    chunk_size: int = 128 * 1024,
+    read_hook=None,
+    clock=time.monotonic_ns,
+):
+    extension = next(item for item in server._extensions if item.name == "module_scan")
+    executor = make_executor(
+        memory,
+        base=base,
+        chunk_size=chunk_size,
+        read_hook=read_hook,
+        clock=clock,
     )
-
-    result = scanning.scan_aob_addresses("DE AD BE EF", start_addr=0x5030, end_addr=0x50FF, max_results=10)
-
-    assert result["success"] is True
-    assert result["matches"] == [0x5040]
-    assert result["metadata"]["bytes_scanned"] == 0xD0
+    monkeypatch.setattr(extension._scan_adapter, "_executor", executor)
+    return executor
 
 
-def test_bounded_aob_scan_skips_unreadable_regions(monkeypatch):
-    install_fake_target(
-        monkeypatch,
-        [
-            FakeMbi(0x5000, 0x1000, scanning.MEM_COMMIT, 0x04),
-            FakeMbi(0x6000, 0x1000, scanning.MEM_COMMIT, 0x01),
-            FakeMbi(0x7000, 0x1000, scanning.MEM_COMMIT, 0x04),
-        ],
-    )
+def test_lua_aob_options_table_returns_bounded_addresses_and_status(monkeypatch):
+    install_executor(monkeypatch, b"AAAAA")
 
-    result = scanning.scan_aob_addresses("DE AD BE EF", start_addr=0x5000, end_addr=0x7FFF, max_results=10)
-
-    assert result["success"] is True
-    assert result["matches"] == [0x5020, 0x5040, 0x7020]
-    assert result["metadata"]["scanned_region_count"] == 2
-    assert result["metadata"]["skipped_region_count"] == 1
-    assert result["metadata"]["bytes_scanned"] == 0x2000
-
-
-def test_scan_aob_response_includes_scan_metadata(monkeypatch):
-    install_fake_target(
-        monkeypatch,
-        [FakeMbi(0x5000, 0x100, scanning.MEM_COMMIT, 0x04)],
-    )
-
-    result = scanning.scan_aob("DE AD BE EF", address_min="0x5000", address_max="0x50FF", limit=1)
-
-    assert result["success"] is True
-    assert result["data"] == [{"address": "0x5020"}]
-    assert result["_pagination"]["total"] == 2
-    assert result["scan_metadata"]["mode"] == "range"
-    assert result["scan_metadata"]["result_count"] == 2
-
-
-def test_lua_aob_scan_bounds_return_metadata(monkeypatch):
-    install_fake_target(
-        monkeypatch,
-        [FakeMbi(0x5000, 0x100, scanning.MEM_COMMIT, 0x04)],
-    )
-
-    result = lua_engine_module.LUA_ENGINE.execute(
+    result = LUA_ENGINE.execute(
         """
-        local hits = AOBScan("DE AD BE EF", 0x5000, 0x50FF, 10)
+        local hits, err = AOBScan("41 41", {
+            scope = {kind = "modules", names = {"target.dll"}},
+            mode = "addresses",
+            max_matches = 2,
+            diagnostics = true
+        })
+        addResult("has_error", err ~= nil)
         addResult("count", #hits)
         addResult("first", hits[1])
+        addResult("second", hits[2])
         addResult("mode", hits.metadata.mode)
-        addResult("scanned", hits.metadata.scanned_region_count)
-        addResult("bytes", hits.metadata.bytes_scanned)
+        addResult("termination", hits.metadata.status.termination)
+        addResult("reads", hits.metadata.diagnostics.physical_read_calls)
         """
     )
 
     assert result["success"] is True
-    assert result["results"]["count"] == 2
-    assert result["results"]["first"] == 0x5020
-    assert result["results"]["mode"] == "range"
-    assert result["results"]["scanned"] == 1
-    assert result["results"]["bytes"] == 0x100
+    assert result["results"] == {
+        "has_error": False,
+        "count": 2,
+        "first": 0x1000,
+        "second": 0x1001,
+        "mode": "addresses",
+        "termination": "match_limit",
+        "reads": 1,
+    }
+
+
+def test_lua_first_count_and_valid_no_match_have_distinct_shapes(monkeypatch):
+    install_executor(monkeypatch, b"ABABA")
+
+    result = LUA_ENGINE.execute(
+        """
+        local first = AOBScan("41 42", {mode = "first"})
+        local counted = AOBScan("41", {mode = "count", max_matches = 10})
+        local missing = AOBScan("FF", {mode = "addresses"})
+        addResult("first_count", #first)
+        addResult("first_addr", first[1])
+        addResult("first_stop", first.metadata.status.termination)
+        addResult("count_entries", #counted)
+        addResult("count", counted.metadata.count)
+        addResult("observation", counted.metadata.observation)
+        addResult("missing_is_table", missing ~= nil)
+        addResult("missing_count", #missing)
+        addResult("missing_stop", missing.metadata.status.termination)
+        """
+    )
+
+    assert result["success"] is True
+    assert result["results"] == {
+        "first_count": 1,
+        "first_addr": 0x1000,
+        "first_stop": "first_hit",
+        "count_entries": 0,
+        "count": 3,
+        "observation": "complete_traversal",
+        "missing_is_table": True,
+        "missing_count": 0,
+        "missing_stop": "scope_exhausted",
+    }
+
+
+def test_lua_string_and_pointer_queries_share_the_engine(monkeypatch):
+    target = 0x123456789ABC
+    memory = bytearray(64)
+    memory[3:5] = b"Hi"
+    memory[16:20] = "Hi".encode("utf-16le")
+    memory[24:32] = target.to_bytes(8, "little")
+    memory[36:44] = target.to_bytes(8, "little")
+    install_executor(monkeypatch, bytes(memory))
+
+    result = LUA_ENGINE.execute(
+        f"""
+        local ascii = scanString("Hi", {{encoding = "ascii", mode = "first"}})
+        local wide = scanString("Hi", {{encoding = "utf-16le", mode = "first"}})
+        local refs = scanPointer("0x{target:X}", {{alignment = 8, max_matches = 10}})
+        addResult("ascii", ascii[1])
+        addResult("wide", wide[1])
+        addResult("ref_count", #refs)
+        addResult("ref", refs[1])
+        """
+    )
+
+    assert result["success"] is True
+    assert result["results"] == {
+        "ascii": 0x1003,
+        "wide": 0x1010,
+        "ref_count": 1,
+        "ref": 0x1018,
+    }
+
+
+def test_lua_expected_failures_return_nil_and_error_table(monkeypatch):
+    install_executor(monkeypatch, b"AAAA")
+
+    result = LUA_ENGINE.execute(
+        """
+        local positional, positional_err = AOBScan("41", 0x1000, 0x1004)
+        local unknown, unknown_err = AOBScan("41", {legacy = true})
+        local bad_encoding, encoding_err = scanString("x", {encoding = "wide"})
+        addResult("positional_nil", positional == nil)
+        addResult("positional_code", positional_err.error)
+        addResult("positional_success_absent", positional_err.success == nil)
+        addResult("unknown_nil", unknown == nil)
+        addResult("unknown_field", unknown_err.field)
+        addResult("encoding_nil", bad_encoding == nil)
+        addResult("encoding_field", encoding_err.field)
+        """
+    )
+
+    assert result["success"] is True
+    assert result["results"] == {
+        "positional_nil": True,
+        "positional_code": "INVALID_ARGUMENT",
+        "positional_success_absent": True,
+        "unknown_nil": True,
+        "unknown_field": "options.legacy",
+        "encoding_nil": True,
+        "encoding_field": "options.encoding",
+    }
+
+
+def test_lua_local_timeout_returns_partial_status_instead_of_aborting(monkeypatch):
+    class AdvancingClock:
+        def __init__(self):
+            self.value = 0
+
+        def __call__(self):
+            self.value += 40_000_000
+            return self.value
+
+    install_executor(monkeypatch, b"A" * 64, chunk_size=1, clock=AdvancingClock())
+
+    result = LUA_ENGINE.execute(
+        """
+        local hits = AOBScan("42", {timeout_ms = 100})
+        addResult("termination", hits.metadata.status.termination)
+        addResult("count", #hits)
+        """
+    )
+
+    assert result["success"] is True
+    assert result["results"]["termination"] == "timeout"
+    assert result["results"]["count"] == 0
+
+
+def test_lua_outer_timeout_aborts_direct_scan(monkeypatch):
+    def slow_read(_address, _size):
+        time.sleep(0.01)
+
+    install_executor(monkeypatch, b"A" * 128, chunk_size=1, read_hook=slow_read)
+
+    result = LUA_ENGINE.execute('AOBScan("42", {timeout_ms = 30000})', timeout=0.05)
+
+    assert result["success"] is False
+    assert result["error"] == "TIMEOUT"
+    assert "execution time limit" in result["detail"]
+
+
+def test_removed_lua_module_scan_global_is_absent():
+    assert LUA_ENGINE.lua.globals()["AOBScanModule"] is None

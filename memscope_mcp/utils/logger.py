@@ -162,15 +162,11 @@ class MCPLogger:
         if "error" in result:
             entry["error"] = self._summarize_value(result["error"])
 
-        detail = result.get("detail") if result.get("detail") is not None else result.get("error_detail")
+        detail = result.get("detail")
         if detail is not None:
             entry["detail"] = self._summarize_value(detail)
 
-        extras = {
-            key: value
-            for key, value in result.items()
-            if key not in {"success", "error", "detail"} and not (key == "error_detail" and value == detail)
-        }
+        extras = {key: value for key, value in result.items() if key not in {"success", "error", "detail"}}
         if extras:
             entry["failure"] = self._summarize_value(extras)
 

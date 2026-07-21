@@ -14,7 +14,13 @@ from typing import Protocol
 import anyio
 import pymem.memory
 
-from memscope_mcp.scanning.collectors import CountCollector, FirstHitCollector, PageCollector, ScanCollector
+from memscope_mcp.scanning.collectors import (
+    BoundedAddressCollector,
+    CountCollector,
+    FirstHitCollector,
+    PageCollector,
+    ScanCollector,
+)
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
     CountScanSuccess,
@@ -24,6 +30,7 @@ from memscope_mcp.scanning.contract import (
     ScanHit,
     ScanInput,
     ScanResponse,
+    ScanScopeInput,
     ScanStatus,
 )
 from memscope_mcp.scanning.cursor import (
@@ -57,6 +64,27 @@ from memscope_mcp.scanning.reader import (
 from memscope_mcp.scanning.scopes import ScanScope, ScopeNormalizationError, normalize_scan_scope
 
 ValidatedResponseLogger = Callable[[ScanResponse], None]
+DirectQueryFactory = Callable[[ScanLease], ScanQuery]
+
+
+class DirectScanError(ValueError):
+    """Expected domain failure raised while preparing a direct internal query."""
+
+    def __init__(
+        self,
+        error: str,
+        detail: str,
+        *,
+        field: str | None = None,
+        hint: str | None = None,
+    ) -> None:
+        super().__init__(detail)
+        self.error = error
+        self.detail = detail
+        self.field = field
+        self.hint = hint
+
+
 _MAX_ADDRESS_EXCLUSIVE = 1 << 64
 _LOGGER = logging.getLogger(__name__)
 
@@ -151,6 +179,143 @@ class ScanExecutor:
             response = _failure("INTERNAL_SCAN_ERROR", "The scan failed because of an internal error")
 
         return ScanResponse.model_validate(response)
+
+    def execute_direct(
+        self,
+        query: ScanQuery | DirectQueryFactory,
+        *,
+        scope: ScanScopeInput | None = None,
+        mode: str = "addresses",
+        max_matches: int | None = None,
+        timeout_ms: int = 30_000,
+        diagnostics: bool = False,
+        interrupt_check: Callable[[], None] | None = None,
+        deadline_ns: int | None = None,
+    ) -> ScanResponse:
+        """Execute a non-paginated internal query for a direct adapter such as Lua."""
+
+        if not isinstance(query, ScanQuery) and not callable(query):
+            raise TypeError("query must be a ScanQuery or lease-bound query factory")
+        if mode not in {"addresses", "first", "count"}:
+            return _failure("INVALID_MODE", "Mode must be one of: addresses, first, count", field="mode")
+        if not isinstance(diagnostics, bool):
+            return _failure("INVALID_ARGUMENT", "diagnostics must be a boolean", field="diagnostics")
+        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or not 100 <= timeout_ms <= 30_000:
+            return _failure(
+                "INVALID_ARGUMENT",
+                "timeout_ms must be an integer between 100 and 30000",
+                field="timeout_ms",
+            )
+        if mode == "first":
+            if max_matches is not None:
+                return _failure("INVALID_ARGUMENT", "Mode 'first' does not accept max_matches", field="max_matches")
+            effective_max_matches = 1
+        else:
+            effective_max_matches = 5_000 if max_matches is None else max_matches
+            if (
+                isinstance(effective_max_matches, bool)
+                or not isinstance(effective_max_matches, int)
+                or effective_max_matches < 1
+                or effective_max_matches > 100_000
+            ):
+                return _failure(
+                    "INVALID_ARGUMENT",
+                    "max_matches must be an integer between 1 and 100000",
+                    field="max_matches",
+                )
+
+        if interrupt_check is not None and not callable(interrupt_check):
+            raise TypeError("interrupt_check must be callable or None")
+        if deadline_ns is None:
+            deadline_ns = self.clock() + timeout_ms * 1_000_000
+        elif isinstance(deadline_ns, bool) or not isinstance(deadline_ns, int) or deadline_ns < 0:
+            raise ValueError("deadline_ns must be a non-negative integer")
+
+        control = ScanControl(
+            deadline_ns=deadline_ns,
+            interrupt_check=interrupt_check,
+            clock=self.clock,
+        )
+
+        try:
+            with self.session.acquire_scan_lease() as lease:
+                prepared_query = query(lease) if callable(query) else query
+                if not isinstance(prepared_query, ScanQuery):
+                    raise TypeError("query factory must return ScanQuery")
+                normalized_scope = normalize_scan_scope(scope, lease)
+                if mode == "addresses":
+                    collector: ScanCollector = BoundedAddressCollector(effective_max_matches)
+                elif mode == "first":
+                    collector = FirstHitCollector()
+                else:
+                    collector = CountCollector(effective_max_matches)
+                plan = plan_scan_regions(
+                    lease,
+                    normalized_scope,
+                    query_memory=self.query_memory,
+                    control=control,
+                )
+                result = execute_scan_plan(
+                    prepared_query,
+                    lease,
+                    plan,
+                    collector,
+                    control=control,
+                    read_memory=self.read_memory,
+                    target_alive=self.target_alive,
+                    chunk_size=self.chunk_size,
+                    page_size=self.page_size,
+                )
+                if mode == "addresses":
+                    return self._format_addresses(
+                        lease,
+                        prepared_query,
+                        normalized_scope,
+                        result,
+                        matches_returned_before=0,
+                        max_matches=effective_max_matches,
+                        diagnostics=diagnostics,
+                    )
+                if mode == "first":
+                    early_failure = _fatal_result_without_progress(result)
+                    if early_failure is not None:
+                        return early_failure
+                    match = _format_hit(result.hits[0]) if result.hits else None
+                    return ScanResponse.model_validate(
+                        FirstScanSuccess(
+                            success=True,
+                            mode="first",
+                            match=match,
+                            status=_status(result),
+                            diagnostics=_diagnostics(result) if diagnostics else None,
+                        )
+                    )
+                early_failure = _fatal_result_without_progress(result)
+                if early_failure is not None:
+                    return early_failure
+                observation = (
+                    "complete_traversal"
+                    if result.termination_reason is TerminationReason.SCOPE_EXHAUSTED and not result.read_gaps_detected
+                    else "partial_traversal"
+                )
+                return ScanResponse.model_validate(
+                    CountScanSuccess(
+                        success=True,
+                        mode="count",
+                        count=result.observed_count,
+                        observation=observation,
+                        status=_status(result),
+                        diagnostics=_diagnostics(result) if diagnostics else None,
+                    )
+                )
+        except DirectScanError as error:
+            return _failure(error.error, error.detail, field=error.field, hint=error.hint)
+        except PatternCompileError as error:
+            return _failure(error.code, error.detail, field=error.field)
+        except ScopeNormalizationError as error:
+            return _failure(error.error, error.detail, field=error.field, hint=error.hint)
+        except ScanLeaseUnavailable as error:
+            return _failure(error.error, error.detail)
 
     def _execute_start(self, request: ScanInput, control: ScanControl) -> ScanResponse:
         if request.pattern is None:

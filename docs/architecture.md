@@ -7,9 +7,9 @@ A tour of the memscope-mcp codebase: where things live, the design rules that sh
 ```
 memscope_mcp/
   server.py              # MCP tool definitions (thin wrappers + session logging)
-  scanning/              # Internal contracts, signed cursors, snapshots,
+  scanning/              # Strict MCP/Lua contracts, signed cursors, snapshots,
                          #   planner, bounded reader, matcher, collectors,
-                         #   synchronous executor and async worker adapter
+                         #   synchronous executor and async/direct adapters
   session.py             # Process attach/detach, generations, scan leases,
                          #   memory primitives, threads, VirtualProtect,
                          #   allocate_near, suspend/resume, lifecycle callbacks
@@ -21,7 +21,6 @@ memscope_mcp/
       hooking.py process.py network.py
   tools/
     memory.py            # Smart memory dump
-    scanning.py          # AOB pattern scanning
     pointers.py          # Pointer chain resolution
     types.py             # Typed memory read/write
     execute.py           # Remote code execution
@@ -44,6 +43,7 @@ docs/
   hooking.md             # Inline hooking architecture
   peb.md                 # PEB introspection design
   lua-reference.md       # Full Lua function reference
+  scanning.md            # MCP/Lua scan contracts and migration
 ```
 
 The split that matters most is `memscope_mcp/extensions/core/` vs `memscope_mcp/_contrib/plugins/`. Core extensions register on every server start and their failure is fatal. Bundled plugins ship inside the wheel under `_contrib/` so `memscope-mcp install-plugin` can copy them into the user data directory, but they only activate when the user opts in by placing the file in `$MEMSCOPE_HOME/plugins/`.
@@ -74,7 +74,9 @@ Scopes are normalized against the lease snapshot before any target read. Module 
 
 Address pagination uses authenticated, self-contained continuation state rather than offsets. A cursor carries the compiled query, normalized scope and filters, attachment identity, first unexamined candidate address, cumulative match budget, and sticky gap state. A server-local random key authenticates the bounded token; continuation replans live memory under the same generation and clips planning exactly at the resume address, so earlier candidate starts are neither read logically nor emitted again. A full page stops without searching for proof of another hit, which means a full terminal page may legitimately be followed by one empty terminal page.
 
-`ScanExecutor` owns normalization, one stable lease, planning, reading, matching, and construction of one validated mode-specific response. `execute_scan_async` runs that synchronous work in an AnyIO worker thread, starts the absolute timeout before dispatch, propagates request cancellation through a thread-safe event, and waits under cancellation shielding until the worker releases its lease. The mutable Lua runtime is separately serialized and exposes a stable engine-owned interruption capability for registered functions. MCP formatting and Lua table construction remain outside the matcher/reader engine; the currently registered `0.2.0` scan routes remain unchanged until the breaking public contract is switched as one unit.
+`ScanExecutor` owns normalization, one stable lease, planning, reading, matching, and construction of one validated mode-specific response. The registered MCP `scan` route validates the raw top-level object through a repository-owned strict FastMCP adapter, then `execute_scan_async` runs synchronous work in an AnyIO worker thread, starts the absolute timeout before dispatch, propagates request cancellation through a thread-safe event, and waits under cancellation shielding until the worker releases its lease. A process-start executor and ephemeral HMAC key serve all MCP scan requests.
+
+The mutable Lua runtime is separately serialized and exposes a stable engine-owned interruption capability for registered functions. `AOBScan`, `scanString`, and `scanPointer` use named options and the executor's non-paginated direct-query path; AOB, encoded exact strings, and aligned pointer values therefore share scope normalization, planning, reading, matching, status, and diagnostics. A shorter local scan deadline returns partial status, while outer Lua cancellation or timeout raises through the script engine. MCP formatting and Lua table construction remain outside the matcher/reader engine, and no legacy scanner or public Python scan wrapper remains.
 
 ### Inline function hooking with shared ring buffer
 

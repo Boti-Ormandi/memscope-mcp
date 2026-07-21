@@ -38,7 +38,8 @@ class TestBootstrapRegistration:
         # One from each extension
         assert g["addr"] is not None, "addr (general)"
         assert g["readInteger"] is not None, "readInteger (memory)"
-        assert g["AOBScanModule"] is not None, "AOBScanModule (module_scan)"
+        assert g["AOBScan"] is not None, "AOBScan (module_scan)"
+        assert g["AOBScanModule"] is None, "removed AOBScanModule must not be registered"
         assert g["executeCode"] is not None, "executeCode (execution)"
         assert g["getProcessList"] is not None, "getProcessList (process)"
 

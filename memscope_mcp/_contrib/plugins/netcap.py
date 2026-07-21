@@ -512,7 +512,11 @@ Hook at multiple layers to see data at each stage. All events share one ring buf
 
 ```lua
 -- Layer 1: Application-level function (game sends a chat message)
-local app_send = AOBScanModule("GameAssembly.dll", "pattern...")
+local app_send, scan_err = AOBScan("pattern...", {
+  scope = {kind = "modules", names = {"GameAssembly.dll"}},
+  mode = "first"
+})
+if not app_send then error(scan_err.detail) end
 hookFunction(app_send[1], {name="ChatSend", type="pre", buffer_arg=2, length_arg=3})
 
 -- Layer 2: SSL (plaintext HTTP/WebSocket)
