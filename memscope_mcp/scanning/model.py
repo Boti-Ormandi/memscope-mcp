@@ -241,6 +241,8 @@ class ScanStats:
     matcher_invocations: int = 0
     find_calls: int = 0
     duration_ns: int = 0
+    scope_fingerprint: bytes = b""
+    section_names: tuple[str, ...] = ()
     _last_examined_end: int | None = field(default=None, init=False, repr=False)
 
     def record_strategy(self, strategy: MatcherStrategy) -> None:

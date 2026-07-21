@@ -27,6 +27,7 @@ getModules(filter?)             -- List modules: {name, base, size, path}
 getModuleFromAddress(addr)      -- Reverse lookup: {name, base, offset} or nil
 formatAddress(addr)             -- "module.dll+0xOFFSET" or "0xADDR"
 AOBScan(pattern, options?)      -- Strict AOB pattern; ?? is the only wildcard
+AOBScanMany(patterns, options?) -- One-pass keyed first/count batch (1-32 patterns)
 scanString(text, options?)      -- encoding: "ascii" or "utf-16le"
 scanPointer(target, options?)   -- alignment defaults to 8
 resolveExport(module, name)     -- Resolve DLL export to address
@@ -34,8 +35,9 @@ resolveExport(module, name)     -- Resolve DLL export to address
 
 Scan options use named fields only: `scope`, `mode`, `max_matches`, `timeout_ms`, and
 `diagnostics`; `scanString` also accepts `encoding`, and `scanPointer` accepts `alignment`.
-Scope kinds are `all_modules`, `modules`, and half-open `range`. Modes are `addresses`,
-`first`, and `count`. Expected failures return `nil, error_table`; a valid no-match scan
+`AOBScanMany` accepts ordered `{key, pattern}` items and only `first` or `count` mode.
+Scope kinds are `all_modules`, `modules`, and half-open `range`. Single-scan modes are
+`addresses`, `first`, and `count`. Expected failures return `nil, error_table`; a valid no-match scan
 returns a non-nil empty table with `metadata.status`.
 
 ### Pointer Chains
@@ -68,6 +70,7 @@ Standard reverse-engineering semantics: add offset, dereference, repeat.
             "formatAddress": lambda addr: lua_format_address(addr, self._log_error),
             # Scanning
             "AOBScan": self._scan_adapter.aob_scan,
+            "AOBScanMany": self._scan_adapter.aob_scan_many,
             "scanString": self._scan_adapter.string_scan,
             "scanPointer": self._scan_adapter.pointer_scan,
             # PE export resolution

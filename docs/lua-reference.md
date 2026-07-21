@@ -102,15 +102,22 @@ resolveExport("mod.dll", "func")  -- PE export resolution, follows forwarders (d
 
 ```lua
 AOBScan(pattern, options?)       -- strict AOB pattern; ?? is the only wildcard
+AOBScanMany(patterns, options?)  -- ordered 1-32 pattern first/count batch
 scanString(text, options?)       -- encoding: "ascii" or "utf-16le"
 scanPointer(target, options?)    -- pointer alignment defaults to 8
 ```
 
-Common named options are `scope`, `mode`, `max_matches`, `timeout_ms`, and `diagnostics`. `scanString` additionally accepts `encoding`; `scanPointer` additionally accepts `alignment` in `1..4096`. Scope kinds are `all_modules`, `modules`, and half-open `range`; modes are `addresses`, `first`, and `count`.
+Common named options are `scope`, `mode`, `max_matches`, `timeout_ms`, and `diagnostics`. `scanString` additionally accepts `encoding`; `scanPointer` additionally accepts `alignment` in `1..4096`. Scope kinds are `all_modules`, `modules`, and half-open `range`; module scopes may use case-insensitive PE `filters.sections` in addition to memory-type and protection filters.
+
+Single-query modes are `addresses`, `first`, and `count`:
 
 ```lua
 local hits, err = AOBScan("48 8B 05 ?? ?? ?? ??", {
-  scope = {kind = "modules", names = {"target.dll"}},
+  scope = {
+    kind = "modules",
+    names = {"target.dll"},
+    filters = {sections = {".text"}}
+  },
   mode = "addresses",
   max_matches = 100
 })
@@ -119,7 +126,30 @@ if not hits then
 end
 ```
 
-Address mode returns numeric entries and metadata, defaults to 100 matches, and permits at most 5000. First mode returns zero or one numeric entry. Count mode returns no numeric entries and places `count` and `observation` under `result.metadata`. Expected input/domain failures return `nil, error_table`; valid no-match scans return a non-nil empty table with explicit status. Full MCP/Lua scope, status, continuation, and migration details are in [`scanning.md`](scanning.md).
+Address mode returns numeric entries and metadata, defaults to 100 matches, and permits at most 5000. First mode returns zero or one numeric entry. Count mode returns no numeric entries and places `count` and `observation` under `result.metadata`.
+
+`AOBScanMany` accepts an ordered array of unique `{key, pattern}` items and only `first` or `count` mode. All patterns compile before a scan lease or target read, then share one memory traversal:
+
+```lua
+local items, err = AOBScanMany({
+  {key = "singleton", pattern = "48 8B 05 ?? ?? ?? ??"},
+  {key = "allocator", pattern = "48 89 5C 24 ?? 57 48 83 EC ??"}
+}, {
+  scope = {kind = "modules", names = {"target.dll"}},
+  mode = "first",
+  diagnostics = true
+})
+if not items then error(err.detail) end
+
+for _, item in ipairs(items) do
+  print(item.key, item.match, item.status.termination)
+end
+print(items.metadata.shared.termination)
+```
+
+First items contain `key`, optional numeric `match`, and `status`. Count items contain `key`, `count`, `observation`, and `status`; `max_matches` applies independently to each pattern. Shared traversal status and optional diagnostics are under `items.metadata.shared`. Batch address mode and cursors are intentionally unavailable.
+
+Expected input/domain failures return `nil, error_table`; valid no-match scans return a non-nil result with explicit status. Section names must exist in every selected module, or the operation fails with `SECTION_NOT_FOUND` before corpus scanning. Full MCP/Lua scope, status, continuation, batch, and migration details are in [`scanning.md`](scanning.md).
 
 ## Pointer chains
 

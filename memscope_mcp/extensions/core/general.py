@@ -181,7 +181,7 @@ Lua 5.4 also supports native operators: `a & b`, `a | b`, `a ~ b`, `a << n`, `a 
         )
         caps["wrappers"] = self._mapping_table(
             {
-                "tool_count": 10,
+                "tool_count": 11,
                 "error_normalization": True,
                 "scan_options": True,
                 "strict_scan_contract": True,

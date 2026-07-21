@@ -1,86 +1,6 @@
 {
   "$defs": {
-    "AddressScanSuccess": {
-      "additionalProperties": false,
-      "properties": {
-        "diagnostics": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ScanDiagnostics"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "matches": {
-          "items": {
-            "$ref": "#/$defs/ScanHit"
-          },
-          "maxItems": 500,
-          "title": "Matches",
-          "type": "array"
-        },
-        "mode": {
-          "const": "addresses",
-          "title": "Mode",
-          "type": "string"
-        },
-        "next_cursor": {
-          "anyOf": [
-            {
-              "minLength": 1,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Next Cursor"
-        },
-        "returned_count": {
-          "anyOf": [
-            {
-              "maximum": 500,
-              "minimum": 1,
-              "type": "integer"
-            },
-            {
-              "const": 0,
-              "type": "integer"
-            }
-          ],
-          "title": "Returned Count"
-        },
-        "sequence_returned_count": {
-          "maximum": 100000,
-          "minimum": 0,
-          "title": "Sequence Returned Count",
-          "type": "integer"
-        },
-        "status": {
-          "$ref": "#/$defs/ScanStatus"
-        },
-        "success": {
-          "const": true,
-          "title": "Success",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "success",
-        "mode",
-        "matches",
-        "returned_count",
-        "sequence_returned_count",
-        "next_cursor",
-        "status"
-      ],
-      "title": "AddressScanSuccess",
-      "type": "object"
-    },
-    "CountScanSuccess": {
+    "CountScanManyItem": {
       "additionalProperties": false,
       "properties": {
         "count": {
@@ -97,20 +17,9 @@
           ],
           "title": "Count"
         },
-        "diagnostics": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ScanDiagnostics"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "mode": {
-          "const": "count",
-          "title": "Mode",
+        "key": {
+          "minLength": 1,
+          "title": "Key",
           "type": "string"
         },
         "observation": {
@@ -123,6 +32,36 @@
         },
         "status": {
           "$ref": "#/$defs/ScanStatus"
+        }
+      },
+      "required": [
+        "key",
+        "count",
+        "observation",
+        "status"
+      ],
+      "title": "CountScanManyItem",
+      "type": "object"
+    },
+    "CountScanManySuccess": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "count",
+          "title": "Mode",
+          "type": "string"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/CountScanManyItem"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Results",
+          "type": "array"
+        },
+        "shared": {
+          "$ref": "#/$defs/ScanManyShared"
         },
         "success": {
           "const": true,
@@ -133,26 +72,19 @@
       "required": [
         "success",
         "mode",
-        "count",
-        "observation",
-        "status"
+        "results",
+        "shared"
       ],
-      "title": "CountScanSuccess",
+      "title": "CountScanManySuccess",
       "type": "object"
     },
-    "FirstScanSuccess": {
+    "FirstScanManyItem": {
       "additionalProperties": false,
       "properties": {
-        "diagnostics": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ScanDiagnostics"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
         },
         "match": {
           "anyOf": [
@@ -164,13 +96,37 @@
             }
           ]
         },
+        "status": {
+          "$ref": "#/$defs/ScanStatus"
+        }
+      },
+      "required": [
+        "key",
+        "match",
+        "status"
+      ],
+      "title": "FirstScanManyItem",
+      "type": "object"
+    },
+    "FirstScanManySuccess": {
+      "additionalProperties": false,
+      "properties": {
         "mode": {
           "const": "first",
           "title": "Mode",
           "type": "string"
         },
-        "status": {
-          "$ref": "#/$defs/ScanStatus"
+        "results": {
+          "items": {
+            "$ref": "#/$defs/FirstScanManyItem"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Results",
+          "type": "array"
+        },
+        "shared": {
+          "$ref": "#/$defs/ScanManyShared"
         },
         "success": {
           "const": true,
@@ -181,10 +137,10 @@
       "required": [
         "success",
         "mode",
-        "match",
-        "status"
+        "results",
+        "shared"
       ],
-      "title": "FirstScanSuccess",
+      "title": "FirstScanManySuccess",
       "type": "object"
     },
     "ScanDiagnostics": {
@@ -398,6 +354,46 @@
       "title": "ScanHit",
       "type": "object"
     },
+    "ScanManyShared": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScanDiagnostics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "read_gaps_detected": {
+          "title": "Read Gaps Detected",
+          "type": "boolean"
+        },
+        "termination": {
+          "enum": [
+            "scope_exhausted",
+            "page_limit",
+            "match_limit",
+            "first_hit",
+            "timeout",
+            "cancelled",
+            "target_changed",
+            "reader_error"
+          ],
+          "title": "Termination",
+          "type": "string"
+        }
+      },
+      "required": [
+        "termination",
+        "read_gaps_detected"
+      ],
+      "title": "ScanManyShared",
+      "type": "object"
+    },
     "ScanStatus": {
       "additionalProperties": false,
       "properties": {
@@ -432,21 +428,17 @@
     {
       "discriminator": {
         "mapping": {
-          "addresses": "#/$defs/AddressScanSuccess",
-          "count": "#/$defs/CountScanSuccess",
-          "first": "#/$defs/FirstScanSuccess"
+          "count": "#/$defs/CountScanManySuccess",
+          "first": "#/$defs/FirstScanManySuccess"
         },
         "propertyName": "mode"
       },
       "oneOf": [
         {
-          "$ref": "#/$defs/AddressScanSuccess"
+          "$ref": "#/$defs/FirstScanManySuccess"
         },
         {
-          "$ref": "#/$defs/FirstScanSuccess"
-        },
-        {
-          "$ref": "#/$defs/CountScanSuccess"
+          "$ref": "#/$defs/CountScanManySuccess"
         }
       ]
     },
@@ -454,5 +446,5 @@
       "$ref": "#/$defs/ScanFailure"
     }
   ],
-  "title": "ScanResponse"
+  "title": "ScanManyResponse"
 }

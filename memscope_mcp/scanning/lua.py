@@ -9,12 +9,16 @@ from pydantic import ValidationError
 
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
+    CountScanManySuccess,
     CountScanSuccess,
+    FirstScanManySuccess,
     FirstScanSuccess,
     LuaScanFailure,
     ScanFailure,
     ScanInput,
+    ScanManyInput,
     scan_input_validation_failure,
+    scan_many_input_validation_failure,
 )
 from memscope_mcp.scanning.execution import DirectScanError, ScanExecutor
 from memscope_mcp.scanning.pattern import PatternCompileError, make_aob_query, make_exact_query, make_pointer_query
@@ -23,6 +27,7 @@ from memscope_mcp.scanning.scopes import USER_MODE_END_EXCLUSIVE, ScopeNormaliza
 _COMMON_OPTIONS = frozenset({"scope", "mode", "max_matches", "timeout_ms", "diagnostics"})
 _STRING_OPTIONS = _COMMON_OPTIONS | {"encoding"}
 _POINTER_OPTIONS = _COMMON_OPTIONS | {"alignment"}
+_BATCH_OPTIONS = frozenset({"scope", "mode", "max_matches", "timeout_ms", "diagnostics"})
 
 
 class LuaScanAdapter:
@@ -57,6 +62,51 @@ class LuaScanAdapter:
             allowed_options=_COMMON_OPTIONS,
             prepare_query=lambda _normalized: make_aob_query(pattern),
         )
+
+    def aob_scan_many(self, patterns: Any, options: Any = None, *extra: Any):
+        """Lua ``AOBScanMany(patterns, options?)`` implementation."""
+
+        try:
+            if extra:
+                return self._failure(
+                    "INVALID_ARGUMENT",
+                    "Positional scan overloads were removed; pass one options table",
+                    field="options",
+                )
+            normalized = _lua_options_to_python(options)
+            unknown = sorted(set(normalized) - _BATCH_OPTIONS)
+            if unknown:
+                return self._failure(
+                    "INVALID_ARGUMENT",
+                    f"Unknown Lua scan option '{unknown[0]}'",
+                    field=f"options.{unknown[0]}",
+                )
+
+            payload = dict(normalized)
+            payload["patterns"] = _lua_value_to_python(patterns)
+            try:
+                request = ScanManyInput.model_validate(payload)
+            except ValidationError as error:
+                failure = scan_many_input_validation_failure(error)
+                field = failure.field
+                if field is not None and not field.startswith("patterns") and not field.startswith("options."):
+                    failure = failure.model_copy(update={"field": f"options.{field}"})
+                return self._failure_model(failure)
+
+            outer_deadline = self._engine.execution_interrupt.deadline_ns
+            local_deadline = self._executor.clock() + request.timeout_ms * 1_000_000
+            effective_deadline = local_deadline if outer_deadline is None else min(local_deadline, outer_deadline)
+            response = self._executor.execute_many(
+                request,
+                interrupt_check=self._engine.execution_interrupt.check,
+                deadline_ns=effective_deadline,
+            )
+            return self._to_lua_many_result(response.root)
+        except DirectScanError as error:
+            return self._failure(error.error, error.detail, field=error.field, hint=error.hint)
+        except Exception as error:
+            self._log_error("AOBScanMany", error)
+            raise
 
     def string_scan(self, text: Any, options: Any = None, *extra: Any):
         """Lua ``scanString(text, options?)`` implementation."""
@@ -234,6 +284,36 @@ class LuaScanAdapter:
         table = self._table(*addresses)
         table["metadata"] = self._engine._python_to_lua(metadata)
         return table
+
+    def _to_lua_many_result(self, result):
+        if isinstance(result, ScanFailure):
+            return self._failure_model(result)
+        if not isinstance(result, (FirstScanManySuccess, CountScanManySuccess)):
+            raise TypeError("unsupported direct scan_many response")
+
+        rows = self._table()
+        for index, item in enumerate(result.results, start=1):
+            if isinstance(result, FirstScanManySuccess):
+                row = {
+                    "key": item.key,
+                    "match": None if item.match is None else int(item.match.address, 16),
+                    "status": item.status.model_dump(mode="python"),
+                }
+            else:
+                row = {
+                    "key": item.key,
+                    "count": item.count,
+                    "observation": item.observation,
+                    "status": item.status.model_dump(mode="python"),
+                }
+            rows[index] = self._engine._python_to_lua(row)
+        rows["metadata"] = self._engine._python_to_lua(
+            {
+                "mode": result.mode,
+                "shared": result.shared.model_dump(mode="python", exclude_none=True),
+            }
+        )
+        return rows
 
     def _failure(self, error: str, detail: str, *, field: str | None = None, hint: str | None = None):
         return self._failure_model(ScanFailure(error=error, detail=detail, field=field, hint=hint))

@@ -29,9 +29,9 @@ in your shell before starting the server.
 The full repository layout lives in [`docs/architecture.md`](docs/architecture.md). The pieces you'll actually touch:
 
 - [`memscope_mcp/server.py`](memscope_mcp/server.py) -- `@mcp.tool()` wrappers (one per MCP tool)
-- [`memscope_mcp/scanning/`](memscope_mcp/scanning/) -- internal strict scan contracts, authenticated continuation state, attachment snapshots and leases, scope normalization, `VirtualQueryEx` planning, bounded reads, hybrid matching, bounded result collectors, and the cancellation-safe worker adapter (not a supported public Python API)
-- [`memscope_mcp/tools/`](memscope_mcp/tools/) -- tool implementations (`memory.py`, `scanning.py`, `pointers.py`, `types.py`, `execute.py`, `hooking.py`, `lua_scripts.py`)
-- [`memscope_mcp/tools/lua/`](memscope_mcp/tools/lua/) -- Lua engine (`engine.py`) plus themed function modules: `memory_read`, `memory_write`, `process_info`, `scanning_helpers`, `struct_helpers`, `modules`, `code_execution`, `comparisons`, `utilities`, `hooking`, `network`
+- [`memscope_mcp/scanning/`](memscope_mcp/scanning/) -- internal strict scan contracts, authenticated continuation state, attachment snapshots and leases, scope normalization, remote PE-section resolution, `VirtualQueryEx` planning, bounded reads, one-pass batch execution, hybrid matching, bounded result collectors, and cancellation-safe worker adapters (not a supported public Python API)
+- [`memscope_mcp/tools/`](memscope_mcp/tools/) -- non-scanning tool implementations (`memory.py`, `pointers.py`, `types.py`, `execute.py`, `hooking.py`, `lua_scripts.py`)
+- [`memscope_mcp/tools/lua/`](memscope_mcp/tools/lua/) -- Lua engine (`engine.py`) plus themed function modules: `memory_read`, `memory_write`, `process_info`, `struct_helpers`, `modules`, `code_execution`, `comparisons`, `utilities`, `hooking`, `network`
 - [`memscope_mcp/extensions/`](memscope_mcp/extensions/) -- `LuaExtension` ABC + bootstrap + the seven core extensions under `core/`
 - [`memscope_mcp/utils/`](memscope_mcp/utils/) -- address parsing, heuristics, x64 shellcode (`shellcode.py`), instruction decoder + relocator (`disasm.py`), PE export resolver (`pe.py`), PEB reader (`peb.py`)
 - [`memscope_mcp/instructions/base.py`](memscope_mcp/instructions/base.py) -- AI-facing Lua reference (token-priced, kept terse)
@@ -42,10 +42,10 @@ The full repository layout lives in [`docs/architecture.md`](docs/architecture.m
 
 ## Adding an MCP tool
 
-1. Implement in `memscope_mcp/tools/<your_tool>.py`. Follow patterns in `types.py` or `scanning.py`.
+1. Implement in `memscope_mcp/tools/<your_tool>.py`. Follow patterns in `types.py`; strict scan tools use the models and boundary adapter under `memscope_mcp/scanning/`.
 2. Wrap with `@mcp.tool()` in `memscope_mcp/server.py`. Call `_log()` so the tool call lands in session logs.
 3. Keep the docstring terse — it becomes AI-facing context and costs tokens. List parameters, types, and return shape.
-4. Update `tests/test_smoke.py`: add the tool name to `test_tool_names` and bump `test_tool_count`. This test pins the 10-tool surface; forgetting it makes the smoke test fail immediately.
+4. Update `tests/test_smoke.py`: add the tool name to `test_tool_names` and bump `test_tool_count`. This test pins the 11-tool surface; forgetting it makes the smoke test fail immediately.
 5. Add the tool to the README tool table.
 
 ## Adding a Lua function
@@ -55,7 +55,7 @@ Lua functions live inside extensions. Pick the right extension first.
 1. Pick the extension by category:
    - Reads -> `core/memory.py` (which dispatches to `tools/lua/memory_read.py`)
    - Writes -> `core/memory.py` (`tools/lua/memory_write.py`)
-   - AOB / xref scans, module/address resolution -> `core/module_scan.py` (`tools/lua/scanning_helpers.py`, `tools/lua/modules.py`)
+   - AOB / xref scans, module/address resolution -> `core/module_scan.py` (the strict adapter in `scanning/lua.py` plus `tools/lua/modules.py`)
    - Vector / matrix / declarative struct reads, comparisons, bitwise, formatting -> `core/general.py` (`tools/lua/struct_helpers.py`, `tools/lua/comparisons.py`, `tools/lua/utilities.py`)
    - Remote calls and allocation -> `core/execution.py` (`tools/lua/code_execution.py`)
    - Pre-attach / PEB introspection -> `core/process.py` (`tools/lua/process_info.py`)
@@ -97,7 +97,7 @@ Enforced by [ruff](https://docs.astral.sh/ruff/). Configuration in `pyproject.to
 
 ## Testing
 
-The smoke suite (`tests/test_smoke.py`) is the gating invariant: it asserts the 10-tool surface, that the Lua engine initializes, that the plugin loader runs, and that the instructions builder produces output. Most regressions show up here first.
+The smoke suite (`tests/test_smoke.py`) is the gating invariant: it asserts the 11-tool surface, that the Lua engine initializes, that the plugin loader runs, and that the instructions builder produces output. Most regressions show up here first.
 
 Unit tests live next to features (`test_types.py`, `test_scanning.py`, `test_lua_engine.py`, etc.). Hooking and netcap have dedicated coverage in `test_disasm.py`, `test_relocation.py`, `test_hook_shellcode.py`, `test_ring_buffer.py`, `test_pe_exports.py`, `test_thread_suspension.py`, `test_netcap_plugin.py`, `test_netcap_lifecycle.py`, `test_netcap_udp.py`, `test_netcap_wsa.py`, `test_stream_assembly.py`, `test_protocol_framing.py`, `test_filter_packets.py`, `test_header_only.py`, `test_deref_args.py`, `test_hook_installation.py`, `test_cross_reference.py`, `test_session_recording.py`. The extension bootstrap is pinned by `test_extension_bootstrap.py`. PEB reading is covered by `test_peb.py` (self-process tests run in CI; explorer.exe-dependent tests skip gracefully when explorer is not running). Run a focused subset with `pytest -k <pattern>`.
 

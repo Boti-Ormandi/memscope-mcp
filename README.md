@@ -7,7 +7,7 @@
 
 An MCP server for low-level Windows process memory research.
 
-AI agents attach to processes, scan byte patterns, read and write typed memory, follow pointer chains, execute remote x64 code, install generic inline function hooks with shared ring-buffer capture, and read the Process Environment Block of processes the server has not even attached to -- all through 10 MCP tools. A server-side Lua environment batches multi-step operations into a single round-trip, so an agent can dereference a pointer chain, decode a structure, hook an API, and report results without paying per-call latency.
+AI agents attach to processes, scan byte patterns, read and write typed memory, follow pointer chains, execute remote x64 code, install generic inline function hooks with shared ring-buffer capture, and read the Process Environment Block of processes the server has not even attached to -- all through 11 MCP tools. A server-side Lua environment batches multi-step operations into a single round-trip, so an agent can dereference a pointer chain, decode a structure, hook an API, and report results without paying per-call latency.
 
 ## Installation
 
@@ -118,7 +118,8 @@ Addresses accept hex strings (`"0x1234"`), module+offset (`"module.dll+0x1234"`)
 | `write` | Write typed memory, including bytes/bytes[N], with optional verified writes: writable range check, pre-image capture, byte-for-byte readback, and pre-image restore attempt on post-write verification failure |
 | `dump` | Smart memory dump with automatic type detection and pagination/filter knobs (`start_offset`, `pointers_only`, `non_null_only`, `max_entries`, `annotation_level`). `full` annotations include confidence |
 | `chain` | Follow pointer chains: `[[base+off0]+off1]...` with configurable final read type |
-| `scan` | Strict AOB scanning with `??` wildcards, address/first/count modes, authenticated cursor continuation, structured scopes and planner filters, bounded diagnostics, and explicit termination status |
+| `scan` | Strict AOB scanning with `??` wildcards, address/first/count modes, authenticated cursor continuation, structured scopes including PE-section filters, bounded diagnostics, and explicit termination status |
+| `scan_many` | Search 1-32 keyed AOB patterns in one shared memory traversal with bounded first-hit or count results and shared diagnostics |
 | `lua` | Execute Lua scripts server-side for multi-step operations |
 | `scripts` | Manage saved Lua scripts. Actions: `list` (with paths), `run` (with args and namespace checks) |
 
@@ -159,7 +160,7 @@ Function categories (full reference in [`docs/lua-reference.md`](https://github.
 | Memory write | 13 |
 | Struct helpers (vectors, matrix, declarative struct read) | 5 |
 | Module / address resolution (incl. `resolveExport`) | 7 |
-| Scanning (AOB, string, pointer xrefs) | 3 |
+| Scanning (AOB, batch AOB, string, pointer xrefs) | 4 |
 | Pointer chains | 1 |
 | Code execution (shellcode, alloc, callSequence) | 8 |
 | Hooking (inline hooks + ring buffer) | 8 |
@@ -235,7 +236,7 @@ Plugins execute arbitrary Python code at server startup -- only activate plugins
 Generic core, plugins for domains. Core extensions are always loaded; user plugins are gated on file presence in `$MEMSCOPE_HOME/plugins/`. Both implement the same `LuaExtension` ABC.
 
 - Generic core, plugins for domains: no target-specific code in `memscope_mcp/`
-- Minimal tool surface: 10 well-shaped MCP tools, with Lua for everything that needs composition
+- Minimal tool surface: 11 well-shaped MCP tools, with Lua for everything that needs composition
 - One contract (`LuaExtension`), two activation paths: core extensions are always loaded; user plugins are gated on file presence in `$MEMSCOPE_HOME/plugins/` and isolated on failure
 - Plugin instructions are only loaded when the plugin is active (AI context costs tokens)
 - Scripts persist, addresses don't: ASLR shifts everything, save the finder

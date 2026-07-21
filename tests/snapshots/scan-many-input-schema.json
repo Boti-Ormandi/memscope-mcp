@@ -1,0 +1,266 @@
+{
+  "$defs": {
+    "AllModulesScopeInput": {
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/ScanFiltersInput"
+        },
+        "kind": {
+          "const": "all_modules",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "AllModulesScopeInput",
+      "type": "object"
+    },
+    "ModulesScopeInput": {
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/ScanFiltersInput"
+        },
+        "kind": {
+          "const": "modules",
+          "title": "Kind",
+          "type": "string"
+        },
+        "names": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Names",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "names"
+      ],
+      "title": "ModulesScopeInput",
+      "type": "object"
+    },
+    "NamedPatternInput": {
+      "additionalProperties": false,
+      "description": "One caller-keyed AOB pattern in a bounded batch request.",
+      "properties": {
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "pattern": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Pattern",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "pattern"
+      ],
+      "title": "NamedPatternInput",
+      "type": "object"
+    },
+    "RangeScopeInput": {
+      "additionalProperties": false,
+      "properties": {
+        "end_exclusive": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "End Exclusive"
+        },
+        "filters": {
+          "$ref": "#/$defs/ScanFiltersInput"
+        },
+        "kind": {
+          "const": "range",
+          "title": "Kind",
+          "type": "string"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Start"
+        }
+      },
+      "required": [
+        "kind",
+        "start",
+        "end_exclusive"
+      ],
+      "title": "RangeScopeInput",
+      "type": "object"
+    },
+    "ScanFiltersInput": {
+      "additionalProperties": false,
+      "properties": {
+        "executable": {
+          "default": "any",
+          "enum": [
+            "any",
+            "required",
+            "forbidden"
+          ],
+          "title": "Executable",
+          "type": "string"
+        },
+        "memory_types": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "image",
+                  "mapped",
+                  "private"
+                ],
+                "type": "string"
+              },
+              "maxItems": 3,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Types"
+        },
+        "sections": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sections"
+        },
+        "writable": {
+          "default": "any",
+          "enum": [
+            "any",
+            "required",
+            "forbidden"
+          ],
+          "title": "Writable",
+          "type": "string"
+        }
+      },
+      "title": "ScanFiltersInput",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Bounded first-hit or count batch over one shared scan traversal.",
+  "properties": {
+    "diagnostics": {
+      "default": false,
+      "title": "Diagnostics",
+      "type": "boolean"
+    },
+    "max_matches": {
+      "anyOf": [
+        {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Matches"
+    },
+    "mode": {
+      "default": "first",
+      "enum": [
+        "first",
+        "count"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "patterns": {
+      "items": {
+        "$ref": "#/$defs/NamedPatternInput"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Patterns",
+      "type": "array"
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "all_modules": "#/$defs/AllModulesScopeInput",
+              "modules": "#/$defs/ModulesScopeInput",
+              "range": "#/$defs/RangeScopeInput"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AllModulesScopeInput"
+            },
+            {
+              "$ref": "#/$defs/ModulesScopeInput"
+            },
+            {
+              "$ref": "#/$defs/RangeScopeInput"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scope"
+    },
+    "timeout_ms": {
+      "default": 30000,
+      "maximum": 30000,
+      "minimum": 100,
+      "title": "Timeout Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "patterns"
+  ],
+  "title": "ScanManyInput",
+  "type": "object"
+}

@@ -10,6 +10,7 @@ def test_list_lua_functions_reports_names_and_owner_filter():
         local all_funcs = listLuaFunctions()
         local general_funcs = listLuaFunctions("general")
         local found_aob_scan = false
+        local found_aob_scan_many = false
         local found_addr = false
         local found_capabilities = false
         local all_general = true
@@ -17,6 +18,9 @@ def test_list_lua_functions_reports_names_and_owner_filter():
         for _, fn in ipairs(all_funcs) do
             if fn.name == "AOBScan" and fn.owner == "module_scan" then
                 found_aob_scan = true
+            end
+            if fn.name == "AOBScanMany" and fn.owner == "module_scan" then
+                found_aob_scan_many = true
             end
         end
 
@@ -35,6 +39,7 @@ def test_list_lua_functions_reports_names_and_owner_filter():
         addResult("all_count", #all_funcs)
         addResult("general_count", #general_funcs)
         addResult("found_aob_scan", found_aob_scan)
+        addResult("found_aob_scan_many", found_aob_scan_many)
         addResult("found_addr", found_addr)
         addResult("found_capabilities", found_capabilities)
         addResult("all_general", all_general)
@@ -44,6 +49,7 @@ def test_list_lua_functions_reports_names_and_owner_filter():
     assert result["success"] is True
     assert result["results"]["all_count"] > result["results"]["general_count"]
     assert result["results"]["found_aob_scan"] is True
+    assert result["results"]["found_aob_scan_many"] is True
     assert result["results"]["found_addr"] is True
     assert result["results"]["found_capabilities"] is True
     assert result["results"]["all_general"] is True
@@ -102,7 +108,7 @@ def test_get_capabilities_reports_detached_state_paths_and_wrapper_flags(monkeyp
     assert result["results"]["has_memscope_home"] is True
     assert result["results"]["has_scripts_dir"] is True
     assert result["results"]["has_session_log"] is True
-    assert result["results"]["tool_count"] == 10
+    assert result["results"]["tool_count"] == 11
     assert result["results"]["error_normalization"] is True
     assert result["results"]["strict_scan_contract"] is True
     assert result["results"]["scan_cursor_continuation"] is True

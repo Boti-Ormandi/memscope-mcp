@@ -236,6 +236,57 @@ class ScanInput(StrictModel):
         return self
 
 
+class NamedPatternInput(StrictModel):
+    """One caller-keyed AOB pattern in a bounded batch request."""
+
+    key: Annotated[str, Field(min_length=1)]
+    pattern: Annotated[str, Field(min_length=1, max_length=4096)]
+
+    @field_validator("key")
+    @classmethod
+    def _bound_key_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 64:
+            raise ValueError("key exceeds 64 UTF-8 bytes")
+        return value
+
+    @field_validator("pattern")
+    @classmethod
+    def _reject_whitespace_only_pattern(cls, value: str) -> str:
+        if not value.strip("".join(_ASCII_WHITESPACE)):
+            raise ValueError("pattern is empty")
+        return value
+
+
+class ScanManyInput(StrictModel):
+    """Bounded first-hit or count batch over one shared scan traversal."""
+
+    patterns: Annotated[list[NamedPatternInput], Field(min_length=1, max_length=32)]
+    scope: ScanScopeInput | None = None
+    mode: Literal["first", "count"] = "first"
+    max_matches: MatchLimit | None = None
+    timeout_ms: TimeoutMs = 30_000
+    diagnostics: bool = False
+
+    @model_validator(mode="after")
+    def _validate_batch(self):
+        seen: set[str] = set()
+        for index, item in enumerate(self.patterns):
+            if item.key in seen:
+                raise PydanticCustomError(
+                    "scan_many_duplicate_key",
+                    "Batch pattern keys must be unique",
+                    {"field": f"patterns[{index}].key"},
+                )
+            seen.add(item.key)
+        if self.mode == "first" and "max_matches" in self.model_fields_set:
+            raise PydanticCustomError(
+                "scan_many_mode_field",
+                "First-hit batches do not accept max_matches",
+                {"field": "max_matches", "mode": self.mode},
+            )
+        return self
+
+
 class ScanHit(StrictModel):
     address: Annotated[str, Field(pattern=r"^0x(?:0|[1-9A-F][0-9A-F]*)$")]
     module: str | None
@@ -255,6 +306,8 @@ class ScanStatus(StrictModel):
 
 class ScanDiagnostics(StrictModel):
     duration_ms: Annotated[float, Field(strict=True, ge=0)]
+    scope_fingerprint: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    sections: Annotated[list[str], Field(max_length=64)]
     strategy_counts: Annotated[dict[MatcherStrategy, NonNegativeInt], Field(max_length=4)]
     unique_bytes_examined: NonNegativeInt
     physical_read_calls: NonNegativeInt
@@ -339,6 +392,85 @@ class CountScanSuccess(StrictModel):
         return self
 
 
+class FirstScanManyItem(StrictModel):
+    key: Annotated[str, Field(min_length=1)]
+    match: ScanHit | None
+    status: ScanStatus
+
+    @model_validator(mode="after")
+    def _validate_first_item(self):
+        if self.status.termination in {"page_limit", "match_limit"}:
+            raise ValueError("page_limit and match_limit are not valid for first batch items")
+        if self.match is None and self.status.termination == "first_hit":
+            raise ValueError("first_hit requires a match")
+        if self.match is not None and self.status.termination != "first_hit":
+            raise ValueError("a first-mode match requires first_hit termination")
+        return self
+
+
+class CountScanManyItem(StrictModel):
+    key: Annotated[str, Field(min_length=1)]
+    count: MatchLimit | Literal[0]
+    observation: Observation
+    status: ScanStatus
+
+    @model_validator(mode="after")
+    def _validate_count_item(self):
+        if self.status.termination in {"page_limit", "first_hit"}:
+            raise ValueError("page_limit and first_hit are not valid for count batch items")
+        complete = self.status.termination == "scope_exhausted" and not self.status.read_gaps_detected
+        expected = "complete_traversal" if complete else "partial_traversal"
+        if self.observation != expected:
+            raise ValueError(f"observation must be {expected} for this status")
+        return self
+
+
+class ScanManyShared(StrictModel):
+    termination: Termination
+    read_gaps_detected: bool
+    diagnostics: ScanDiagnostics | None = None
+
+
+class FirstScanManySuccess(StrictModel):
+    success: Literal[True]
+    mode: Literal["first"]
+    results: Annotated[list[FirstScanManyItem], Field(min_length=1, max_length=32)]
+    shared: ScanManyShared
+
+    @model_validator(mode="after")
+    def _validate_first_batch(self):
+        keys = [item.key for item in self.results]
+        if len(set(keys)) != len(keys):
+            raise ValueError("batch result keys must be unique")
+        if self.shared.termination in {"page_limit", "match_limit"}:
+            raise ValueError("page_limit and match_limit are not valid for first batches")
+        if self.shared.termination == "first_hit" and any(
+            item.status.termination != "first_hit" for item in self.results
+        ):
+            raise ValueError("shared first_hit requires every item to complete with first_hit")
+        return self
+
+
+class CountScanManySuccess(StrictModel):
+    success: Literal[True]
+    mode: Literal["count"]
+    results: Annotated[list[CountScanManyItem], Field(min_length=1, max_length=32)]
+    shared: ScanManyShared
+
+    @model_validator(mode="after")
+    def _validate_count_batch(self):
+        keys = [item.key for item in self.results]
+        if len(set(keys)) != len(keys):
+            raise ValueError("batch result keys must be unique")
+        if self.shared.termination in {"page_limit", "first_hit"}:
+            raise ValueError("page_limit and first_hit are not valid for count batches")
+        if self.shared.termination == "match_limit" and any(
+            item.status.termination != "match_limit" for item in self.results
+        ):
+            raise ValueError("shared match_limit requires every item to complete with match_limit")
+        return self
+
+
 class ScanFailure(StrictModel):
     success: Literal[False] = False
     error: ScanErrorCode
@@ -375,6 +507,16 @@ ScanSuccess = Annotated[
 
 
 class ScanResponse(RootModel[Union[ScanSuccess, ScanFailure]]):
+    model_config = ConfigDict(strict=True, frozen=True)
+
+
+ScanManySuccess = Annotated[
+    Union[FirstScanManySuccess, CountScanManySuccess],
+    Field(discriminator="mode"),
+]
+
+
+class ScanManyResponse(RootModel[Union[ScanManySuccess, ScanFailure]]):
     model_config = ConfigDict(strict=True, frozen=True)
 
 
@@ -467,6 +609,71 @@ def scan_input_validation_failure(error: ValidationError) -> ScanFailure:
         )
 
     return ScanFailure(error="INVALID_ARGUMENT", detail="Invalid scan request")
+
+
+def scan_many_input_validation_failure(error: ValidationError) -> ScanFailure:
+    """Map strict batch validation failures to stable scan application errors."""
+
+    first = error.errors(include_url=False)[0]
+    error_type = first["type"]
+    context = first.get("ctx") or {}
+    field = context.get("field") or _format_field_path(first.get("loc", ()))
+
+    if error_type == "extra_forbidden":
+        if field == "scope" or (field is not None and field.startswith("scope.")):
+            return ScanFailure(
+                error="INVALID_SCOPE",
+                detail=f"Unknown scan scope field '{field}'",
+                field=field,
+            )
+        return ScanFailure(
+            error="INVALID_ARGUMENT",
+            detail=f"Unknown scan_many argument '{field}'",
+            field=field,
+        )
+    if error_type == "scan_many_duplicate_key":
+        return ScanFailure(
+            error="INVALID_ARGUMENT",
+            detail="Batch pattern keys must be unique",
+            field=field or "patterns",
+        )
+    if error_type == "scan_many_mode_field":
+        return ScanFailure(
+            error="INVALID_ARGUMENT",
+            detail="Mode 'first' does not accept 'max_matches'",
+            field=field or "max_matches",
+        )
+    if error_type == "scan_scope_sections":
+        return ScanFailure(
+            error="INVALID_SCOPE",
+            detail="Sections are valid only for module-based scopes",
+            field=field or "scope.filters.sections",
+        )
+    if field == "mode":
+        return ScanFailure(
+            error="INVALID_MODE",
+            detail="Mode must be one of: first, count",
+            field="mode",
+        )
+    if field is not None and field.endswith(".pattern"):
+        return ScanFailure(
+            error="INVALID_PATTERN",
+            detail="Each pattern must be a non-empty string of at most 4096 characters",
+            field=field,
+        )
+    if field == "scope" or (field is not None and field.startswith("scope.")):
+        return ScanFailure(
+            error="INVALID_SCOPE",
+            detail="Invalid scan scope",
+            field=field or "scope",
+        )
+    if field:
+        return ScanFailure(
+            error="INVALID_ARGUMENT",
+            detail=f"Invalid value for '{field}'",
+            field=field,
+        )
+    return ScanFailure(error="INVALID_ARGUMENT", detail="Invalid scan_many request")
 
 
 def _format_field_path(location: tuple[Any, ...]) -> str | None:

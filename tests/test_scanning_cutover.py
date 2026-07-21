@@ -47,6 +47,7 @@ def test_core_scan_instructions_teach_only_named_scan_options():
     instructions = ModuleScanExtension.instructions
 
     assert "AOBScan(pattern, options?)" in instructions
+    assert "AOBScanMany(patterns, options?)" in instructions
     assert "scanString(text, options?)" in instructions
     assert "scanPointer(target, options?)" in instructions
     assert "Expected failures return `nil, error_table`" in instructions
@@ -54,10 +55,11 @@ def test_core_scan_instructions_teach_only_named_scan_options():
     assert "start?, end?, limit?" not in instructions
 
 
-def test_lua_registry_has_only_the_three_scan_helpers():
+def test_lua_registry_has_only_the_four_scan_helpers():
     globals_table = LUA_ENGINE.lua.globals()
 
     assert globals_table["AOBScan"] is not None
+    assert globals_table["AOBScanMany"] is not None
     assert globals_table["scanString"] is not None
     assert globals_table["scanPointer"] is not None
     assert globals_table["AOBScanModule"] is None

@@ -7,11 +7,11 @@ def test_server_imports():
 
 
 def test_tool_count():
-    """Server registers exactly 10 MCP tools."""
+    """Server registers exactly 11 MCP tools."""
     from memscope_mcp.server import mcp
 
     tools = mcp._tool_manager._tools
-    assert len(tools) == 10, f"Expected 10 tools, got {len(tools)}: {sorted(tools.keys())}"
+    assert len(tools) == 11, f"Expected 11 tools, got {len(tools)}: {sorted(tools.keys())}"
 
 
 def test_tool_names():
@@ -28,6 +28,7 @@ def test_tool_names():
         "dump",
         "chain",
         "scan",
+        "scan_many",
         "lua",
         "scripts",
     }

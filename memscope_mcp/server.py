@@ -14,8 +14,15 @@ from mcp.server.fastmcp import FastMCP
 from .extensions.bootstrap import bootstrap_extensions
 from .instructions import build_instructions
 from .scanning.boundary import register_strict_model_tool
-from .scanning.contract import ScanInput, ScanResponse, scan_input_validation_failure
-from .scanning.execution import ScanExecutor, execute_scan_async
+from .scanning.contract import (
+    ScanInput,
+    ScanManyInput,
+    ScanManyResponse,
+    ScanResponse,
+    scan_input_validation_failure,
+    scan_many_input_validation_failure,
+)
+from .scanning.execution import ScanExecutor, execute_scan_async, execute_scan_many_async
 from .session import SESSION
 from .tools.lua.engine import LUA_ENGINE, execute_lua
 from .tools.lua_scripts import (
@@ -576,6 +583,59 @@ register_strict_model_tool(
     output_model=ScanResponse,
     handler=_scan_handler,
     validation_failure_mapper=scan_input_validation_failure,
+)
+
+
+def _scan_many_log_args(request: ScanManyInput) -> dict:
+    """Return bounded batch arguments without logging raw pattern contents."""
+
+    return {
+        "mode": request.mode,
+        "max_matches": request.max_matches,
+        "timeout_ms": request.timeout_ms,
+        "diagnostics": request.diagnostics,
+        "scope": None if request.scope is None else request.scope.model_dump(mode="python"),
+        "patterns": [
+            {
+                "key": item.key,
+                "length": len(item.pattern),
+                "sha256": hashlib.sha256(item.pattern.encode("utf-8", errors="replace")).hexdigest(),
+            }
+            for item in request.patterns
+        ],
+    }
+
+
+def _scan_many_log_result(response: ScanManyResponse) -> dict:
+    return response.root.model_dump(mode="python", exclude_none=False)
+
+
+async def _scan_many_handler(request: ScanManyInput, _context) -> ScanManyResponse:
+    """Execute one validated scan batch outside the async request loop."""
+
+    started = time.perf_counter()
+    response = await execute_scan_many_async(SCAN_EXECUTOR, request)
+    duration_ms = (time.perf_counter() - started) * 1000
+    LOGGER.log(
+        "scan_many",
+        _scan_many_log_args(request),
+        _scan_many_log_result(response),
+        duration_ms,
+    )
+    return response
+
+
+register_strict_model_tool(
+    mcp,
+    name="scan_many",
+    description=(
+        "Scan 1-32 keyed AOB patterns in one shared target-memory traversal. Supports only bounded "
+        "first-hit and count modes, structured scopes, PE-section filters, and shared diagnostics."
+    ),
+    input_model=ScanManyInput,
+    output_model=ScanManyResponse,
+    handler=_scan_many_handler,
+    validation_failure_mapper=scan_many_input_validation_failure,
 )
 
 

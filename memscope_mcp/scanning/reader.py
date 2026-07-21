@@ -101,6 +101,12 @@ class RegionReader:
         stats.planner_query_calls = plan.virtual_query_calls
         stats.read_gap_count = plan.planner_gap_count
         stats.reader_chunk_size = chunk_size
+        stats.physical_read_calls += plan.metadata_read_calls
+        stats.physical_bytes_requested += plan.metadata_bytes_requested
+        stats.physical_bytes_read += plan.metadata_bytes_read
+        stats.unique_bytes_read += plan.metadata_bytes_read
+        stats.scope_fingerprint = plan.scope_fingerprint
+        stats.section_names = plan.selected_section_names
 
     def __iter__(self) -> Iterator[ReadFragment]:
         if self._iterated:
@@ -283,7 +289,7 @@ def iter_search_windows(
         candidate_end = base_address + max(0, len(combined) - pattern_length + 1)
 
         if candidate_end > candidate_start:
-            for eligible_start, eligible_end, module in _candidate_module_segments(
+            for eligible_start, eligible_end, module in candidate_module_segments(
                 modules,
                 candidate_start,
                 candidate_end,
@@ -304,7 +310,7 @@ def iter_search_windows(
         previous_end = fragment.end_exclusive
 
 
-def _candidate_module_segments(
+def candidate_module_segments(
     modules: ModuleSnapshot,
     start: int,
     end_exclusive: int,

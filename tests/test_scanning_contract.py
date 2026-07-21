@@ -153,6 +153,25 @@ def test_registered_public_scan_schemas_match_snapshots():
     assert scan_tool.outputSchema == _load_snapshot("scan-output-schema.json")
 
 
+def test_registered_public_scan_many_schemas_match_snapshots():
+    tools = asyncio.run(public_server.mcp.list_tools())
+    scan_many_tool = next(tool for tool in tools if tool.name == "scan_many")
+
+    assert scan_many_tool.inputSchema == _load_snapshot("scan-many-input-schema.json")
+    assert scan_many_tool.outputSchema == _load_snapshot("scan-many-output-schema.json")
+    assert set(scan_many_tool.inputSchema["properties"]) == {
+        "patterns",
+        "scope",
+        "mode",
+        "max_matches",
+        "timeout_ms",
+        "diagnostics",
+    }
+    assert "cursor" not in scan_many_tool.inputSchema["properties"]
+    assert "limit" not in scan_many_tool.inputSchema["properties"]
+    assert "anyOf" in scan_many_tool.outputSchema
+
+
 @pytest.mark.parametrize(
     "removed_field",
     ["offset", "summary_only", "max_results", "return_offset", "module", "address_min", "address_max"],

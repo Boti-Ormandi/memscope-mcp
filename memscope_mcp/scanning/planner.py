@@ -1,4 +1,4 @@
-"""Virtual-memory planning for normalized scan scopes."""
+"""Virtual-memory and PE-section planning for normalized scan scopes."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ import pymem.memory
 
 from memscope_mcp.scanning.lifecycle import ScanLease, bind_scan_control
 from memscope_mcp.scanning.model import ModuleRecord, ScanControl, TerminationReason
-from memscope_mcp.scanning.scopes import (
-    MemoryType,
-    PermissionRequirement,
-    ScanScope,
-    ScopeKind,
-    ScopeNormalizationError,
+from memscope_mcp.scanning.scopes import MemoryType, PermissionRequirement, ScanScope, ScopeKind
+from memscope_mcp.scanning.sections import (
+    ReadMemory,
+    SectionCache,
+    SectionReadStats,
+    SectionResolutionInterrupted,
 )
 
 MEM_COMMIT = 0x1000
@@ -135,6 +135,10 @@ class RegionPlan:
     read_gaps_detected: bool
     first_unplanned_address: int | None
     termination_reason: TerminationReason | None = None
+    metadata_read_calls: int = 0
+    metadata_bytes_requested: int = 0
+    metadata_bytes_read: int = 0
+    selected_section_names: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.generation, bool) or not isinstance(self.generation, int) or self.generation <= 0:
@@ -151,9 +155,18 @@ class RegionPlan:
             ("region_count", self.region_count),
             ("virtual_query_calls", self.virtual_query_calls),
             ("planner_gap_count", self.planner_gap_count),
+            ("metadata_read_calls", self.metadata_read_calls),
+            ("metadata_bytes_requested", self.metadata_bytes_requested),
+            ("metadata_bytes_read", self.metadata_bytes_read),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
+        if self.metadata_bytes_read > self.metadata_bytes_requested:
+            raise ValueError("metadata_bytes_read cannot exceed metadata_bytes_requested")
+        if not isinstance(self.selected_section_names, tuple) or any(
+            not isinstance(name, str) or not name for name in self.selected_section_names
+        ):
+            raise TypeError("selected_section_names must be a tuple of non-empty strings")
         if not isinstance(self.read_gaps_detected, bool):
             raise TypeError("read_gaps_detected must be a bool")
         if self.first_unplanned_address is not None and (
@@ -176,15 +189,24 @@ class RegionPlan:
             previous_end = span.end_exclusive
 
 
+@dataclass(frozen=True, slots=True)
+class _PlanningRange:
+    start: int
+    end_exclusive: int
+    module: ModuleRecord | None
+
+
 def plan_scan_regions(
     lease: ScanLease,
     scope: ScanScope,
     *,
     query_memory: VirtualQuery = pymem.memory.virtual_query,
+    read_memory: ReadMemory = pymem.memory.read_bytes,
+    section_cache: SectionCache | None = None,
     control: ScanControl | None = None,
     resume_address: int | None = None,
 ) -> RegionPlan:
-    """Walk every normalized interval through VirtualQueryEx before target reads."""
+    """Resolve section filters, then walk every selected interval through VirtualQueryEx."""
 
     if not isinstance(lease, ScanLease):
         raise TypeError("lease must be a ScanLease")
@@ -194,116 +216,134 @@ def plan_scan_regions(
         raise ValueError("scope and lease attachment identities do not match")
     if not callable(query_memory):
         raise TypeError("query_memory must be callable")
+    if not callable(read_memory):
+        raise TypeError("read_memory must be callable")
+    if section_cache is not None and not isinstance(section_cache, SectionCache):
+        raise TypeError("section_cache must be a SectionCache or None")
     if resume_address is not None and (
         isinstance(resume_address, bool)
         or not isinstance(resume_address, int)
         or not 0 <= resume_address <= _MAX_ADDRESS_EXCLUSIVE
     ):
         raise ValueError("resume_address must be an unsigned 64-bit address boundary or None")
-    if scope.filters.section_names:
-        raise ScopeNormalizationError(
-            "INVALID_SCOPE",
-            "Section filters require the section-aware planner and are not accepted by this planner",
-            field="scope.filters.sections",
-        )
 
     active_control = bind_scan_control(control, lease)
+    metadata_stats = SectionReadStats()
+    selected_section_names: tuple[str, ...] = ()
+    termination_reason: TerminationReason | None = None
+
+    if scope.filters.section_names:
+        try:
+            planning_ranges, selected_section_names = _section_planning_ranges(
+                lease,
+                scope,
+                read_memory=read_memory,
+                section_cache=section_cache or SectionCache(),
+                control=active_control,
+                stats=metadata_stats,
+            )
+        except SectionResolutionInterrupted as interrupted:
+            planning_ranges = ()
+            termination_reason = interrupted.reason
+    else:
+        planning_ranges = tuple(_PlanningRange(item.start, item.end_exclusive, item.module) for item in scope.ranges)
+
     selected_memory_types = _selected_memory_types(scope)
     spans: list[PlannedSpan] = []
     region_count = 0
     query_calls = 0
     planner_gap_count = 0
     first_unplanned_address: int | None = None
-    termination_reason: TerminationReason | None = None
 
-    for scope_range in scope.ranges:
-        reason = active_control.poll()
-        if reason is not None:
-            termination_reason = reason
-            break
-
-        address = scope_range.start if resume_address is None else max(scope_range.start, resume_address)
-        if address >= scope_range.end_exclusive:
-            continue
-        while address < scope_range.end_exclusive:
+    if termination_reason is None:
+        for scope_range in planning_ranges:
             reason = active_control.poll()
             if reason is not None:
                 termination_reason = reason
                 break
 
-            query_calls += 1
-            try:
-                mbi = query_memory(lease.process_handle, address)
-                region_base = _mbi_int(mbi, "BaseAddress")
-                region_size = _mbi_int(mbi, "RegionSize")
-                state = _mbi_int(mbi, "State")
-                protect = _mbi_int(mbi, "Protect")
-                memory_type = _mbi_int(mbi, "Type")
-            except Exception:
+            address = scope_range.start if resume_address is None else max(scope_range.start, resume_address)
+            if address >= scope_range.end_exclusive:
+                continue
+            while address < scope_range.end_exclusive:
                 reason = active_control.poll()
                 if reason is not None:
                     termination_reason = reason
                     break
-                planner_gap_count += 1
-                if first_unplanned_address is None:
-                    first_unplanned_address = address
-                break
 
-            region_count += 1
-            if region_size <= 0:
-                planner_gap_count += 1
-                if first_unplanned_address is None:
-                    first_unplanned_address = address
-                break
-            region_end = region_base + region_size
-            if region_base > address or region_end <= address:
-                planner_gap_count += 1
-                if first_unplanned_address is None:
-                    first_unplanned_address = address
-                break
+                query_calls += 1
+                try:
+                    mbi = query_memory(lease.process_handle, address)
+                    region_base = _mbi_int(mbi, "BaseAddress")
+                    region_size = _mbi_int(mbi, "RegionSize")
+                    state = _mbi_int(mbi, "State")
+                    protect = _mbi_int(mbi, "Protect")
+                    memory_type = _mbi_int(mbi, "Type")
+                except Exception:
+                    reason = active_control.poll()
+                    if reason is not None:
+                        termination_reason = reason
+                        break
+                    planner_gap_count += 1
+                    if first_unplanned_address is None:
+                        first_unplanned_address = address
+                    break
 
-            clipped_start = max(address, region_base, scope_range.start)
-            clipped_end = min(region_end, scope_range.end_exclusive)
-            if clipped_start < clipped_end and _region_matches(
-                state,
-                protect,
-                memory_type,
-                selected_memory_types,
-                scope.filters.executable,
-                scope.filters.writable,
-            ):
-                if scope.kind is ScopeKind.RANGE:
-                    for piece_start, piece_end, module in _annotate_range(
-                        lease,
-                        clipped_start,
-                        clipped_end,
-                    ):
+                region_count += 1
+                if region_size <= 0:
+                    planner_gap_count += 1
+                    if first_unplanned_address is None:
+                        first_unplanned_address = address
+                    break
+                region_end = region_base + region_size
+                if region_base > address or region_end <= address:
+                    planner_gap_count += 1
+                    if first_unplanned_address is None:
+                        first_unplanned_address = address
+                    break
+
+                clipped_start = max(address, region_base, scope_range.start)
+                clipped_end = min(region_end, scope_range.end_exclusive)
+                if clipped_start < clipped_end and _region_matches(
+                    state,
+                    protect,
+                    memory_type,
+                    selected_memory_types,
+                    scope.filters.executable,
+                    scope.filters.writable,
+                ):
+                    if scope.kind is ScopeKind.RANGE:
+                        for piece_start, piece_end, module in _annotate_range(
+                            lease,
+                            clipped_start,
+                            clipped_end,
+                        ):
+                            spans.append(
+                                PlannedSpan(
+                                    start=piece_start,
+                                    end_exclusive=piece_end,
+                                    state=state,
+                                    protect=protect,
+                                    memory_type=memory_type,
+                                    module=module,
+                                )
+                            )
+                    else:
                         spans.append(
                             PlannedSpan(
-                                start=piece_start,
-                                end_exclusive=piece_end,
+                                start=clipped_start,
+                                end_exclusive=clipped_end,
                                 state=state,
                                 protect=protect,
                                 memory_type=memory_type,
-                                module=module,
+                                module=scope_range.module,
                             )
                         )
-                else:
-                    spans.append(
-                        PlannedSpan(
-                            start=clipped_start,
-                            end_exclusive=clipped_end,
-                            state=state,
-                            protect=protect,
-                            memory_type=memory_type,
-                            module=scope_range.module,
-                        )
-                    )
 
-            address = region_end
+                address = region_end
 
-        if termination_reason is not None:
-            break
+            if termination_reason is not None:
+                break
 
     return RegionPlan(
         generation=lease.generation,
@@ -316,6 +356,10 @@ def plan_scan_regions(
         read_gaps_detected=planner_gap_count > 0,
         first_unplanned_address=first_unplanned_address,
         termination_reason=termination_reason,
+        metadata_read_calls=metadata_stats.read_calls,
+        metadata_bytes_requested=metadata_stats.bytes_requested,
+        metadata_bytes_read=metadata_stats.bytes_read,
+        selected_section_names=selected_section_names,
     )
 
 
@@ -340,6 +384,56 @@ def is_readable_committed(state: int, protect: int) -> bool:
     """Return whether a region is committed and actually readable."""
 
     return state == MEM_COMMIT and protection_capabilities(protect).readable
+
+
+def _section_planning_ranges(
+    lease: ScanLease,
+    scope: ScanScope,
+    *,
+    read_memory: ReadMemory,
+    section_cache: SectionCache,
+    control: ScanControl,
+    stats: SectionReadStats,
+) -> tuple[tuple[_PlanningRange, ...], tuple[str, ...]]:
+    requested_names = scope.filters.section_names
+    if not requested_names:
+        return (), ()
+
+    module_intervals: list[_PlanningRange] = []
+    canonical_names: tuple[str, ...] | None = None
+    for scope_range in scope.ranges:
+        module = scope_range.module
+        if module is None:
+            raise ValueError("section-filtered module ranges must carry module identity")
+        table = section_cache.get_or_load(
+            lease,
+            module,
+            read_memory=read_memory,
+            control=control,
+            stats=stats,
+        )
+        selected, remote_names = table.select(requested_names)
+        if canonical_names is None:
+            canonical_names = remote_names
+        intervals = sorted(
+            (record.start, record.end_exclusive) for record in selected if record.end_exclusive > record.start
+        )
+        for start, end_exclusive in _merge_intervals(intervals):
+            module_intervals.append(_PlanningRange(start, end_exclusive, module))
+
+    module_intervals.sort(key=lambda item: (item.start, item.end_exclusive))
+    return tuple(module_intervals), canonical_names or ()
+
+
+def _merge_intervals(intervals: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+    merged: list[tuple[int, int]] = []
+    for start, end_exclusive in intervals:
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end_exclusive))
+            continue
+        previous_start, previous_end = merged[-1]
+        merged[-1] = (previous_start, max(previous_end, end_exclusive))
+    return tuple(merged)
 
 
 def _selected_memory_types(scope: ScanScope) -> frozenset[int] | None:

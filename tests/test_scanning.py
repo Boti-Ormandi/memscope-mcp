@@ -262,3 +262,42 @@ def test_lua_outer_timeout_aborts_direct_scan(monkeypatch):
 
 def test_removed_lua_module_scan_global_is_absent():
     assert LUA_ENGINE.lua.globals()["AOBScanModule"] is None
+
+
+def test_lua_aob_scan_many_returns_ordered_keyed_items_and_shared_metadata(monkeypatch):
+    install_executor(monkeypatch, b"ABABA")
+
+    result = LUA_ENGINE.execute(
+        """
+        local items, err = AOBScanMany({
+            {key = "ab", pattern = "41 42"},
+            {key = "ba", pattern = "42 41"}
+        }, {
+            scope = {kind = "modules", names = {"target.dll"}},
+            mode = "first",
+            diagnostics = true
+        })
+        addResult("has_error", err ~= nil)
+        addResult("count", #items)
+        addResult("first_key", items[1].key)
+        addResult("first_match", items[1].match)
+        addResult("second_key", items[2].key)
+        addResult("second_match", items[2].match)
+        addResult("mode", items.metadata.mode)
+        addResult("termination", items.metadata.shared.termination)
+        addResult("reads", items.metadata.shared.diagnostics.physical_read_calls)
+        """
+    )
+
+    assert result["success"] is True
+    assert result["results"] == {
+        "has_error": False,
+        "count": 2,
+        "first_key": "ab",
+        "first_match": 0x1000,
+        "second_key": "ba",
+        "second_match": 0x1001,
+        "mode": "first",
+        "termination": "first_hit",
+        "reads": 1,
+    }

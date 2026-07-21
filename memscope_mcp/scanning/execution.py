@@ -14,6 +14,7 @@ from typing import Protocol
 import anyio
 import pymem.memory
 
+from memscope_mcp.scanning.batch import BatchQuery, BatchScanResult, execute_scan_batch_plan
 from memscope_mcp.scanning.collectors import (
     BoundedAddressCollector,
     CountCollector,
@@ -23,12 +24,19 @@ from memscope_mcp.scanning.collectors import (
 )
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
+    CountScanManyItem,
+    CountScanManySuccess,
     CountScanSuccess,
+    FirstScanManyItem,
+    FirstScanManySuccess,
     FirstScanSuccess,
     ScanDiagnostics,
     ScanFailure,
     ScanHit,
     ScanInput,
+    ScanManyInput,
+    ScanManyResponse,
+    ScanManyShared,
     ScanResponse,
     ScanScopeInput,
     ScanStatus,
@@ -48,6 +56,7 @@ from memscope_mcp.scanning.model import (
     ScanControl,
     ScanQuery,
     ScanResult,
+    ScanStats,
     TerminationReason,
 )
 from memscope_mcp.scanning.model import (
@@ -62,8 +71,10 @@ from memscope_mcp.scanning.reader import (
     TargetAlive,
 )
 from memscope_mcp.scanning.scopes import ScanScope, ScopeNormalizationError, normalize_scan_scope
+from memscope_mcp.scanning.sections import SectionCache
 
 ValidatedResponseLogger = Callable[[ScanResponse], None]
+ValidatedManyResponseLogger = Callable[[ScanManyResponse], None]
 DirectQueryFactory = Callable[[ScanLease], ScanQuery]
 
 
@@ -86,6 +97,7 @@ class DirectScanError(ValueError):
 
 
 _MAX_ADDRESS_EXCLUSIVE = 1 << 64
+_MAX_BATCH_COMPILED_BYTES = 32_768
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -106,6 +118,7 @@ class ScanExecutor:
         query_memory: VirtualQuery = pymem.memory.virtual_query,
         read_memory: ReadMemory = pymem.memory.read_bytes,
         target_alive: TargetAlive | None = None,
+        section_cache: SectionCache | None = None,
         chunk_size: int = PROVISIONAL_READ_CHUNK_SIZE,
         page_size: int = DEFAULT_PAGE_SIZE,
         clock: Callable[[], int] = time.monotonic_ns,
@@ -120,6 +133,8 @@ class ScanExecutor:
             raise TypeError("read_memory must be callable")
         if target_alive is not None and not callable(target_alive):
             raise TypeError("target_alive must be callable or None")
+        if section_cache is not None and not isinstance(section_cache, SectionCache):
+            raise TypeError("section_cache must be a SectionCache or None")
         if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0:
             raise ValueError("chunk_size must be a positive integer")
         if isinstance(page_size, bool) or not isinstance(page_size, int) or page_size <= 0:
@@ -132,6 +147,7 @@ class ScanExecutor:
         self.query_memory = query_memory
         self.read_memory = read_memory
         self.target_alive = target_alive
+        self.section_cache = SectionCache() if section_cache is None else section_cache
         self.chunk_size = chunk_size
         self.page_size = page_size
         self.clock = clock
@@ -179,6 +195,94 @@ class ScanExecutor:
             response = _failure("INTERNAL_SCAN_ERROR", "The scan failed because of an internal error")
 
         return ScanResponse.model_validate(response)
+
+    def execute_many(
+        self,
+        request: ScanManyInput,
+        *,
+        request_cancel: threading.Event | None = None,
+        deadline_ns: int | None = None,
+        interrupt_check: Callable[[], None] | None = None,
+    ) -> ScanManyResponse:
+        """Execute one bounded batch over a single planned target-memory traversal."""
+
+        if not isinstance(request, ScanManyInput):
+            raise TypeError("request must be a validated ScanManyInput")
+        if request_cancel is not None and not isinstance(request_cancel, threading.Event):
+            raise TypeError("request_cancel must be a threading.Event or None")
+        if interrupt_check is not None and not callable(interrupt_check):
+            raise TypeError("interrupt_check must be callable or None")
+        if deadline_ns is None:
+            deadline_ns = self.clock() + request.timeout_ms * 1_000_000
+        elif isinstance(deadline_ns, bool) or not isinstance(deadline_ns, int) or deadline_ns < 0:
+            raise ValueError("deadline_ns must be a non-negative integer")
+
+        compiled: list[tuple[str, ScanQuery]] = []
+        aggregate_bytes = 0
+        for index, item in enumerate(request.patterns):
+            try:
+                query = make_aob_query(item.pattern)
+            except PatternCompileError as error:
+                return _many_failure(
+                    error.code,
+                    error.detail,
+                    field=f"patterns[{index}].pattern",
+                )
+            aggregate_bytes += query.pattern.length
+            if aggregate_bytes > _MAX_BATCH_COMPILED_BYTES:
+                return _many_failure(
+                    "INVALID_PATTERN",
+                    f"Aggregate compiled pattern length exceeds {_MAX_BATCH_COMPILED_BYTES} bytes",
+                    field="patterns",
+                )
+            compiled.append((item.key, query))
+
+        cancel_checks = () if request_cancel is None else (request_cancel.is_set,)
+        control = ScanControl(
+            deadline_ns=deadline_ns,
+            cancel_checks=cancel_checks,
+            interrupt_check=interrupt_check,
+            clock=self.clock,
+        )
+
+        try:
+            with self.session.acquire_scan_lease() as lease:
+                scope = normalize_scan_scope(request.scope, lease)
+                max_matches = request.max_matches or 5_000
+                entries = tuple(
+                    BatchQuery(
+                        key,
+                        query,
+                        FirstHitCollector() if request.mode == "first" else CountCollector(max_matches),
+                    )
+                    for key, query in compiled
+                )
+                plan = plan_scan_regions(
+                    lease,
+                    scope,
+                    query_memory=self.query_memory,
+                    read_memory=self.read_memory,
+                    section_cache=self.section_cache,
+                    control=control,
+                )
+                result = execute_scan_batch_plan(
+                    entries,
+                    lease,
+                    plan,
+                    control=control,
+                    read_memory=self.read_memory,
+                    target_alive=self.target_alive,
+                    chunk_size=self.chunk_size,
+                    page_size=self.page_size,
+                )
+                return self._format_many(request, result)
+        except ScopeNormalizationError as error:
+            return _many_failure(error.error, error.detail, field=error.field, hint=error.hint)
+        except ScanLeaseUnavailable as error:
+            return _many_failure(error.error, error.detail)
+        except Exception:
+            _LOGGER.exception("Unexpected internal scan_many execution failure")
+            return _many_failure("INTERNAL_SCAN_ERROR", "The scan batch failed because of an internal error")
 
     def execute_direct(
         self,
@@ -253,6 +357,8 @@ class ScanExecutor:
                     lease,
                     normalized_scope,
                     query_memory=self.query_memory,
+                    read_memory=self.read_memory,
+                    section_cache=self.section_cache,
                     control=control,
                 )
                 result = execute_scan_plan(
@@ -317,6 +423,62 @@ class ScanExecutor:
         except ScanLeaseUnavailable as error:
             return _failure(error.error, error.detail)
 
+    def _format_many(self, request: ScanManyInput, result: BatchScanResult) -> ScanManyResponse:
+        early_failure = _fatal_batch_without_progress(result)
+        if early_failure is not None:
+            return early_failure
+
+        shared = ScanManyShared(
+            termination=result.termination_reason.value,
+            read_gaps_detected=result.read_gaps_detected,
+            diagnostics=_diagnostics_from_stats(result.stats) if request.diagnostics else None,
+        )
+        if request.mode == "first":
+            items = [
+                FirstScanManyItem(
+                    key=item.key,
+                    match=_format_hit(item.hits[0]) if item.hits else None,
+                    status=ScanStatus(
+                        termination=item.termination_reason.value,
+                        read_gaps_detected=item.read_gaps_detected,
+                    ),
+                )
+                for item in result.items
+            ]
+            return ScanManyResponse.model_validate(
+                FirstScanManySuccess(
+                    success=True,
+                    mode="first",
+                    results=items,
+                    shared=shared,
+                )
+            )
+
+        items = [
+            CountScanManyItem(
+                key=item.key,
+                count=item.observed_count,
+                observation=(
+                    "complete_traversal"
+                    if item.termination_reason is TerminationReason.SCOPE_EXHAUSTED and not item.read_gaps_detected
+                    else "partial_traversal"
+                ),
+                status=ScanStatus(
+                    termination=item.termination_reason.value,
+                    read_gaps_detected=item.read_gaps_detected,
+                ),
+            )
+            for item in result.items
+        ]
+        return ScanManyResponse.model_validate(
+            CountScanManySuccess(
+                success=True,
+                mode="count",
+                results=items,
+                shared=shared,
+            )
+        )
+
     def _execute_start(self, request: ScanInput, control: ScanControl) -> ScanResponse:
         if request.pattern is None:
             raise TypeError("start requests require pattern")
@@ -329,6 +491,8 @@ class ScanExecutor:
                 lease,
                 scope,
                 query_memory=self.query_memory,
+                read_memory=self.read_memory,
+                section_cache=self.section_cache,
                 control=control,
             )
             result = execute_scan_plan(
@@ -375,6 +539,8 @@ class ScanExecutor:
                 lease,
                 scope,
                 query_memory=self.query_memory,
+                read_memory=self.read_memory,
+                section_cache=self.section_cache,
                 control=control,
                 resume_address=state.resume_address,
             )
@@ -565,6 +731,69 @@ async def execute_scan_async(
     return response
 
 
+async def execute_scan_many_async(
+    executor: ScanExecutor,
+    request: ScanManyInput,
+    *,
+    logger: ValidatedManyResponseLogger | None = None,
+) -> ScanManyResponse:
+    """Run a synchronous batch in a worker and retain its lease until completion."""
+
+    if not isinstance(executor, ScanExecutor):
+        raise TypeError("executor must be a ScanExecutor")
+    if not isinstance(request, ScanManyInput):
+        raise TypeError("request must be a validated ScanManyInput")
+    if logger is not None and not callable(logger):
+        raise TypeError("logger must be callable or None")
+
+    deadline_ns = executor.clock() + request.timeout_ms * 1_000_000
+    request_cancel = threading.Event()
+    finished = anyio.Event()
+    responses: list[ScanManyResponse] = []
+    failures: list[BaseException] = []
+
+    async def run_worker() -> None:
+        try:
+            with anyio.CancelScope(shield=True):
+                response = await anyio.to_thread.run_sync(
+                    partial(
+                        executor.execute_many,
+                        request,
+                        request_cancel=request_cancel,
+                        deadline_ns=deadline_ns,
+                    ),
+                    abandon_on_cancel=False,
+                )
+            responses.append(response)
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            finished.set()
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(run_worker)
+        try:
+            await finished.wait()
+        except anyio.get_cancelled_exc_class():
+            request_cancel.set()
+            with anyio.CancelScope(shield=True):
+                await finished.wait()
+            raise
+
+    if failures:
+        raise failures[0]
+    if len(responses) != 1:
+        raise RuntimeError("scan_many worker completed without exactly one response")
+
+    response = ScanManyResponse.model_validate(responses[0])
+    if logger is not None:
+        try:
+            logger(response)
+        except Exception:
+            _LOGGER.exception("Validated scan_many response logger failed")
+    return response
+
+
 def _collector_for_start(request: ScanInput) -> ScanCollector:
     if request.mode == "addresses":
         return PageCollector(request.limit or 50, remaining_matches=request.max_matches or 5000)
@@ -606,6 +835,17 @@ def _fatal_result_without_progress(result: ScanResult) -> ScanResponse | None:
     return None
 
 
+def _fatal_batch_without_progress(result: BatchScanResult) -> ScanManyResponse | None:
+    progressed = result.stats.unique_bytes_examined > 0 or any(item.observed_count > 0 for item in result.items)
+    if progressed:
+        return None
+    if result.termination_reason is TerminationReason.TARGET_CHANGED:
+        return _many_failure("TARGET_CHANGED", "The attached process changed before scan results were available")
+    if result.termination_reason is TerminationReason.READER_ERROR:
+        return _many_failure("INTERNAL_SCAN_ERROR", "The target reader failed before scan results were available")
+    return None
+
+
 def _status(result: ScanResult) -> ScanStatus:
     return ScanStatus(
         termination=result.termination_reason.value,
@@ -614,9 +854,14 @@ def _status(result: ScanResult) -> ScanStatus:
 
 
 def _diagnostics(result: ScanResult) -> ScanDiagnostics:
-    stats = result.stats
+    return _diagnostics_from_stats(result.stats)
+
+
+def _diagnostics_from_stats(stats: ScanStats) -> ScanDiagnostics:
     return ScanDiagnostics(
         duration_ms=stats.duration_ns / 1_000_000,
+        scope_fingerprint=stats.scope_fingerprint.hex(),
+        sections=list(stats.section_names),
         strategy_counts={strategy.value: count for strategy, count in stats.strategy_counts.items()},
         unique_bytes_examined=stats.unique_bytes_examined,
         physical_read_calls=stats.physical_read_calls,
@@ -651,6 +896,23 @@ def _failure(
     hint: str | None = None,
 ) -> ScanResponse:
     return ScanResponse.model_validate(
+        ScanFailure(
+            error=error,
+            detail=detail,
+            field=field,
+            hint=hint,
+        )
+    )
+
+
+def _many_failure(
+    error: str,
+    detail: str,
+    *,
+    field: str | None = None,
+    hint: str | None = None,
+) -> ScanManyResponse:
+    return ScanManyResponse.model_validate(
         ScanFailure(
             error=error,
             detail=detail,
