@@ -150,7 +150,7 @@ if #matches > 0 then
 end
 ```
 
-The MCP and Lua scan contracts, continuation rules, and 0.2.x migration table are documented in [`docs/scanning.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/scanning.md).
+The MCP and Lua scan contracts, continuation rules, and 0.2.x-to-0.3.0 migration table are documented in [`docs/scanning.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/scanning.md).
 
 Function categories (full reference in [`docs/lua-reference.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/lua-reference.md)):
 

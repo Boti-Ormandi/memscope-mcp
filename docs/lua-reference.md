@@ -445,7 +445,7 @@ callSequence({
 
 Scripts are stored as `.lua` files in `$MEMSCOPE_HOME/scripts/<process>/`. The first-line comment becomes the script description shown by `scripts(action="list")`, and that action returns absolute paths for editing. Run scripts with `scripts(action="run", name="...")`; `process="ProcessName.exe"` selects the saved-script namespace only and does not attach or switch targets. If detached, pass `process` for detached Lua execution. If attached, an explicit `process` must match the attached target. Run responses include `requested_process` (the caller-provided namespace, or `nil` when implicit), `attached_process`, `attached_pid`, and `detached_execution`.
 
-Saved scripts are not rewritten automatically when scan contracts change. For the 0.3 scanning migration, search user scripts for `AOBScanModule`, positional `AOBScan` arguments, and `scanString` boolean encoding arguments; replace them with named options as documented in [`scanning.md`](scanning.md).
+Saved scripts are not rewritten automatically when scan contracts change. For the 0.3.0 scanning migration, search user scripts for `AOBScanModule`, positional `AOBScan` arguments, and `scanString` boolean encoding arguments; replace them with named options as documented in [`scanning.md`](scanning.md).
 
 ### Example: locate a singleton from a RIP-relative reference
 

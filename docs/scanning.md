@@ -220,7 +220,7 @@ The result preserves input order. First items contain `key`, optional numeric `m
 
 Expected input and domain failures return `nil, error_table`. A valid no-match operation returns a non-nil result with explicit status. Unexpected internal programming failures still raise through the Lua engine.
 
-## Migration from 0.2.x
+## Migration from 0.2.x to 0.3.0
 
 The scanning contract is a clean break. There are no aliases, compatibility flags, or deprecated wrappers.
 

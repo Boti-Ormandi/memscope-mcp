@@ -16,7 +16,7 @@ ruff check memscope_mcp/ tests/ benchmarks/
 ruff format --check memscope_mcp/ tests/ benchmarks/
 ```
 
-Pre-commit runs `ruff check --fix` and `ruff format` on every commit. CI runs the same checks plus the full pytest suite on Python 3.10 through 3.13.
+Pre-commit runs `ruff check --fix` and `ruff format` on every commit. CI runs the same checks plus the full pytest suite on Python 3.10 through 3.14.
 
 ### Dev workflow note: MEMSCOPE_HOME
 
