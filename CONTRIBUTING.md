@@ -12,8 +12,8 @@ cd memscope-mcp
 pip install -e ".[dev]"
 pre-commit install
 pytest tests/ -v
-ruff check memscope_mcp/ tests/
-ruff format --check memscope_mcp/ tests/
+ruff check memscope_mcp/ tests/ benchmarks/
+ruff format --check memscope_mcp/ tests/ benchmarks/
 ```
 
 Pre-commit runs `ruff check --fix` and `ruff format` on every commit. CI runs the same checks plus the full pytest suite on Python 3.10 through 3.13.
@@ -39,6 +39,7 @@ The full repository layout lives in [`docs/architecture.md`](docs/architecture.m
 - [`docs/hooking.md`](docs/hooking.md) and [`docs/peb.md`](docs/peb.md) -- design docs for the hooking and PEB-introspection layers
 - [`memscope_mcp/_contrib/plugins/`](memscope_mcp/_contrib/plugins/) -- bundled reference plugins (il2cpp, netcap)
 - [`tests/`](tests/) -- pytest suite, smoke + unit + extension/hook/netcap/PEB coverage
+- [`benchmarks/scanning/`](benchmarks/scanning/) -- deterministic scanning corpora, stable case manifests, raw evidence schemas, and benchmark runners (not installed with the package)
 
 ## Adding an MCP tool
 
@@ -104,6 +105,8 @@ Unit tests live next to features (`test_types.py`, `test_scanning.py`, `test_lua
 `tests/conftest.py` imports `memscope_mcp.server` once at collection time so the extension bootstrap runs before any test resolves a Lua function. If a new test needs the Lua surface initialized, it relies on this import side-effect -- nothing else is required.
 
 The scanning reader has controlled self-process integration coverage: tests allocate pages with `VirtualAlloc`, change protections with `VirtualProtect`, and read them through a real process handle. Attaching the full tool surface to an external target is still manual because a clean GitHub Actions runner has no stable target process.
+
+The deterministic matcher benchmark validates its own corpus, expected results, strategy choice, raw schema, and operation counters. Run the quick profile with `python -m benchmarks.scanning.matcher --profile smoke`; see [`benchmarks/scanning/README.md`](benchmarks/scanning/README.md) for the fixed release-evidence matrix. Benchmark output belongs under the ignored `benchmark-results/` directory.
 
 ## PR checklist
 
