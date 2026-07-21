@@ -2,7 +2,9 @@
 
 This directory contains deterministic benchmark inputs and machine-readable raw evidence for the scanning engine. Benchmark code is repository tooling and is not part of the installed package.
 
-## Matcher evidence
+## Compilation and matcher evidence
+
+The paired manifest includes `compile.exact16`, which measures repeated compilation of one exact pattern after ten warmups. Manifest v4 also records a separate untimed-from-primary cold-unique submeasurement over 512 distinct exact patterns, exceeding the production compiler's bounded cache capacity. Reports therefore show the repeated-query path without concealing cache-miss cost in the raw observation metrics.
 
 The matcher suite covers exact, selective wildcard, alternating, sparse rare, sparse common, pointer-aligned, ASCII, and UTF-16LE query shapes. Each case has a stable ID, deterministic corpus, semantic fingerprint, independently derived expected result, raw observations, and operation counters.
 

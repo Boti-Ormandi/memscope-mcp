@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from enum import Enum
+from functools import lru_cache
 
 from memscope_mcp.scanning.model import (
     MAX_PATTERN_BYTES,
@@ -15,7 +16,11 @@ from memscope_mcp.scanning.model import (
 )
 
 MAX_PATTERN_TEXT_CHARS = 4096
-_ASCII_WHITESPACE = frozenset(" \t\n\r\v\f")
+_PATTERN_CACHE_SIZE = 256
+_ASCII_WHITESPACE_CHARS = " \t\n\r\v\f"
+_ASCII_WHITESPACE = frozenset(_ASCII_WHITESPACE_CHARS)
+_ASCII_WHITESPACE_RE = re.compile(r"[ \t\n\r\v\f]")
+_EXACT_PATTERN_RE = re.compile(r"(?:[0-9A-Fa-f]{2})+|[0-9A-Fa-f]{2}(?:[ \t\n\r\v\f]+[0-9A-Fa-f]{2})+")
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 _FINGERPRINT_DOMAIN = b"memscope-scanning-pattern-v1\0"
 
@@ -54,24 +59,36 @@ def compile_aob_pattern(pattern: str) -> CompiledPattern:
             PatternErrorReason.TEXT_TOO_LONG,
             f"Pattern text exceeds {MAX_PATTERN_TEXT_CHARS} characters",
         )
-    if any(character.isspace() and character not in _ASCII_WHITESPACE for character in pattern):
+    return _compile_aob_text_cached(pattern)
+
+
+@lru_cache(maxsize=_PATTERN_CACHE_SIZE)
+def _compile_aob_text_cached(pattern: str) -> CompiledPattern:
+    if not pattern.isascii() and any(
+        character.isspace() and character not in _ASCII_WHITESPACE for character in pattern
+    ):
         raise PatternCompileError(
             PatternErrorReason.NON_ASCII_WHITESPACE,
             "Pattern accepts ASCII whitespace only",
         )
 
-    stripped = pattern.strip("".join(_ASCII_WHITESPACE))
+    stripped = pattern.strip(_ASCII_WHITESPACE_CHARS)
     if not stripped:
         raise PatternCompileError(PatternErrorReason.EMPTY, "Pattern is empty")
 
-    if any(character in _ASCII_WHITESPACE for character in stripped):
+    has_ascii_whitespace = _ASCII_WHITESPACE_RE.search(stripped) is not None
+    if not has_ascii_whitespace and len(stripped) % 2:
+        raise PatternCompileError(
+            PatternErrorReason.ODD_COMPACT_LENGTH,
+            "Compact pattern length must be even",
+        )
+
+    if "?" not in stripped and _EXACT_PATTERN_RE.fullmatch(stripped) is not None:
+        return _compile_exact_canonical(bytes.fromhex(stripped))
+
+    if has_ascii_whitespace:
         tokens = stripped.split()
     else:
-        if len(stripped) % 2:
-            raise PatternCompileError(
-                PatternErrorReason.ODD_COMPACT_LENGTH,
-                "Compact pattern length must be even",
-            )
         tokens = [stripped[index : index + 2] for index in range(0, len(stripped), 2)]
 
     if not 1 <= len(tokens) <= MAX_PATTERN_BYTES:
@@ -95,7 +112,7 @@ def compile_aob_pattern(pattern: str) -> CompiledPattern:
         pattern_bytes.append(int(token, 16))
         mask.append(0xFF)
 
-    return _compile_canonical(bytes(pattern_bytes), bytes(mask))
+    return _compile_canonical_cached(bytes(pattern_bytes), bytes(mask))
 
 
 def compile_exact_bytes(data: bytes | bytearray | memoryview) -> CompiledPattern:
@@ -103,13 +120,16 @@ def compile_exact_bytes(data: bytes | bytearray | memoryview) -> CompiledPattern
 
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise PatternCompileError(PatternErrorReason.INVALID_TYPE, "Exact pattern must be bytes-like")
-    exact = bytes(data)
+    return _compile_exact_canonical(bytes(data))
+
+
+def _compile_exact_canonical(exact: bytes) -> CompiledPattern:
     if not 1 <= len(exact) <= MAX_PATTERN_BYTES:
         raise PatternCompileError(
             PatternErrorReason.BYTE_LENGTH,
             f"Compiled pattern length must be between 1 and {MAX_PATTERN_BYTES} bytes",
         )
-    return _compile_canonical(exact, b"\xff" * len(exact))
+    return _compile_canonical_cached(exact, b"\xff" * len(exact))
 
 
 def compile_canonical_pattern(pattern_bytes: bytes, mask: bytes) -> CompiledPattern:
@@ -129,7 +149,7 @@ def compile_canonical_pattern(pattern_bytes: bytes, mask: bytes) -> CompiledPatt
             PatternErrorReason.INVALID_TOKEN,
             "Canonical wildcard bytes must use the zero value",
         )
-    return _compile_canonical(pattern_bytes, mask)
+    return _compile_canonical_cached(pattern_bytes, mask)
 
 
 def make_aob_query(pattern: str, *, alignment: int = 1) -> ScanQuery:
@@ -160,7 +180,8 @@ def format_canonical_pattern(pattern: CompiledPattern) -> str:
     )
 
 
-def _compile_canonical(pattern_bytes: bytes, mask: bytes) -> CompiledPattern:
+@lru_cache(maxsize=_PATTERN_CACHE_SIZE)
+def _compile_canonical_cached(pattern_bytes: bytes, mask: bytes) -> CompiledPattern:
     segments = _fixed_segments(pattern_bytes, mask)
     fixed_byte_count = mask.count(0xFF)
     exact_bytes = pattern_bytes if fixed_byte_count == len(pattern_bytes) else None
@@ -170,7 +191,7 @@ def _compile_canonical(pattern_bytes: bytes, mask: bytes) -> CompiledPattern:
     fingerprint = hashlib.sha256(
         _FINGERPRINT_DOMAIN + len(pattern_bytes).to_bytes(2, "big") + pattern_bytes + mask
     ).digest()
-    return CompiledPattern(
+    return CompiledPattern._from_validated_parts(
         length=len(pattern_bytes),
         pattern_bytes=pattern_bytes,
         mask=mask,
@@ -201,3 +222,8 @@ def _fixed_segments(pattern_bytes: bytes, mask: bytes) -> tuple[FixedSegment, ..
 def _compile_overlapping_regex(pattern_bytes: bytes, mask: bytes) -> re.Pattern[bytes]:
     parts = [re.escape(bytes((value,))) if fixed else b"." for value, fixed in zip(pattern_bytes, mask, strict=True)]
     return re.compile(b"(?=(" + b"".join(parts) + b"))", re.DOTALL)
+
+
+def _clear_pattern_compile_caches() -> None:
+    _compile_aob_text_cached.cache_clear()
+    _compile_canonical_cached.cache_clear()

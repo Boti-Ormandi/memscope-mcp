@@ -10,6 +10,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from memscope_mcp.scanning import pattern as pattern_module
 from memscope_mcp.scanning.collectors import (
     BoundedAddressCollector,
     CountCollector,
@@ -19,6 +20,7 @@ from memscope_mcp.scanning.collectors import (
 from memscope_mcp.scanning.engine import execute_scan_windows
 from memscope_mcp.scanning.matcher import select_masked_strategy
 from memscope_mcp.scanning.model import (
+    CompiledPattern,
     FixedSegment,
     MatcherStrategy,
     ModuleRecord,
@@ -32,6 +34,7 @@ from memscope_mcp.scanning.pattern import (
     PatternCompileError,
     PatternErrorReason,
     compile_aob_pattern,
+    compile_canonical_pattern,
     compile_exact_bytes,
     format_canonical_pattern,
     make_aob_query,
@@ -71,6 +74,7 @@ def test_production_compiler_matches_strict_oracle(text, canonical):
         ("48 ** 90", PatternErrorReason.INVALID_TOKEN),
         ("48,8B", PatternErrorReason.ODD_COMPACT_LENGTH),
         ("GG", PatternErrorReason.INVALID_TOKEN),
+        ("DEAD BEEF", PatternErrorReason.INVALID_TOKEN),
         ("100", PatternErrorReason.ODD_COMPACT_LENGTH),
         ("48\u00a08B", PatternErrorReason.NON_ASCII_WHITESPACE),
     ],
@@ -118,9 +122,44 @@ def test_compiler_fingerprint_is_canonical_and_shape_sensitive():
     assert len(spaced.fingerprint) == 32
 
 
-def test_compiled_models_are_frozen_and_slotted():
-    pattern = compile_aob_pattern("41")
+def test_compile_caches_reuse_canonical_immutable_patterns():
+    pattern_module._clear_pattern_compile_caches()
+    try:
+        spaced = compile_aob_pattern("41 42 43")
+        repeated = compile_aob_pattern("41 42 43")
+        compact = compile_aob_pattern("414243")
+        exact = compile_exact_bytes(b"ABC")
+        canonical = compile_canonical_pattern(b"ABC", b"\xff\xff\xff")
 
+        assert repeated is spaced
+        assert compact is spaced
+        assert exact is spaced
+        assert canonical is spaced
+        assert spaced.segments == (FixedSegment(offset=0, literal=b"ABC"),)
+        assert spaced.fingerprint == compile_aob_pattern("41 42 43").fingerprint
+    finally:
+        pattern_module._clear_pattern_compile_caches()
+
+
+def test_compile_caches_are_bounded_and_evict_old_entries():
+    pattern_module._clear_pattern_compile_caches()
+    try:
+        first = compile_aob_pattern("FF FE")
+        for value in range(pattern_module._PATTERN_CACHE_SIZE + 1):
+            compile_aob_pattern(value.to_bytes(2, "big").hex(" "))
+
+        assert pattern_module._compile_aob_text_cached.cache_info().currsize == pattern_module._PATTERN_CACHE_SIZE
+        assert pattern_module._compile_canonical_cached.cache_info().currsize == pattern_module._PATTERN_CACHE_SIZE
+        assert compile_aob_pattern("FF FE") is not first
+    finally:
+        pattern_module._clear_pattern_compile_caches()
+
+
+def test_compiled_models_are_frozen_and_slotted():
+    with pytest.raises(TypeError, match="must be created by the pattern compiler"):
+        CompiledPattern()
+
+    pattern = compile_aob_pattern("41")
     with pytest.raises(FrozenInstanceError):
         pattern.length = 2
     assert not hasattr(pattern, "__dict__")

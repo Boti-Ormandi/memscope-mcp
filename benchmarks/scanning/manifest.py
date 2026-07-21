@@ -313,7 +313,7 @@ CASES: tuple[BenchmarkCase, ...] = (
         comparison_class="apples_to_apples",
         primary_metric="latency",
         pattern="DE AD BE EF 01 23 45 67 89 AB CD EF 10 32 54 76",
-        parameters={"iterations": 1000},
+        parameters={"iterations": 1000, "cold_unique_patterns": 512},
     ),
     BenchmarkCase(
         case_id="matcher.exact16.uniform",

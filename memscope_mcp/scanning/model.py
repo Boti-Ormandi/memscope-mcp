@@ -66,7 +66,7 @@ class FixedSegment:
             raise ValueError("literal must be non-empty bytes")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class CompiledPattern:
     """Canonical byte/mask representation independent of source spelling."""
 
@@ -81,41 +81,36 @@ class CompiledPattern:
     regex: re.Pattern[bytes] | None
     fingerprint: bytes
 
-    def __post_init__(self) -> None:
-        if isinstance(self.length, bool) or not 1 <= self.length <= MAX_PATTERN_BYTES:
-            raise ValueError(f"length must be between 1 and {MAX_PATTERN_BYTES}")
-        if not isinstance(self.pattern_bytes, bytes) or len(self.pattern_bytes) != self.length:
-            raise ValueError("pattern_bytes length must equal length")
-        if not isinstance(self.mask, bytes) or len(self.mask) != self.length:
-            raise ValueError("mask length must equal length")
-        if any(value not in (0, 0xFF) for value in self.mask):
-            raise ValueError("mask bytes must be 0 or 255")
-        if any(value and not fixed for value, fixed in zip(self.pattern_bytes, self.mask, strict=True)):
-            raise ValueError("wildcard pattern bytes must use the canonical zero value")
+    def __init__(self) -> None:
+        raise TypeError("CompiledPattern values must be created by the pattern compiler")
 
-        expected_fixed_count = self.mask.count(0xFF)
-        if self.fixed_byte_count != expected_fixed_count:
-            raise ValueError("fixed_byte_count does not match mask")
-        if self.all_wildcard != (expected_fixed_count == 0):
-            raise ValueError("all_wildcard does not match mask")
-        if (self.exact_bytes is not None) != (expected_fixed_count == self.length):
-            raise ValueError("exact_bytes presence does not match mask")
-        if self.exact_bytes is not None and self.exact_bytes != self.pattern_bytes:
-            raise ValueError("exact_bytes must equal pattern_bytes")
-
-        fixed_values = bytes(sorted({value for value, mask in zip(self.pattern_bytes, self.mask, strict=True) if mask}))
-        if self.unique_fixed_bytes != fixed_values:
-            raise ValueError("unique_fixed_bytes does not match the fixed bytes")
-        if not isinstance(self.fingerprint, bytes) or len(self.fingerprint) != 32:
-            raise ValueError("fingerprint must be a 32-byte digest")
-
-        if self.segments != _derive_fixed_segments(self.pattern_bytes, self.mask):
-            raise ValueError("fixed segments do not exactly represent the mask")
-        if self.exact_bytes is not None or self.all_wildcard:
-            if self.regex is not None:
-                raise ValueError("exact and all-wildcard patterns must not carry a regex")
-        elif self.regex is None:
-            raise ValueError("masked patterns require a precompiled regex fallback")
+    @classmethod
+    def _from_validated_parts(
+        cls,
+        *,
+        length: int,
+        pattern_bytes: bytes,
+        mask: bytes,
+        segments: tuple[FixedSegment, ...],
+        exact_bytes: bytes | None,
+        all_wildcard: bool,
+        fixed_byte_count: int,
+        unique_fixed_bytes: bytes,
+        regex: re.Pattern[bytes] | None,
+        fingerprint: bytes,
+    ) -> CompiledPattern:
+        instance = object.__new__(cls)
+        object.__setattr__(instance, "length", length)
+        object.__setattr__(instance, "pattern_bytes", pattern_bytes)
+        object.__setattr__(instance, "mask", mask)
+        object.__setattr__(instance, "segments", segments)
+        object.__setattr__(instance, "exact_bytes", exact_bytes)
+        object.__setattr__(instance, "all_wildcard", all_wildcard)
+        object.__setattr__(instance, "fixed_byte_count", fixed_byte_count)
+        object.__setattr__(instance, "unique_fixed_bytes", unique_fixed_bytes)
+        object.__setattr__(instance, "regex", regex)
+        object.__setattr__(instance, "fingerprint", fingerprint)
+        return instance
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,20 +333,6 @@ class MatcherResult:
             _require_address_boundary("next_candidate_start", self.next_candidate_start)
             if self.termination_reason not in COLLECTOR_TERMINATIONS:
                 raise ValueError("next_candidate_start requires collector termination")
-
-
-def _derive_fixed_segments(pattern_bytes: bytes, mask: bytes) -> tuple[FixedSegment, ...]:
-    segments: list[FixedSegment] = []
-    index = 0
-    while index < len(pattern_bytes):
-        if not mask[index]:
-            index += 1
-            continue
-        start = index
-        while index < len(pattern_bytes) and mask[index]:
-            index += 1
-        segments.append(FixedSegment(offset=start, literal=pattern_bytes[start:index]))
-    return tuple(segments)
 
 
 def _require_address(name: str, value: int) -> None:

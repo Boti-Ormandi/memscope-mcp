@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from benchmarks.scanning import BENCHMARK_SCHEMA_VERSION, CORPUS_VERSION, MANIFEST_VERSION
+from benchmarks.scanning.adapters import run_case
 from benchmarks.scanning.compare import compare_artifacts
 from benchmarks.scanning.manifest import CASE_BY_ID, CASES
 from benchmarks.scanning.report import generate_bundle
@@ -101,6 +102,27 @@ def test_environment_metadata_comes_from_selected_interpreter():
     assert Path(metadata["python"]["executable"]).resolve() == Path(sys.executable).resolve()
     assert metadata["packages"]["pydantic"]
     assert metadata["execution_policy"]["process_affinity_mask"]
+
+
+def test_compile_adapter_records_repeated_and_cold_unique_latency():
+    case = CASE_BY_ID["compile.exact16"]
+    root = Path(__file__).resolve().parents[1]
+
+    observation = run_case(
+        case,
+        implementation="after",
+        profile="smoke",
+        target_root=root,
+    )
+
+    metrics = observation["metrics"]
+    assert observation["correct"] is True
+    assert metrics["iterations"] == case.parameters["iterations"]
+    assert metrics["warmups"] == 10
+    assert metrics["latency_per_operation_ns"] > 0
+    assert metrics["cold_unique_patterns"] == case.parameters["cold_unique_patterns"]
+    assert metrics["cold_unique_duration_ns"] > 0
+    assert metrics["cold_unique_latency_per_operation_ns"] > 0
 
 
 def test_environment_cpu_mismatch_is_rejected():

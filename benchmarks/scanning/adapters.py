@@ -64,14 +64,17 @@ def run_case(
 
 def _run_compile(case: BenchmarkCase, implementation: str) -> dict[str, Any]:
     iterations = int(case.parameters["iterations"])
+    cold_unique_patterns = int(case.parameters["cold_unique_patterns"])
+    reset_compile_cache = None
     if implementation == "before":
         from memscope_mcp.utils.pattern import parse_aob_pattern
 
         compile_pattern = parse_aob_pattern
     else:
-        from memscope_mcp.scanning.pattern import compile_aob_pattern
+        from memscope_mcp.scanning.pattern import _clear_pattern_compile_caches, compile_aob_pattern
 
         compile_pattern = compile_aob_pattern
+        reset_compile_cache = _clear_pattern_compile_caches
 
     compiled = compile_pattern(case.pattern)
     for _ in range(10):
@@ -80,15 +83,45 @@ def _run_compile(case: BenchmarkCase, implementation: str) -> dict[str, Any]:
     for _ in range(iterations):
         compile_pattern(case.pattern)
     duration_ns = time.perf_counter_ns() - started
+
     length = int(getattr(compiled, "length"))
+    cold_inputs = _cold_exact_patterns(case.pattern, cold_unique_patterns)
+    if reset_compile_cache is not None:
+        reset_compile_cache()
+    cold_started = time.perf_counter_ns()
+    for pattern in cold_inputs:
+        if int(getattr(compile_pattern(pattern), "length")) != length:
+            raise RuntimeError("cold exact compile variant changed the compiled length")
+    cold_duration_ns = time.perf_counter_ns() - cold_started
+
     return _observation(
         duration_ns=duration_ns,
         logical_bytes=length * iterations,
         actual_count=length,
         expected_count=length,
         termination="complete",
-        metrics={"iterations": iterations, "latency_per_operation_ns": duration_ns / iterations},
+        metrics={
+            "iterations": iterations,
+            "warmups": 10,
+            "latency_per_operation_ns": duration_ns / iterations,
+            "cold_unique_patterns": cold_unique_patterns,
+            "cold_unique_duration_ns": cold_duration_ns,
+            "cold_unique_latency_per_operation_ns": cold_duration_ns / cold_unique_patterns,
+        },
     )
+
+
+def _cold_exact_patterns(pattern: str, count: int) -> tuple[str, ...]:
+    if not 1 <= count < 1 << 32:
+        raise ValueError("cold_unique_patterns must fit in an unsigned 32-bit value")
+    base = bytes.fromhex(pattern)
+    if len(base) < 4:
+        raise ValueError("cold exact compile variants require at least four bytes")
+    prefix = base[:-4]
+    variant_bytes = tuple(prefix + index.to_bytes(4, "little") for index in range(1, count + 1))
+    if base in variant_bytes:
+        raise RuntimeError("cold exact compile variants must exclude the primary pattern")
+    return tuple(value.hex(" ").upper() for value in variant_bytes)
 
 
 def _run_legacy_matcher(case: BenchmarkCase, profile: str) -> dict[str, Any]:
