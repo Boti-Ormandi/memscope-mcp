@@ -17,7 +17,7 @@ from benchmarks.scanning.common import (
     write_csv,
     write_json,
 )
-from benchmarks.scanning.manifest import CASE_BY_ID, CASES, BenchmarkCase
+from benchmarks.scanning.manifest import CASE_BY_ID, BenchmarkCase
 
 _CHUNK_POLICY = (
     "smallest chunk within 10 percent of best throughput while preserving "
@@ -54,10 +54,13 @@ CSV_FIELDS = (
 
 def compare_artifacts(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     _validate_artifact_pair(before, after)
+    selected_case_ids = before["metadata"]["runner"]["case_ids"]
+    selected_cases = tuple(CASE_BY_ID[case_id] for case_id in selected_case_ids)
     before_by_case = _group_observations(before["observations"])
     after_by_case = _group_observations(after["observations"])
     rows = [
-        _compare_case(case, before_by_case.get(case.case_id, []), after_by_case.get(case.case_id, [])) for case in CASES
+        _compare_case(case, before_by_case.get(case.case_id, []), after_by_case.get(case.case_id, []))
+        for case in selected_cases
     ]
 
     reader_after = next(
@@ -126,21 +129,63 @@ def comparison_csv_rows(comparison: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _validate_artifact_pair(before: dict[str, Any], after: dict[str, Any]) -> None:
+    observation_matrices: dict[str, dict[tuple[str, int], str]] = {}
     for name, artifact, expected in (("before", before, "before"), ("after", after, "after")):
         if not isinstance(artifact, dict) or not isinstance(artifact.get("metadata"), dict):
             raise ValueError(f"{name} artifact is missing metadata")
-        if artifact["metadata"].get("implementation") != expected:
+        metadata = artifact["metadata"]
+        if metadata.get("implementation") != expected:
             raise ValueError(f"{name} artifact implementation identity is invalid")
-        if not isinstance(artifact.get("observations"), list):
+        observations = artifact.get("observations")
+        if not isinstance(observations, list):
             raise ValueError(f"{name} artifact is missing observations")
-        selected = artifact["metadata"].get("runner", {}).get("case_ids", [])
-        for observation in artifact["observations"]:
+        runner = metadata.get("runner")
+        if not isinstance(runner, dict):
+            raise ValueError(f"{name} artifact is missing runner metadata")
+        blocks = runner.get("blocks")
+        if isinstance(blocks, bool) or not isinstance(blocks, int) or blocks < 1:
+            raise ValueError(f"{name} artifact declares an invalid block count")
+        selected = runner.get("case_ids")
+        if (
+            not isinstance(selected, list)
+            or not selected
+            or any(not isinstance(case_id, str) or not case_id for case_id in selected)
+        ):
+            raise ValueError(f"{name} artifact declares an invalid selected case set")
+        if len(selected) != len(set(selected)):
+            raise ValueError(f"{name} artifact declares duplicate selected cases")
+        unknown = [case_id for case_id in selected if case_id not in CASE_BY_ID]
+        if unknown:
+            raise ValueError(f"{name} artifact declares an unknown selected case")
+
+        profile = metadata.get("profile")
+        matrix: dict[tuple[str, int], str] = {}
+        for observation in observations:
             if not isinstance(observation, dict):
                 raise ValueError(f"{name} artifact contains a non-object observation")
             if observation.get("implementation") != expected:
                 raise ValueError(f"{name} observation implementation identity is invalid")
-            if observation.get("case_id") not in selected:
+            case_id = observation.get("case_id")
+            if case_id not in selected:
                 raise ValueError(f"{name} observation is outside the selected case set")
+            if observation.get("profile") != profile:
+                raise ValueError(f"{name} observation profile differs from artifact metadata")
+            block = observation.get("block")
+            if isinstance(block, bool) or not isinstance(block, int) or not 0 <= block < blocks:
+                raise ValueError(f"{name} observation block is outside the declared matrix")
+            pair_order = observation.get("pair_order")
+            if pair_order not in {"AB", "BA"}:
+                raise ValueError(f"{name} observation has an invalid pair order")
+            key = (case_id, block)
+            if key in matrix:
+                raise ValueError(f"{name} artifact contains a duplicate case/block observation")
+            matrix[key] = pair_order
+
+        expected_matrix = {(case_id, block) for case_id in selected for block in range(blocks)}
+        if set(matrix) != expected_matrix:
+            raise ValueError(f"{name} artifact observation matrix is incomplete")
+        observation_matrices[name] = matrix
+
     if before["metadata"].get("profile") != after["metadata"].get("profile"):
         raise ValueError("benchmark profiles differ")
 
@@ -161,8 +206,8 @@ def _validate_artifact_pair(before: dict[str, Any], after: dict[str, Any]) -> No
     for field in ("packages", "cpu", "execution_policy"):
         if before["metadata"].get(field) != after["metadata"].get(field):
             raise ValueError(f"environment {field} differs between paired artifacts")
-    before_runner = before["metadata"].get("runner", {})
-    after_runner = after["metadata"].get("runner", {})
+    before_runner = before["metadata"]["runner"]
+    after_runner = after["metadata"]["runner"]
     for field in (
         "blocks",
         "case_ids",
@@ -173,8 +218,8 @@ def _validate_artifact_pair(before: dict[str, Any], after: dict[str, Any]) -> No
     ):
         if before_runner.get(field) != after_runner.get(field):
             raise ValueError(f"runner {field} differs between paired artifacts")
-    if not before_runner.get("case_ids"):
-        raise ValueError("paired artifacts declare no selected cases")
+    if observation_matrices["before"] != observation_matrices["after"]:
+        raise ValueError("paired observation order mismatch")
 
 
 def _group_observations(observations: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

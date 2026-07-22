@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import pymem.exception
 import pymem.memory
 
 from memscope_mcp.scanning.lifecycle import ScanLease, bind_scan_control
@@ -274,12 +275,7 @@ def plan_scan_regions(
                 query_calls += 1
                 try:
                     mbi = query_memory(lease.process_handle, address)
-                    region_base = _mbi_int(mbi, "BaseAddress")
-                    region_size = _mbi_int(mbi, "RegionSize")
-                    state = _mbi_int(mbi, "State")
-                    protect = _mbi_int(mbi, "Protect")
-                    memory_type = _mbi_int(mbi, "Type")
-                except Exception:
+                except (OSError, pymem.exception.WinAPIError):
                     reason = active_control.poll()
                     if reason is not None:
                         termination_reason = reason
@@ -289,6 +285,11 @@ def plan_scan_regions(
                         first_unplanned_address = address
                     break
 
+                region_base = _mbi_int(mbi, "BaseAddress")
+                region_size = _mbi_int(mbi, "RegionSize")
+                state = _mbi_int(mbi, "State")
+                protect = _mbi_int(mbi, "Protect")
+                memory_type = _mbi_int(mbi, "Type")
                 region_count += 1
                 if region_size <= 0:
                     planner_gap_count += 1

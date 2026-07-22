@@ -9,6 +9,7 @@ from ctypes import wintypes
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pymem.exception
 import pytest
 
 from memscope_mcp.scanning.collectors import BoundedAddressCollector
@@ -323,6 +324,36 @@ class TestRegionPlanner:
         assert plan.planner_gap_count == 1
         assert plan.first_unplanned_address == 0x1800
 
+    def test_pymem_virtual_query_failure_is_recorded_as_a_gap(self):
+        lease = make_lease([module("target.exe", 0x1000, 0x1000)])
+        scope = normalize_scan_scope(None, lease)
+
+        def fail_query(_handle: int, _address: int):
+            raise pymem.exception.WinAPIError(5)
+
+        plan = plan_scan_regions(lease, scope, query_memory=fail_query)
+
+        assert plan.spans == ()
+        assert plan.read_gaps_detected is True
+        assert plan.planner_gap_count == 1
+        assert plan.first_unplanned_address == 0x1000
+
+    def test_malformed_virtual_query_metadata_is_not_downgraded_to_a_gap(self):
+        lease = make_lease([module("target.exe", 0x1000, 0x1000)])
+        scope = normalize_scan_scope(None, lease)
+
+        def malformed_query(_handle: int, _address: int):
+            return SimpleNamespace(
+                BaseAddress=0x1000,
+                RegionSize=0x1000,
+                State="committed",
+                Protect=PAGE_READWRITE,
+                Type=MEM_IMAGE,
+            )
+
+        with pytest.raises(TypeError, match=r"MEMORY_BASIC_INFORMATION\.State must be an integer"):
+            plan_scan_regions(lease, scope, query_memory=malformed_query)
+
     def test_range_spans_are_split_for_stable_module_annotation(self):
         lease = make_lease([module("target.dll", 0x2000, 0x100)])
         scope = normalize_scan_scope(
@@ -536,6 +567,23 @@ class TestRegionReaderAndWindows:
         assert list(reader) == []
         assert reader.termination_reason is TerminationReason.READER_ERROR
         assert reader.read_gaps_detected is False
+
+    def test_internal_read_failure_is_not_downgraded_to_an_unreadable_gap(self):
+        lease = make_lease()
+        span = PlannedSpan(0x1000, 0x2000, MEM_COMMIT, PAGE_READWRITE, MEM_PRIVATE, None)
+        plan = make_plan(lease, (span,))
+
+        reader = RegionReader(
+            lease,
+            plan,
+            ScanStats(),
+            read_memory=lambda *_args: (_ for _ in ()).throw(TypeError("internal reader defect")),
+            target_alive=lambda _handle: True,
+            chunk_size=0x1000,
+        )
+
+        with pytest.raises(TypeError, match="internal reader defect"):
+            list(reader)
 
     def test_overlap_stream_finds_long_pattern_across_small_chunks(self):
         lease = make_lease()

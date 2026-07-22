@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Iterator
 from ctypes import wintypes
 from dataclasses import dataclass
 
+import pymem.exception
 import pymem.memory
 
 from memscope_mcp.scanning.lifecycle import ModuleSnapshot, ScanLease, bind_scan_control
@@ -157,7 +158,7 @@ class RegionReader:
 
         try:
             alive = self.target_alive(self.lease.process_handle)
-        except Exception:
+        except OSError:
             self.termination_reason = TerminationReason.READER_ERROR
             return
         if not alive:
@@ -180,7 +181,7 @@ class RegionReader:
         self.stats.physical_bytes_requested += size
         try:
             raw = self.read_memory(self.lease.process_handle, start, size)
-        except Exception:
+        except (OSError, pymem.exception.WinAPIError):
             return None
         if not isinstance(raw, (bytes, bytearray, memoryview)):
             raise TypeError("read_memory must return bytes-like data")

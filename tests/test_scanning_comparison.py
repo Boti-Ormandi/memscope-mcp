@@ -150,17 +150,46 @@ def test_runtime_comparison_identity_mismatch_blocks_case():
     assert row["notes"] == ["corpus or target fixture identity mismatch"]
 
 
-def test_duplicate_observation_block_is_visible_and_blocking():
+def test_duplicate_observation_block_is_rejected_before_comparison():
     before, after = _paired_artifacts()
     original = next(item for item in before["observations"] if item["case_id"] == "compile.exact16")
     before["observations"].append(deepcopy(original))
 
-    comparison = compare_artifacts(before, after)
-    row = next(item for item in comparison["rows"] if item["case_id"] == "compile.exact16")
+    with pytest.raises(ValueError, match="duplicate case/block observation"):
+        compare_artifacts(before, after)
 
-    assert row["status"] == "invalid"
-    assert row["blocking"] is True
-    assert row["notes"] == ["duplicate observation block"]
+
+def test_declared_block_matrix_must_be_complete_for_every_selected_case():
+    before, after = _paired_artifacts()
+    before["metadata"]["runner"]["blocks"] = 2
+    after["metadata"]["runner"]["blocks"] = 2
+
+    with pytest.raises(ValueError, match="before artifact observation matrix is incomplete"):
+        compare_artifacts(before, after)
+
+
+def test_observation_profile_must_match_artifact_profile():
+    before, after = _paired_artifacts()
+    before["observations"][0]["profile"] = "release"
+
+    with pytest.raises(ValueError, match="before observation profile differs"):
+        compare_artifacts(before, after)
+
+
+def test_pair_order_label_must_be_valid():
+    before, after = _paired_artifacts()
+    before["observations"][0]["pair_order"] = "AA"
+
+    with pytest.raises(ValueError, match="before observation has an invalid pair order"):
+        compare_artifacts(before, after)
+
+
+def test_pair_order_must_be_consistent_across_artifacts():
+    before, after = _paired_artifacts()
+    after["observations"][0]["pair_order"] = "BA"
+
+    with pytest.raises(ValueError, match="paired observation order mismatch"):
+        compare_artifacts(before, after)
 
 
 def test_incompatible_runner_identity_is_rejected():

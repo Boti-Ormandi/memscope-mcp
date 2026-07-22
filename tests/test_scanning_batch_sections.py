@@ -303,6 +303,36 @@ def test_section_filter_reads_only_selected_scan_bytes_and_reports_remote_name()
     assert len(reads) == reads_before + 1
 
 
+def test_internal_section_reader_failure_is_reported_as_internal_error():
+    base = 0x1000
+    image = _pe_image((".text",))
+    module = _module("target.dll", base, image)
+    session = FakeSession(_lease((module,)))
+
+    def fail_read(_handle: int, _address: int, _size: int) -> bytes:
+        raise TypeError("internal section reader defect")
+
+    executor = ScanExecutor(
+        session,
+        query_memory=lambda *_args: pytest.fail("VirtualQuery must not run after metadata failure"),
+        read_memory=fail_read,
+        target_alive=lambda _handle: True,
+    )
+    response = executor.execute(
+        ScanInput(
+            pattern="41",
+            scope=ModulesScopeInput(
+                kind="modules",
+                names=["target.dll"],
+                filters=ScanFiltersInput(sections=[".text"]),
+            ),
+        )
+    )
+
+    assert isinstance(response.root, ScanFailure)
+    assert response.root.error == "INTERNAL_SCAN_ERROR"
+
+
 def test_missing_section_in_any_selected_module_fails_before_virtual_query():
     first_base = 0x1000
     second_base = 0x2000

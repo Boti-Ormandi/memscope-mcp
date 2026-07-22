@@ -7,6 +7,8 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import pymem.exception
+
 from memscope_mcp.scanning.lifecycle import ScanLease
 from memscope_mcp.scanning.model import ModuleRecord, ScanControl, TerminationReason
 from memscope_mcp.scanning.scopes import ScopeNormalizationError
@@ -220,7 +222,7 @@ def _read_exact(
     stats.bytes_requested += size
     try:
         raw = read_memory(lease.process_handle, address, size)
-    except Exception as error:
+    except (OSError, pymem.exception.WinAPIError) as error:
         reason = control.poll()
         if reason is not None:
             raise SectionResolutionInterrupted(reason) from error
