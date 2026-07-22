@@ -12,7 +12,6 @@ from typing import Any, Optional
 
 from lupa import LuaError, LuaRuntime
 
-from ...session import SESSION  # noqa: F401  exposed for test monkeypatching
 from .code_execution import LuaExecutionGuard
 from .comparisons import to_uint64
 

@@ -166,6 +166,103 @@ def test_scan_many_shared_tail_shrinks_after_longest_query_completes():
     ]
 
 
+def test_scan_many_clears_shared_tail_across_unreadable_gap_and_matches_single_scans():
+    base = 0x1000
+    memory = b"xxAB----CDxxABCD"
+    gap_start = base + 4
+    gap_end = base + 8
+    patterns = (
+        ("split", "41 42 43 44"),
+        ("post-gap", "43 44"),
+    )
+
+    def make_executor():
+        session = FakeSession(_lease())
+        reads: list[tuple[int, int]] = []
+
+        def query(_handle: int, address: int):
+            if not base <= address < base + len(memory):
+                raise OSError("unmapped")
+            return SimpleNamespace(
+                BaseAddress=base,
+                RegionSize=len(memory),
+                State=MEM_COMMIT,
+                Protect=PAGE_READWRITE,
+                Type=MEM_PRIVATE,
+            )
+
+        def read(_handle: int, address: int, size: int) -> bytes:
+            reads.append((address, size))
+            if address < gap_end and address + size > gap_start:
+                raise OSError("middle page unavailable")
+            offset = address - base
+            return memory[offset : offset + size]
+
+        executor = ScanExecutor(
+            session,
+            query_memory=query,
+            read_memory=read,
+            target_alive=lambda _handle: True,
+            chunk_size=len(memory),
+            page_size=4,
+        )
+        scope = RangeScopeInput(kind="range", start=base, end_exclusive=base + len(memory))
+        return executor, session, reads, scope
+
+    executor, session, batch_reads, scope = make_executor()
+    batch = executor.execute_many(
+        ScanManyInput.model_validate(
+            {
+                "patterns": [{"key": key, "pattern": pattern} for key, pattern in patterns],
+                "scope": scope.model_dump(mode="python"),
+                "mode": "first",
+                "diagnostics": True,
+            }
+        )
+    )
+
+    assert isinstance(batch.root, FirstScanManySuccess)
+    assert [(item.key, item.match.address if item.match is not None else None) for item in batch.root.results] == [
+        ("split", "0x100C"),
+        ("post-gap", "0x1008"),
+    ]
+    assert all(item.status.termination == "first_hit" for item in batch.root.results)
+    assert all(item.status.read_gaps_detected is True for item in batch.root.results)
+    assert batch.root.shared.termination == "first_hit"
+    assert batch.root.shared.read_gaps_detected is True
+    assert batch.root.shared.diagnostics is not None
+    assert batch.root.shared.diagnostics.physical_read_calls == len(batch_reads) == 5
+    assert batch_reads == [
+        (base, len(memory)),
+        (base, 8),
+        (base, 4),
+        (gap_start, 4),
+        (gap_end, 8),
+    ]
+    assert session.acquire_count == 1
+
+    independent_read_calls = 0
+    for batch_item, (_key, pattern) in zip(batch.root.results, patterns, strict=True):
+        independent_executor, independent_session, independent_reads, independent_scope = make_executor()
+        independent = independent_executor.execute(
+            ScanInput(
+                pattern=pattern,
+                scope=independent_scope,
+                mode="first",
+                diagnostics=True,
+            )
+        )
+
+        assert independent.root.success is True
+        assert batch_item.match == independent.root.match
+        assert batch_item.status == independent.root.status
+        assert independent_reads == batch_reads
+        assert independent_session.acquire_count == 1
+        independent_read_calls += len(independent_reads)
+
+    assert independent_read_calls == len(patterns) * len(batch_reads)
+
+
 def test_scan_many_count_caps_each_pattern_independently():
     executor, _session, reads, scope = _range_executor(b"AAAAAA")
     request = ScanManyInput.model_validate(
