@@ -7,6 +7,7 @@ import ctypes
 import json
 import os
 import queue
+import secrets
 import struct
 import subprocess
 import sys
@@ -75,6 +76,7 @@ class TargetMetadata:
     module: dict[str, Any]
     fixture_version: str
     fixture_source_sha256: str
+    run_id: str
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> TargetMetadata:
@@ -100,7 +102,132 @@ class TargetMetadata:
             module=dict(payload["module"]),
             fixture_version=str(payload["fixture_version"]),
             fixture_source_sha256=str(payload["fixture_source_sha256"]),
+            run_id=str(payload["run_id"]),
         )
+
+
+def relative_addresses(metadata: TargetMetadata, addresses: tuple[int, ...] | list[int]) -> list[int]:
+    offsets: list[int] = []
+    for address in addresses:
+        if not metadata.base_address <= address < metadata.end_exclusive:
+            raise ValueError("controlled-process expected address is outside the allocated range")
+        offsets.append(address - metadata.base_address)
+    return offsets
+
+
+def relative_address_checksum(metadata: TargetMetadata, addresses: tuple[int, ...] | list[int]) -> str:
+    return address_checksum(relative_addresses(metadata, addresses))
+
+
+def module_fingerprint(metadata: TargetMetadata) -> str:
+    return sha256_json(metadata.module)
+
+
+def operation_identity(
+    metadata: TargetMetadata,
+    *,
+    phase: str,
+    cache_token: str | None = None,
+) -> dict[str, Any]:
+    if phase not in {"preflight", "setup", "timed"}:
+        raise ValueError("operation phase is invalid")
+    return {
+        "run_id": metadata.run_id,
+        "pid": metadata.pid,
+        "attachment_generation": 1,
+        "module_fingerprint": module_fingerprint(metadata),
+        "target_identity_sha256": sha256_json(comparison_identity(metadata)),
+        "phase": phase,
+        "cache_token": cache_token,
+    }
+
+
+def comparison_identity(metadata: TargetMetadata) -> dict[str, Any]:
+    return {
+        "corpus_version": CORPUS_VERSION,
+        "profile": metadata.topology.get("profile"),
+        "size": metadata.logical_size,
+        "sha256": metadata.corpus_sha256,
+        "fixture_version": metadata.fixture_version,
+        "fixture_source_sha256": metadata.fixture_source_sha256,
+        "topology_fingerprint": metadata.topology_fingerprint,
+        "expected_count": len(metadata.expected_addresses),
+        "expected_relative_checksum": relative_address_checksum(metadata, metadata.expected_addresses),
+    }
+
+
+def canonical_process_records(case: BenchmarkCase, profile: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return deterministic process corpus/topology and relative expectation records."""
+
+    effective_size = case.effective_size(profile)
+    if case.kind in {"timeout", "chunk_timeout"}:
+        payload = build_distribution(case.distribution, max(64 * 1024, effective_size), case.case_id)
+        expected_offsets: tuple[int, ...] = ()
+    elif case.pattern and effective_size > 0:
+        corpus = build_corpus(case, profile, base_address=0)
+        payload = corpus.data
+        expected_offsets = corpus.expected_addresses
+    else:
+        payload = build_distribution(case.distribution, max(64 * 1024, effective_size), case.case_id)
+        expected_offsets = ()
+
+    page_size = _system_page_size()
+    logical_size = len(payload)
+    allocation_size = _round_up(logical_size, page_size)
+    inaccessible_offsets: list[list[int]] = []
+    readonly_offsets: list[list[int]] = []
+    split_offset: int | None = None
+    page_count = logical_size // page_size
+    if case.kind == "fragmented":
+        cadence = int(case.parameters.get("hole_every_pages", 16))
+        inaccessible_offsets = [[page * page_size, (page + 1) * page_size] for page in range(8, page_count, cadence)]
+    elif case.kind == "writable_filter":
+        cadence = int(case.parameters.get("readonly_every_pages", 2))
+        readonly_offsets = [[page * page_size, (page + 1) * page_size] for page in range(1, page_count, cadence)]
+    elif case.kind == "boundary":
+        candidate = _round_up(logical_size // 2, page_size)
+        if 0 < candidate < allocation_size:
+            split_offset = candidate
+            readonly_offsets = [[candidate, allocation_size]]
+
+    retained_offsets = tuple(
+        offset
+        for offset in expected_offsets
+        if not any(start <= offset < end for start, end in inaccessible_offsets)
+        and not (case.kind == "writable_filter" and any(start <= offset < end for start, end in readonly_offsets))
+    )
+    topology = {
+        "fixture_version": TARGET_FIXTURE_VERSION,
+        "corpus_version": CORPUS_VERSION,
+        "case_id": case.case_id,
+        "profile": profile,
+        "kind": case.kind,
+        "logical_size": logical_size,
+        "allocation_size": allocation_size,
+        "page_size": page_size,
+        "inaccessible_offsets": inaccessible_offsets,
+        "readonly_offsets": readonly_offsets,
+        "split_offset": split_offset,
+        "scope_kinds": ["range", "module"],
+        "filter_kinds": ["writable", "sections"],
+    }
+    corpus_record = {
+        "corpus_version": CORPUS_VERSION,
+        "profile": profile,
+        "size": logical_size,
+        "sha256": sha256_bytes(payload),
+        "fixture_version": TARGET_FIXTURE_VERSION,
+        "fixture_source_sha256": sha256_bytes(Path(__file__).read_bytes()),
+        "topology": topology,
+        "topology_fingerprint": sha256_json(topology),
+    }
+    expected_record = {
+        "returned_count": len(retained_offsets),
+        "relative_address_checksum": address_checksum(retained_offsets),
+        "inaccessible_offsets": inaccessible_offsets,
+        "readonly_offsets": readonly_offsets,
+    }
+    return corpus_record, expected_record
 
 
 class ControlledProcessTarget:
@@ -316,6 +443,7 @@ class _ChildAllocation:
         self.inaccessible_ranges: list[tuple[int, int]] = []
         self.readonly_ranges: list[tuple[int, int]] = []
         self.split_address: int | None = None
+        self.run_id = secrets.token_hex(16)
 
     def __enter__(self) -> _ChildAllocation:
         pointer = _kernel32.VirtualAlloc(
@@ -409,6 +537,7 @@ class _ChildAllocation:
             "module": module,
             "fixture_version": TARGET_FIXTURE_VERSION,
             "fixture_source_sha256": sha256_bytes(Path(__file__).read_bytes()),
+            "run_id": self.run_id,
         }
 
     def _apply_topology(self) -> None:

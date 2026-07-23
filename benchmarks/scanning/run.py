@@ -3,27 +3,52 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import random
+import queue
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from benchmarks.scanning import BENCHMARK_SCHEMA_VERSION, CORPUS_VERSION, MANIFEST_VERSION
-from benchmarks.scanning.common import git_identity, normalize_path, write_csv, write_json
-from benchmarks.scanning.compare import CSV_FIELDS, compare_artifacts, comparison_csv_rows
-from benchmarks.scanning.manifest import BenchmarkCase, select_cases
+from benchmarks.scanning import (
+    BENCHMARK_SCHEMA_VERSION,
+    CANDIDATE_WATCHDOG_FLOOR_S,
+    CORPUS_VERSION,
+    DRIVER_PROTOCOL,
+    MANIFEST_VERSION,
+    PAIRING_PROTOCOL,
+)
+from benchmarks.scanning.common import (
+    git_identity,
+    normalize_path,
+    pair_order_label,
+    pair_seed,
+    paired_semantic_fingerprint_payload,
+    semantic_fingerprint,
+    timeout_duration_ns,
+    write_csv,
+    write_json,
+)
+from benchmarks.scanning.compare import (
+    CSV_FIELDS,
+    compare_artifacts,
+    comparison_csv_rows,
+    validate_historical_ready,
+    validate_historical_timed_start,
+)
+from benchmarks.scanning.manifest import (
+    BenchmarkCase,
+    is_candidate_only,
+    select_cases,
+)
 from benchmarks.scanning.report import generate_bundle
-
-_CANDIDATE_PROCESS_TIMEOUT_FLOOR_S = 30.0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                 "release evidence requires a clean candidate tree; use --allow-dirty-release only for diagnostics"
             )
 
+    tooling_git = git_identity(repo_root)
     output_dir.mkdir(parents=True, exist_ok=True)
     with _baseline_root(repo_root, arguments.before_ref, arguments.before_root) as before_root:
         before_metadata = _environment_metadata_for_python(
@@ -75,12 +101,14 @@ def main(argv: list[str] | None = None) -> int:
         before_metadata["runner"] = _runner_metadata(
             python=normalize_path(arguments.before_python),
             source_root=before_root,
+            tooling_git=tooling_git,
             blocks=blocks,
             cases=cases,
         )
         after_metadata["runner"] = _runner_metadata(
             python=normalize_path(arguments.after_python),
             source_root=after_root,
+            tooling_git=tooling_git,
             blocks=blocks,
             cases=cases,
         )
@@ -89,9 +117,9 @@ def main(argv: list[str] | None = None) -> int:
         after_observations: list[dict[str, Any]] = []
         for case in cases:
             for block in range(blocks):
-                pair_order = _pair_order(case.case_id, block)
-                pair_label = "AB" if pair_order == ("before", "after") else "BA"
-                candidate_only = case.kind in {"chunk_sweep", "chunk_salvage", "chunk_timeout"}
+                pair_label = pair_order_label(case.case_id, block)
+                pair_order = ("before", "after") if pair_label == "AB" else ("after", "before")
+                candidate_only = is_candidate_only(case)
                 implementations = ("after",) if candidate_only else pair_order
                 if candidate_only:
                     observation = _not_applicable_observation(
@@ -186,18 +214,64 @@ def _not_applicable_observation(
     pair_order: str,
     reason: str,
 ) -> dict[str, Any]:
+    descriptor = case.semantic_descriptor(profile)
+    fingerprint_payload = paired_semantic_fingerprint_payload(descriptor, None)
     return {
         "case_id": case.case_id,
         "implementation": "before",
         "profile": profile,
         "block": block,
+        "pair_seed": pair_seed(case.case_id, block),
         "pair_order": pair_order,
-        "semantic_fingerprint": case.semantic_fingerprint(profile),
-        "semantic_descriptor": case.semantic_descriptor(profile),
+        "semantic_fingerprint_payload": fingerprint_payload,
+        "semantic_fingerprint": semantic_fingerprint(fingerprint_payload),
+        "semantic_descriptor": descriptor,
         "status": "not_applicable",
         "correct": None,
         "reason": reason,
     }
+
+
+def _driver_command(
+    *,
+    python: Path,
+    target_root: Path,
+    case: BenchmarkCase,
+    implementation: str,
+    profile: str,
+    block: int,
+    pair_order: str,
+    historical_phase_handshake: bool = False,
+) -> list[str]:
+    command = [
+        str(python),
+        "-m",
+        DRIVER_PROTOCOL["module"],
+        "--implementation",
+        implementation,
+        "--target-root",
+        str(target_root),
+        "--case-id",
+        case.case_id,
+        "--profile",
+        profile,
+        "--block",
+        str(block),
+        "--pair-seed",
+        str(pair_seed(case.case_id, block)),
+        "--pair-order",
+        pair_order,
+    ]
+    if historical_phase_handshake:
+        command.append("--historical-phase-handshake")
+    if implementation == "after":
+        command.extend(
+            [
+                "--candidate-outer-watchdog-s",
+                str(_observation_timeout_seconds(case, implementation)),
+            ]
+        )
+    return command
 
 
 def _run_observation(
@@ -211,25 +285,29 @@ def _run_observation(
     block: int,
     pair_order: str,
 ) -> dict[str, Any]:
-    command = [
-        str(python),
-        "-m",
-        "benchmarks.scanning.driver",
-        "--implementation",
-        implementation,
-        "--target-root",
-        str(target_root),
-        "--case-id",
-        case.case_id,
-        "--profile",
-        profile,
-        "--block",
-        str(block),
-        "--pair-order",
-        pair_order,
-    ]
     environment = os.environ.copy()
     environment.update({"PYTHONHASHSEED": "0", "PYTHONNOUSERSITE": "1", "PYTHONUTF8": "1"})
+    if implementation == "before":
+        return _run_historical_phased_observation(
+            repo_root=repo_root,
+            python=python,
+            target_root=target_root,
+            case=case,
+            profile=profile,
+            block=block,
+            pair_order=pair_order,
+            environment=environment,
+        )
+
+    command = _driver_command(
+        python=python,
+        target_root=target_root,
+        case=case,
+        implementation=implementation,
+        profile=profile,
+        block=block,
+        pair_order=pair_order,
+    )
     timeout_seconds = _observation_timeout_seconds(case, implementation)
     started = time.perf_counter_ns()
     try:
@@ -244,39 +322,18 @@ def _run_observation(
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as error:
-        result: dict[str, Any] = {
-            "case_id": case.case_id,
-            "implementation": implementation,
-            "profile": profile,
-            "block": block,
-            "pair_order": pair_order,
-            "semantic_fingerprint": case.semantic_fingerprint(profile),
-            "semantic_descriptor": case.semantic_descriptor(profile),
-            "wall_duration_ns": time.perf_counter_ns() - started,
-            "timeout_seconds": timeout_seconds,
-            "stdout": _bounded_text(error.stdout),
-            "stderr": _bounded_text(error.stderr),
-        }
-        if implementation == "before":
-            result.update(
-                {
-                    "status": "censored",
-                    "correct": None,
-                    "lower_bound_duration_ns": int(timeout_seconds * 1_000_000_000),
-                }
-            )
-        else:
-            result.update(
-                {
-                    "status": "driver_error",
-                    "correct": False,
-                    "error": (
-                        "candidate benchmark subprocess exceeded its protocol deadline "
-                        f"of {timeout_seconds:.1f} seconds"
-                    ),
-                }
-            )
-        return result
+        wall_duration_ns = time.perf_counter_ns() - started
+        return _driver_timeout_error(
+            case=case,
+            implementation=implementation,
+            profile=profile,
+            block=block,
+            pair_order=pair_order,
+            timeout_seconds=timeout_seconds,
+            wall_duration_ns=wall_duration_ns,
+            stdout=_bounded_text(error.stdout),
+            stderr=_bounded_text(error.stderr),
+        )
 
     observation = _parse_driver_output(
         completed.stdout,
@@ -284,6 +341,7 @@ def _run_observation(
         expected_implementation=implementation,
         expected_profile=profile,
         expected_block=block,
+        expected_pair_seed=pair_seed(case.case_id, block),
         expected_pair_order=pair_order,
     )
     observation["wall_duration_ns"] = time.perf_counter_ns() - started
@@ -301,11 +359,443 @@ def _run_observation(
     return observation
 
 
+def _run_historical_phased_observation(
+    *,
+    repo_root: Path,
+    python: Path,
+    target_root: Path,
+    case: BenchmarkCase,
+    profile: str,
+    block: int,
+    pair_order: str,
+    environment: dict[str, str],
+) -> dict[str, Any]:
+    command = _driver_command(
+        python=python,
+        target_root=target_root,
+        case=case,
+        implementation="before",
+        profile=profile,
+        block=block,
+        pair_order=pair_order,
+        historical_phase_handshake=True,
+    )
+    process = subprocess.Popen(
+        command,
+        cwd=repo_root,
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    stdout_queue: queue.Queue[str | None] = queue.Queue()
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    def read_stdout() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            stdout_lines.append(line)
+            stdout_queue.put(line)
+        stdout_queue.put(None)
+
+    def read_stderr() -> None:
+        assert process.stderr is not None
+        stderr_lines.extend(process.stderr.readlines())
+
+    stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+    stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    overall_started = time.perf_counter_ns()
+    preparation_timeout = max(case.process_timeout_s, CANDIDATE_WATCHDOG_FLOOR_S)
+    try:
+        try:
+            first_line = stdout_queue.get(timeout=preparation_timeout)
+        except queue.Empty:
+            process.kill()
+            process.wait()
+            return _driver_timeout_error(
+                case=case,
+                implementation="before",
+                profile=profile,
+                block=block,
+                pair_order=pair_order,
+                timeout_seconds=preparation_timeout,
+                wall_duration_ns=time.perf_counter_ns() - overall_started,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+                error_prefix="historical preparation phase exceeded",
+            )
+        if first_line is None:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            return _parse_driver_output(
+                "".join(stdout_lines),
+                expected_case_id=case.case_id,
+                expected_implementation="before",
+                expected_profile=profile,
+                expected_block=block,
+                expected_pair_seed=pair_seed(case.case_id, block),
+                expected_pair_order=pair_order,
+            )
+        try:
+            first_record = _parse_json_object(first_line)
+        except ValueError as error:
+            process.kill()
+            process.wait()
+            return _driver_protocol_error(
+                case=case,
+                implementation="before",
+                profile=profile,
+                block=block,
+                pair_order=pair_order,
+                error=f"historical driver produced invalid readiness evidence: {error}",
+                wall_duration_ns=time.perf_counter_ns() - overall_started,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+            )
+        if first_record.get("event") != "historical_ready":
+            if first_record.get("status") in {"error", "driver_error"}:
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                stdout_thread.join(timeout=5)
+                stderr_thread.join(timeout=5)
+                observation = _parse_driver_output(
+                    "".join(stdout_lines),
+                    expected_case_id=case.case_id,
+                    expected_implementation="before",
+                    expected_profile=profile,
+                    expected_block=block,
+                    expected_pair_seed=pair_seed(case.case_id, block),
+                    expected_pair_order=pair_order,
+                )
+                observation["wall_duration_ns"] = time.perf_counter_ns() - overall_started
+                observation["driver_returncode"] = process.returncode
+                if stderr_lines:
+                    observation["driver_stderr"] = "".join(stderr_lines)[-16_384:]
+                return observation
+            process.kill()
+            process.wait()
+            return _driver_protocol_error(
+                case=case,
+                implementation="before",
+                profile=profile,
+                block=block,
+                pair_order=pair_order,
+                error="historical driver entered or completed timed work without readiness proof",
+                wall_duration_ns=time.perf_counter_ns() - overall_started,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+            )
+        ready = first_record
+        try:
+            validate_historical_ready(
+                case,
+                ready,
+                profile=profile,
+                block=block,
+                pair_order=pair_order,
+            )
+        except ValueError as error:
+            process.kill()
+            process.wait()
+            return _driver_protocol_error(
+                case=case,
+                implementation="before",
+                profile=profile,
+                block=block,
+                pair_order=pair_order,
+                error=f"historical readiness proof is invalid: {error}",
+                wall_duration_ns=time.perf_counter_ns() - overall_started,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+            )
+        assert process.stdin is not None
+        process.stdin.write("run-timed\n")
+        process.stdin.flush()
+        try:
+            second_line = stdout_queue.get(timeout=preparation_timeout)
+        except queue.Empty:
+            process.kill()
+            process.wait()
+            return _historical_phase_error(
+                case=case,
+                profile=profile,
+                block=block,
+                pair_order=pair_order,
+                ready=ready,
+                error=(
+                    f"historical timed-start phase exceeded its protocol deadline of {preparation_timeout:.1f} seconds"
+                ),
+                wall_duration_ns=time.perf_counter_ns() - overall_started,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+            )
+        if second_line is None:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            return _historical_phase_error(
+                case=case,
+                profile=profile,
+                block=block,
+                pair_order=pair_order,
+                ready=ready,
+                error="historical driver exited before flushing timed-start proof",
+                wall_duration_ns=time.perf_counter_ns() - overall_started,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+            )
+        try:
+            timed_start = _parse_json_object(second_line)
+            validate_historical_timed_start(
+                case,
+                timed_start,
+                ready,
+                profile=profile,
+                block=block,
+                pair_order=pair_order,
+            )
+        except ValueError as error:
+            process.kill()
+            process.wait()
+            return _historical_phase_error(
+                case=case,
+                profile=profile,
+                block=block,
+                pair_order=pair_order,
+                ready=ready,
+                error=f"historical timed-start proof is invalid: {error}",
+                wall_duration_ns=time.perf_counter_ns() - overall_started,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+            )
+        timed_started = time.perf_counter_ns()
+        try:
+            process.wait(timeout=case.process_timeout_s)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
+            return _censored_observation(
+                case=case,
+                profile=profile,
+                block=block,
+                pair_order=pair_order,
+                wall_duration_ns=time.perf_counter_ns() - overall_started,
+                timed_wall_duration_ns=time.perf_counter_ns() - timed_started,
+                timed_start=timed_start,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+            )
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+        observation = _parse_driver_output(
+            "".join(stdout_lines[2:]),
+            expected_case_id=case.case_id,
+            expected_implementation="before",
+            expected_profile=profile,
+            expected_block=block,
+            expected_pair_seed=pair_seed(case.case_id, block),
+            expected_pair_order=pair_order,
+        )
+        observation["wall_duration_ns"] = time.perf_counter_ns() - overall_started
+        observation["timed_wall_duration_ns"] = time.perf_counter_ns() - timed_started
+        observation["driver_returncode"] = process.returncode
+        if stderr_lines:
+            observation["driver_stderr"] = "".join(stderr_lines)[-16_384:]
+        return observation
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def _censored_observation(
+    *,
+    case: BenchmarkCase,
+    profile: str,
+    block: int,
+    pair_order: str,
+    wall_duration_ns: int,
+    stdout: str,
+    stderr: str,
+    timed_wall_duration_ns: int,
+    timed_start: dict[str, Any],
+) -> dict[str, Any]:
+    descriptor = case.semantic_descriptor(profile)
+    comparison_identity = timed_start["comparison_identity"]
+    fingerprint_payload = paired_semantic_fingerprint_payload(descriptor, comparison_identity)
+    metrics = dict(timed_start["metrics"])
+    logical_bytes = timed_start["logical_bytes"]
+    expected_count = timed_start["expected_count"]
+    expected_checksum = timed_start["expected_checksum"]
+    expected_historical_failure = timed_start["expected_historical_failure"]
+    return {
+        "case_id": case.case_id,
+        "implementation": "before",
+        "profile": profile,
+        "block": block,
+        "pair_seed": pair_seed(case.case_id, block),
+        "pair_order": pair_order,
+        "semantic_fingerprint_payload": fingerprint_payload,
+        "semantic_fingerprint": semantic_fingerprint(fingerprint_payload),
+        "semantic_descriptor": descriptor,
+        "status": "censored",
+        "correct": None,
+        "comparison_identity": comparison_identity,
+        "logical_bytes": logical_bytes,
+        "expected_count": expected_count,
+        "expected_checksum": expected_checksum,
+        "expected_historical_failure": expected_historical_failure,
+        "preparation": timed_start["preparation"],
+        "metrics": metrics,
+        "censorship": {
+            "phase": "timed",
+            "reason": "process_timeout",
+            "timeout_seconds": case.process_timeout_s,
+            "lower_bound_duration_ns": timeout_duration_ns(case.process_timeout_s),
+        },
+        "wall_duration_ns": wall_duration_ns,
+        "timed_wall_duration_ns": timed_wall_duration_ns,
+        "stdout": _bounded_text(stdout),
+        "stderr": _bounded_text(stderr),
+    }
+
+
+def _historical_phase_error(
+    *,
+    case: BenchmarkCase,
+    profile: str,
+    block: int,
+    pair_order: str,
+    ready: dict[str, Any],
+    error: str,
+    wall_duration_ns: int,
+    stdout: str,
+    stderr: str,
+) -> dict[str, Any]:
+    descriptor = case.semantic_descriptor(profile)
+    comparison_identity = ready["comparison_identity"]
+    fingerprint_payload = paired_semantic_fingerprint_payload(descriptor, comparison_identity)
+    return {
+        "case_id": case.case_id,
+        "implementation": "before",
+        "profile": profile,
+        "block": block,
+        "pair_seed": pair_seed(case.case_id, block),
+        "pair_order": pair_order,
+        "semantic_fingerprint_payload": fingerprint_payload,
+        "semantic_fingerprint": semantic_fingerprint(fingerprint_payload),
+        "semantic_descriptor": descriptor,
+        "status": "driver_error",
+        "correct": False,
+        "error": error,
+        "comparison_identity": comparison_identity,
+        "logical_bytes": ready["logical_bytes"],
+        "expected_count": ready["expected_count"],
+        "expected_checksum": ready["expected_checksum"],
+        "expected_historical_failure": ready["expected_historical_failure"],
+        "preparation": ready["preparation"],
+        "metrics": ready["metrics"],
+        "wall_duration_ns": wall_duration_ns,
+        "stdout": _bounded_text(stdout),
+        "stderr": _bounded_text(stderr),
+    }
+
+
+def _driver_protocol_error(
+    *,
+    case: BenchmarkCase,
+    implementation: str,
+    profile: str,
+    block: int,
+    pair_order: str,
+    error: str,
+    wall_duration_ns: int,
+    stdout: str,
+    stderr: str,
+) -> dict[str, Any]:
+    descriptor = case.semantic_descriptor(profile)
+    fingerprint_payload = paired_semantic_fingerprint_payload(descriptor, None)
+    return {
+        "case_id": case.case_id,
+        "implementation": implementation,
+        "profile": profile,
+        "block": block,
+        "pair_seed": pair_seed(case.case_id, block),
+        "pair_order": pair_order,
+        "semantic_fingerprint_payload": fingerprint_payload,
+        "semantic_fingerprint": semantic_fingerprint(fingerprint_payload),
+        "semantic_descriptor": descriptor,
+        "status": "driver_error",
+        "correct": False,
+        "error": error,
+        "wall_duration_ns": wall_duration_ns,
+        "stdout": _bounded_text(stdout),
+        "stderr": _bounded_text(stderr),
+    }
+
+
+def _driver_timeout_error(
+    *,
+    case: BenchmarkCase,
+    implementation: str,
+    profile: str,
+    block: int,
+    pair_order: str,
+    timeout_seconds: float,
+    wall_duration_ns: int,
+    stdout: str,
+    stderr: str,
+    error_prefix: str = "candidate benchmark subprocess exceeded",
+) -> dict[str, Any]:
+    descriptor = case.semantic_descriptor(profile)
+    fingerprint_payload = paired_semantic_fingerprint_payload(descriptor, None)
+    return {
+        "case_id": case.case_id,
+        "implementation": implementation,
+        "profile": profile,
+        "block": block,
+        "pair_seed": pair_seed(case.case_id, block),
+        "pair_order": pair_order,
+        "semantic_fingerprint_payload": fingerprint_payload,
+        "semantic_fingerprint": semantic_fingerprint(fingerprint_payload),
+        "semantic_descriptor": descriptor,
+        "status": "driver_error",
+        "correct": False,
+        "error": f"{error_prefix} its protocol deadline of {timeout_seconds:.1f} seconds",
+        "wall_duration_ns": wall_duration_ns,
+        "stdout": _bounded_text(stdout),
+        "stderr": _bounded_text(stderr),
+    }
+
+
+def _parse_json_object(line: str) -> dict[str, Any]:
+    try:
+        value = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise ValueError("driver phase record is not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError("driver phase record must be a JSON object")
+    return value
+
+
 def _observation_timeout_seconds(case: BenchmarkCase, implementation: str) -> float:
     if implementation == "before":
         return case.process_timeout_s
     if implementation == "after":
-        return max(case.process_timeout_s, _CANDIDATE_PROCESS_TIMEOUT_FLOOR_S)
+        return max(case.process_timeout_s, CANDIDATE_WATCHDOG_FLOOR_S)
     raise ValueError(f"unsupported implementation {implementation!r}")
 
 
@@ -316,6 +806,7 @@ def _parse_driver_output(
     expected_implementation: str,
     expected_profile: str,
     expected_block: int,
+    expected_pair_seed: int,
     expected_pair_order: str,
 ) -> dict[str, Any]:
     for line in reversed(stdout.splitlines()):
@@ -333,6 +824,7 @@ def _parse_driver_output(
             value.get("implementation"),
             value.get("profile"),
             value.get("block"),
+            value.get("pair_seed"),
             value.get("pair_order"),
         )
         expected = (
@@ -340,6 +832,7 @@ def _parse_driver_output(
             expected_implementation,
             expected_profile,
             expected_block,
+            expected_pair_seed,
             expected_pair_order,
         )
         if identity != expected:
@@ -348,6 +841,7 @@ def _parse_driver_output(
                 "implementation": expected_implementation,
                 "profile": expected_profile,
                 "block": expected_block,
+                "pair_seed": expected_pair_seed,
                 "pair_order": expected_pair_order,
                 "status": "driver_error",
                 "correct": False,
@@ -359,6 +853,7 @@ def _parse_driver_output(
         "implementation": expected_implementation,
         "profile": expected_profile,
         "block": expected_block,
+        "pair_seed": expected_pair_seed,
         "pair_order": expected_pair_order,
         "status": "driver_error",
         "correct": False,
@@ -367,25 +862,24 @@ def _parse_driver_output(
     }
 
 
-def _pair_order(case_id: str, block: int) -> tuple[str, str]:
-    seed = int.from_bytes(hashlib.sha256(f"{case_id}:{block}".encode()).digest()[:8], "little")
-    return ("before", "after") if random.Random(seed).randrange(2) == 0 else ("after", "before")
-
-
 def _runner_metadata(
     *,
     python: Path,
     source_root: Path,
+    tooling_git: dict[str, Any],
     blocks: int,
     cases: tuple[BenchmarkCase, ...],
 ) -> dict[str, Any]:
     return {
         "python": str(python),
         "source_root": str(source_root),
+        "tooling_git": tooling_git,
         "blocks": blocks,
         "case_ids": [case.case_id for case in cases],
-        "pairing": "deterministic randomized AB/BA blocks",
-        "driver": "python -m benchmarks.scanning.driver",
+        "candidate_only_case_ids": [case.case_id for case in cases if is_candidate_only(case)],
+        "pairing": PAIRING_PROTOCOL,
+        "driver": DRIVER_PROTOCOL,
+        "candidate_watchdog_floor_s": CANDIDATE_WATCHDOG_FLOOR_S,
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
         "manifest_version": MANIFEST_VERSION,
         "corpus_version": CORPUS_VERSION,

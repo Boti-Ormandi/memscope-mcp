@@ -13,9 +13,12 @@ from benchmarks.scanning.common import (
     format_ratio,
     read_json,
 )
+from benchmarks.scanning.compare import comparison_for_reporting
+from benchmarks.scanning.manifest import CASES
 
 
 def generate_bundle(comparison: dict[str, Any], output_dir: Path) -> None:
+    comparison = comparison_for_reporting(comparison)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "charts").mkdir(exist_ok=True)
     (output_dir / "report.md").write_text(_report_markdown(comparison), encoding="utf-8")
@@ -26,11 +29,14 @@ def generate_bundle(comparison: dict[str, Any], output_dir: Path) -> None:
 def _report_markdown(comparison: dict[str, Any]) -> str:
     before = comparison["before_environment"]
     after = comparison["after_environment"]
+    release_eligibility = comparison["release_eligibility"]
     comparison_status = (
         "blocking"
         if comparison["blocking"]
-        else "incomplete"
+        else "incomplete diagnostic"
         if not comparison["complete"]
+        else "diagnostic; not release eligible"
+        if not release_eligibility["eligible"]
         else "accepted with performance warnings"
         if any(row["performance_regression"] for row in comparison["rows"])
         else "accepted"
@@ -44,7 +50,12 @@ def _report_markdown(comparison: dict[str, Any]) -> str:
         "",
         "Historical and candidate observations were executed in separate subprocesses in randomized paired blocks. "
         "The corpus, case manifest, semantic fingerprints, Python interpreter, OS build, and target topology are "
-        "recorded in the raw artifacts. Corpus generation and correctness checks are outside timed statements. "
+        "recorded in the raw artifacts. Historical and candidate process cases with deterministic completion "
+        "expectations perform an untimed exact-address preflight, and preflight, setup, and timed reads have "
+        "independent counters. Corpus generation and correctness "
+        "checks are outside timed statements. The warm PE-section row requires one untimed identical operation on "
+        "the same attachment, with historical session reuse and candidate SectionCache reuse proven by raw setup "
+        "and timed-read metrics. "
         "Timeout-censored historical observations are shown as lower bounds rather than fabricated completion times.",
         "",
         f"- Historical Git commit: `{_git_value(before, 'commit')}`",
@@ -57,17 +68,26 @@ def _report_markdown(comparison: dict[str, Any]) -> str:
         "- Resident/touched memory cases are memory-scanner evidence, not disk benchmarks.",
         "- Live target memory is not treated as a snapshot across separate cursor calls.",
         "",
+        "## Release eligibility",
+        "",
+        f"Release eligible: `{'yes' if release_eligibility['eligible'] else 'no'}`.",
+        "",
     ]
+    if release_eligibility["reasons"]:
+        lines.append("Diagnostic reasons:")
+        lines.append("")
+        lines.extend(f"- {reason}" for reason in release_eligibility["reasons"])
+        lines.append("")
     recommendation = comparison.get("chunk_recommendation")
     if recommendation is not None:
         selected = recommendation["selected_chunk_size"]
         if selected is not None:
-            prefix = "Release-profile selection" if comparison["profile"] == "release" else "Diagnostic selection"
+            prefix = "Release-eligible selection" if release_eligibility["eligible"] else "Diagnostic selection"
             selection_text = (
                 f"{prefix}: `{format_bytes(selected)}` using the declared policy: {recommendation['policy']}."
             )
-            if comparison["profile"] != "release":
-                selection_text += " The production reader remains 256.00 KiB; smoke evidence does not change it."
+            if not release_eligibility["eligible"]:
+                selection_text += " Diagnostic evidence does not change the production reader."
         else:
             selection_text = f"No chunk was selected: {recommendation['reason']}. Policy: {recommendation['policy']}."
         lines.extend(
@@ -169,12 +189,20 @@ def _report_markdown(comparison: dict[str, Any]) -> str:
             )
         lines.append("")
 
+    selected_case_ids = comparison["before_environment"]["runner"]["case_ids"]
+    full_manifest_case_ids = [case.case_id for case in CASES]
+    coverage_text = (
+        "Every manifest case remains visible. Missing, invalid, censored, neutral, and regressing rows are not "
+        "removed from this appendix."
+        if selected_case_ids == full_manifest_case_ids
+        else "Every selected case remains visible. Unselected manifest cases are outside this diagnostic subset; "
+        "missing, invalid, censored, neutral, and regressing selected rows are not removed."
+    )
     lines.extend(
         [
             "## Coverage appendix",
             "",
-            "Every predeclared case remains visible. Missing, invalid, censored, neutral, and regressing rows are not "
-            "removed from this appendix.",
+            coverage_text,
             "",
             "| Case | Tier | Layer | Status | Before observations | After observations | Correct after | Blocking |",
             "| --- | --- | --- | --- | ---: | ---: | ---: | --- |",
@@ -231,14 +259,17 @@ def _post_markdown(comparison: dict[str, Any]) -> str:
     ]
     if comparison["blocking"]:
         lines.append(
-            "The current evidence bundle contains blocking rows and is not suitable for release claims. See "
-            "`report.md` and `comparison.json` for the exact case IDs."
+            "The current evidence bundle contains blocking rows, is not release eligible, and is not suitable "
+            "for release claims. See `report.md` and `comparison.json` for the exact case IDs."
         )
     elif not comparison["complete"]:
         lines.append(
-            "This is a partial diagnostic bundle. Missing cases remain visible in `report.md`; no release-wide "
-            "claim should be made from this subset."
+            "This is a partial diagnostic bundle and is not release eligible. Missing cases remain visible in "
+            "`report.md`; no release-wide claim should be made from this subset."
         )
+    elif not comparison["release_eligibility"]["eligible"]:
+        reasons = "; ".join(comparison["release_eligibility"]["reasons"])
+        lines.append(f"This bundle is diagnostic and not release eligible: {reasons}.")
     elif strongest:
         lines.append("Representative fixed cases:")
         lines.append("")
@@ -365,7 +396,7 @@ def _correctness_cell(summary: dict[str, Any]) -> str:
     text = f"{summary['correct_count']}/{summary['observation_count']}"
     checksum = summary.get("expected_checksum")
     if checksum:
-        text += f"; checksum `{checksum[:12]}?`"
+        text += f"; checksum `{checksum}`"
     return text
 
 

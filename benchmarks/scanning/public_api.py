@@ -19,6 +19,8 @@ from mcp.server.fastmcp import FastMCP
 from benchmarks.scanning import BENCHMARK_SCHEMA_VERSION, CORPUS_VERSION, MANIFEST_VERSION
 from benchmarks.scanning.common import (
     environment_metadata,
+    semantic_fingerprint,
+    semantic_fingerprint_payload,
     sha256_bytes,
     sha256_json,
     summarize,
@@ -220,20 +222,14 @@ def _run_case(
     manifest = case.manifest(profile)
     expected = validation["expected"]
     corpus = validation["corpus"]
+    fingerprint_payload = semantic_fingerprint_payload(manifest, corpus, expected)
     return {
         "case_id": case.case_id,
         "tier": case.tier,
         "layer": case.layer,
         "comparison_class": case.comparison_class,
-        "semantic_fingerprint": sha256_json(
-            {
-                "manifest_version": MANIFEST_VERSION,
-                "corpus_version": CORPUS_VERSION,
-                "manifest": manifest,
-                "corpus": corpus,
-                "expected": expected,
-            }
-        ),
+        "semantic_fingerprint_payload": fingerprint_payload,
+        "semantic_fingerprint": semantic_fingerprint(fingerprint_payload),
         "manifest": manifest,
         "corpus": corpus,
         "expected": expected,

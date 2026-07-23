@@ -12,7 +12,8 @@ from benchmarks.scanning import BENCHMARK_SCHEMA_VERSION, CORPUS_VERSION, MANIFE
 from benchmarks.scanning.common import (
     address_checksum,
     environment_metadata,
-    sha256_json,
+    semantic_fingerprint,
+    semantic_fingerprint_payload,
     summarize,
     validate_raw_artifact,
     write_raw_artifact,
@@ -140,35 +141,30 @@ def _run_case(
         {strategy for observation in observations for strategy in observation["work"]["strategy_counts"]}
     )
     manifest = case.semantic_descriptor(profile)
-    semantic_fingerprint = sha256_json(
-        {
-            "case": manifest,
-            "corpus_sha256": corpus.data_sha256,
-            "expected_count": expected_count,
-            "expected_checksum": corpus.expected_checksum,
-            "expected_termination": expected_termination,
-        }
-    )
+    corpus_record = {
+        "corpus_version": CORPUS_VERSION,
+        "profile": profile,
+        "base_address": BASE_ADDRESS,
+        "size": len(corpus.data),
+        "sha256": corpus.data_sha256,
+    }
+    expected_record = {
+        "returned_count": expected_count,
+        "address_checksum": corpus.expected_checksum,
+        "termination": expected_termination,
+    }
+    fingerprint_payload = semantic_fingerprint_payload(manifest, corpus_record, expected_record)
 
     return {
         "case_id": case.case_id,
         "tier": case.tier,
         "layer": case.layer,
         "comparison_class": case.comparison_class,
-        "semantic_fingerprint": semantic_fingerprint,
+        "semantic_fingerprint_payload": fingerprint_payload,
+        "semantic_fingerprint": semantic_fingerprint(fingerprint_payload),
         "manifest": manifest,
-        "corpus": {
-            "corpus_version": CORPUS_VERSION,
-            "profile": profile,
-            "base_address": BASE_ADDRESS,
-            "size": len(corpus.data),
-            "sha256": corpus.data_sha256,
-        },
-        "expected": {
-            "returned_count": expected_count,
-            "address_checksum": corpus.expected_checksum,
-            "termination": expected_termination,
-        },
+        "corpus": corpus_record,
+        "expected": expected_record,
         "observations": observations,
         "summary": {
             "duration_ns": summarize([observation["duration_ns"] for observation in observations]),

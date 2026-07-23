@@ -5,11 +5,57 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from benchmarks.scanning import CORPUS_VERSION, MANIFEST_VERSION
+from benchmarks.scanning import CANDIDATE_WATCHDOG_FLOOR_S, CORPUS_VERSION, MANIFEST_VERSION
 from benchmarks.scanning.common import sha256_json
 
 ComparisonClass = Literal["apples_to_apples", "eliminated_work", "new_capability"]
 SuiteTier = Literal["headline", "coverage"]
+
+_CANDIDATE_ONLY_KINDS = frozenset({"chunk_sweep", "chunk_salvage", "chunk_timeout"})
+_CONTROLLED_TARGET_KINDS = frozenset(
+    {
+        "reader_ceiling",
+        "e2e",
+        "fragmented",
+        "boundary",
+        "allocation",
+        "writable_filter",
+        "section_filter",
+        "section_filter_warm",
+        "timeout",
+        "chunk_sweep",
+        "chunk_salvage",
+        "chunk_timeout",
+        "cursor",
+        "batch",
+    }
+)
+_EXACT_PREFLIGHT_KINDS = frozenset(
+    {
+        "e2e",
+        "fragmented",
+        "boundary",
+        "allocation",
+        "writable_filter",
+        "section_filter",
+        "section_filter_warm",
+        "chunk_sweep",
+        "chunk_salvage",
+    }
+)
+_EXACT_PREFLIGHT_PROTOCOL = {
+    "operation": "exact_addresses",
+    "ordered": True,
+    "checksum": "sha256-u64le",
+    "attachment": "same",
+    "cache_state": "isolated",
+    "excluded_from_timing": True,
+    "independent_read_counters": True,
+}
+
+
+def preflight_protocol(kind: str) -> dict[str, Any]:
+    return dict(_EXACT_PREFLIGHT_PROTOCOL) if kind in _EXACT_PREFLIGHT_KINDS else {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +80,7 @@ class BenchmarkCase:
     headline: bool = True
     expected_strategy: str | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
+    setup_protocol: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.case_id or any(character.isspace() for character in self.case_id):
@@ -79,7 +126,11 @@ class BenchmarkCase:
             "limit": self.limit,
             "max_matches": self.max_matches,
             "timeout_ms": self.timeout_ms,
+            "process_timeout_s": self.process_timeout_s,
+            "candidate_watchdog_timeout_s": max(self.process_timeout_s, CANDIDATE_WATCHDOG_FLOOR_S),
             "parameters": self.parameters,
+            "preflight_protocol": preflight_protocol(self.kind),
+            "setup_protocol": self.setup_protocol,
         }
 
     def semantic_fingerprint(self, profile: str) -> str:
@@ -569,6 +620,14 @@ CASES: tuple[BenchmarkCase, ...] = (
         mode="count",
         max_matches=5000,
         parameters={"section": ".text"},
+        setup_protocol={
+            "untimed_operations": 1,
+            "operation": "identical",
+            "attachment": "same",
+            "setup_excluded_from_timing": True,
+            "historical_state": "shared_session",
+            "candidate_state": "shared_section_cache_hot",
+        },
     ),
     BenchmarkCase(
         case_id="cursor.pages10.limit50.dense",
@@ -640,6 +699,18 @@ CASES: tuple[BenchmarkCase, ...] = (
 CASE_BY_ID = {case.case_id: case for case in CASES}
 if len(CASE_BY_ID) != len(CASES):
     raise RuntimeError("benchmark case IDs must be unique")
+
+
+def is_candidate_only(case: BenchmarkCase) -> bool:
+    return case.kind in _CANDIDATE_ONLY_KINDS
+
+
+def uses_controlled_target(case: BenchmarkCase) -> bool:
+    return case.kind in _CONTROLLED_TARGET_KINDS
+
+
+def requires_exact_preflight(case: BenchmarkCase) -> bool:
+    return bool(preflight_protocol(case.kind))
 
 
 def select_cases(case_ids: list[str] | None = None, groups: list[str] | None = None) -> tuple[BenchmarkCase, ...]:

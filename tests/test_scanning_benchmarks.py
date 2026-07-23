@@ -11,12 +11,16 @@ import pytest
 from benchmarks.scanning.common import (
     ArtifactValidationError,
     read_raw_artifact,
+    semantic_fingerprint,
+    semantic_fingerprint_payload,
     validate_raw_artifact,
     write_raw_artifact,
 )
 from benchmarks.scanning.corpus import build_corpus
+from benchmarks.scanning.engine import run_engine_suite
 from benchmarks.scanning.manifest import CASES
 from benchmarks.scanning.matcher import BASE_ADDRESS, run_matcher_suite
+from benchmarks.scanning.public_api import run_public_api_suite
 
 _MATCHER_CASES = tuple(case for case in CASES if case.layer == "matcher")
 _EXPECTED_MATCHER_CASE_IDS = {
@@ -51,6 +55,41 @@ def test_corpus_and_semantic_fingerprint_are_deterministic():
     assert replace(case, expected_strategy="regex").semantic_fingerprint("smoke") == case.semantic_fingerprint("smoke")
 
 
+def test_process_timeout_and_candidate_watchdog_are_part_of_semantic_identity():
+    case = next(case for case in CASES if case.case_id == "control.timeout100.common_masked")
+    descriptor = case.semantic_descriptor("smoke")
+    changed = replace(case, process_timeout_s=31.0)
+
+    assert descriptor["process_timeout_s"] == 5.0
+    assert descriptor["candidate_watchdog_timeout_s"] == 30.0
+    assert changed.semantic_descriptor("smoke")["candidate_watchdog_timeout_s"] == 31.0
+    assert changed.semantic_fingerprint("smoke") != case.semantic_fingerprint("smoke")
+
+
+def test_warm_section_setup_protocol_is_part_of_semantic_identity():
+    case = next(case for case in CASES if case.case_id == "scope.section.text.current_exe.warm")
+    changed = replace(case, setup_protocol={**case.setup_protocol, "untimed_operations": 2})
+
+    assert case.semantic_descriptor("smoke")["preflight_protocol"] == {
+        "operation": "exact_addresses",
+        "ordered": True,
+        "checksum": "sha256-u64le",
+        "attachment": "same",
+        "cache_state": "isolated",
+        "excluded_from_timing": True,
+        "independent_read_counters": True,
+    }
+    assert case.setup_protocol == {
+        "untimed_operations": 1,
+        "operation": "identical",
+        "attachment": "same",
+        "setup_excluded_from_timing": True,
+        "historical_state": "shared_session",
+        "candidate_state": "shared_section_cache_hot",
+    }
+    assert changed.semantic_fingerprint("smoke") != case.semantic_fingerprint("smoke")
+
+
 def test_smoke_matcher_runner_emits_round_trippable_raw_artifact(tmp_path: Path):
     repo_root = Path(__file__).resolve().parents[1]
     artifact = run_matcher_suite(
@@ -72,6 +111,165 @@ def test_smoke_matcher_runner_emits_round_trippable_raw_artifact(tmp_path: Path)
     assert read_raw_artifact(output) == artifact
 
 
+@pytest.mark.parametrize("record", ("manifest", "corpus", "expected"))
+def test_raw_artifact_rejects_semantic_record_mutation(record: str):
+    repo_root = Path(__file__).resolve().parents[1]
+    case_id = _MATCHER_CASES[0].case_id
+    artifact = run_matcher_suite(
+        repo_root=repo_root,
+        profile="smoke",
+        warmups=0,
+        repetitions=1,
+        implementation_label="test-candidate",
+        case_ids=(case_id,),
+    )
+    invalid = deepcopy(artifact)
+    if record == "manifest":
+        invalid["cases"][0][record]["timeout_ms"] += 1
+    elif record == "corpus":
+        invalid["cases"][0][record]["size"] += 1
+    else:
+        invalid["cases"][0][record]["returned_count"] += 1
+
+    with pytest.raises(ArtifactValidationError, match="differs from the canonical"):
+        validate_raw_artifact(invalid)
+
+
+def test_raw_artifact_rejects_fingerprint_payload_and_digest_mutation():
+    repo_root = Path(__file__).resolve().parents[1]
+    case_id = _MATCHER_CASES[0].case_id
+    artifact = run_matcher_suite(
+        repo_root=repo_root,
+        profile="smoke",
+        warmups=0,
+        repetitions=1,
+        implementation_label="test-candidate",
+        case_ids=(case_id,),
+    )
+    invalid_payload = deepcopy(artifact)
+    invalid_payload["cases"][0]["semantic_fingerprint_payload"]["expected"]["returned_count"] += 1
+    with pytest.raises(ArtifactValidationError, match="semantic_fingerprint_payload differs"):
+        validate_raw_artifact(invalid_payload)
+
+    invalid_digest = deepcopy(artifact)
+    invalid_digest["cases"][0]["semantic_fingerprint"] = "0" * 64
+    with pytest.raises(ArtifactValidationError, match="semantic_fingerprint does not match"):
+        validate_raw_artifact(invalid_digest)
+
+
+@pytest.mark.parametrize("record", ("manifest", "corpus", "expected"))
+def test_raw_artifact_rejects_rehashed_canonical_record_mutation(record: str):
+    repo_root = Path(__file__).resolve().parents[1]
+    artifact = run_matcher_suite(
+        repo_root=repo_root,
+        profile="smoke",
+        warmups=0,
+        repetitions=1,
+        implementation_label="test-candidate",
+        case_ids=(_MATCHER_CASES[0].case_id,),
+    )
+    invalid = deepcopy(artifact)
+    case = invalid["cases"][0]
+    if record == "manifest":
+        case[record]["timeout_ms"] += 1
+    elif record == "corpus":
+        case[record]["size"] += 1
+    else:
+        case[record]["returned_count"] += 1
+    payload = semantic_fingerprint_payload(case["manifest"], case["corpus"], case["expected"])
+    case["semantic_fingerprint_payload"] = payload
+    case["semantic_fingerprint"] = semantic_fingerprint(payload)
+
+    with pytest.raises(ArtifactValidationError, match="differs from the canonical"):
+        validate_raw_artifact(invalid)
+
+
+def test_raw_artifact_rejects_unknown_case_id_even_when_records_are_rehashed():
+    repo_root = Path(__file__).resolve().parents[1]
+    artifact = run_matcher_suite(
+        repo_root=repo_root,
+        profile="smoke",
+        warmups=0,
+        repetitions=1,
+        implementation_label="test-candidate",
+        case_ids=(_MATCHER_CASES[0].case_id,),
+    )
+    invalid = deepcopy(artifact)
+    invalid["runner"]["selected_case_ids"] = ["matcher.future.unknown"]
+    invalid["cases"][0]["case_id"] = "matcher.future.unknown"
+
+    with pytest.raises(ArtifactValidationError, match="unknown case_id"):
+        validate_raw_artifact(invalid)
+
+
+def test_raw_artifact_rejects_noncanonical_case_order():
+    repo_root = Path(__file__).resolve().parents[1]
+    selected = (_MATCHER_CASES[0].case_id, _MATCHER_CASES[1].case_id)
+    artifact = run_matcher_suite(
+        repo_root=repo_root,
+        profile="smoke",
+        warmups=0,
+        repetitions=1,
+        implementation_label="test-candidate",
+        case_ids=selected,
+    )
+    invalid = deepcopy(artifact)
+    invalid["runner"]["selected_case_ids"].reverse()
+    invalid["cases"].reverse()
+
+    with pytest.raises(ArtifactValidationError, match="canonical manifest order"):
+        validate_raw_artifact(invalid)
+
+
+def test_raw_artifact_rejects_forged_summary_and_observation_correctness():
+    repo_root = Path(__file__).resolve().parents[1]
+    artifact = run_matcher_suite(
+        repo_root=repo_root,
+        profile="smoke",
+        warmups=0,
+        repetitions=1,
+        implementation_label="test-candidate",
+        case_ids=(_MATCHER_CASES[0].case_id,),
+    )
+    forged_summary = deepcopy(artifact)
+    forged_summary["cases"][0]["summary"]["duration_ns"]["median"] += 1
+    with pytest.raises(ArtifactValidationError, match="summary differs from observations"):
+        validate_raw_artifact(forged_summary)
+
+    forged_observation = deepcopy(artifact)
+    forged_observation["cases"][0]["observations"][0]["work"]["observed_count"] += 1
+    with pytest.raises(ArtifactValidationError, match="observed count differs"):
+        validate_raw_artifact(forged_observation)
+
+
+@pytest.mark.parametrize(
+    ("runner", "case_id"),
+    (
+        (run_engine_suite, "control.in_band_cancellation"),
+        (run_public_api_suite, "public.fastmcp.strict_flat_contract"),
+    ),
+)
+def test_deterministic_raw_suites_reject_rehashed_expected_mutation(runner, case_id: str):
+    repo_root = Path(__file__).resolve().parents[1]
+    artifact = runner(
+        repo_root=repo_root,
+        profile="smoke",
+        warmups=0,
+        repetitions=1,
+        implementation_label="test-candidate",
+        case_ids=(case_id,),
+    )
+    invalid = deepcopy(artifact)
+    case = invalid["cases"][0]
+    case["expected"]["forged"] = True
+    payload = semantic_fingerprint_payload(case["manifest"], case["corpus"], case["expected"])
+    case["semantic_fingerprint_payload"] = payload
+    case["semantic_fingerprint"] = semantic_fingerprint(payload)
+
+    with pytest.raises(ArtifactValidationError, match="expected differs from canonical"):
+        validate_raw_artifact(invalid)
+
+
 def test_raw_artifact_rejects_duplicate_case_ids():
     repo_root = Path(__file__).resolve().parents[1]
     case_id = _MATCHER_CASES[0].case_id
@@ -87,5 +285,5 @@ def test_raw_artifact_rejects_duplicate_case_ids():
     invalid["cases"].append(deepcopy(invalid["cases"][0]))
     invalid["runner"]["selected_case_ids"].append(case_id)
 
-    with pytest.raises(ArtifactValidationError, match="duplicate case_id"):
+    with pytest.raises(ArtifactValidationError, match="duplicates"):
         validate_raw_artifact(invalid)
