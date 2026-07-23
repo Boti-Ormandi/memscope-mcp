@@ -11,7 +11,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
-from benchmarks.scanning import CORPUS_VERSION
+from benchmarks.scanning import CORPUS_VERSION, HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S
 from benchmarks.scanning.common import (
     address_checksum,
     candidate_watchdog_metrics,
@@ -668,11 +668,21 @@ def _legacy_exact_preflight(
         result = scanning.scan_aob_addresses(
             case.pattern,
             max_results=case.max_matches or 5000,
-            timeout_ms=30_000,
+            timeout_ms=int(HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S * 1000),
             **kwargs,
+        )
+    scan_metadata = result.get("metadata")
+    if isinstance(scan_metadata, dict) and scan_metadata.get("timeout_hit") is True:
+        raise RuntimeError(
+            "historical exact preflight timed out before readiness "
+            f"(metadata.timeout_hit=true, timeout_ms={int(HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S * 1000)}, "
+            f"scanned_region_count={scan_metadata.get('scanned_region_count')}, "
+            f"bytes_scanned={scan_metadata.get('bytes_scanned')})"
         )
     if not result.get("success"):
         raise RuntimeError(f"historical preflight failed: {result}")
+    if not isinstance(scan_metadata, dict):
+        raise RuntimeError("historical preflight metadata is missing")
     addresses = [int(value) for value in result["matches"]]
     expected = list(metadata.expected_addresses)
     checksum = address_checksum(addresses)
@@ -684,7 +694,6 @@ def _legacy_exact_preflight(
     )
     if not correct and not expected_failure:
         raise RuntimeError(f"historical preflight address mismatch ({checksum} != {metadata.expected_checksum})")
-    scan_metadata = result["metadata"]
     return {
         **preflight_protocol(case.kind),
         "correct": correct,

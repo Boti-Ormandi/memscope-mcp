@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from benchmarks.scanning import MANIFEST_VERSION
 from benchmarks.scanning.common import (
     ArtifactValidationError,
     read_raw_artifact,
@@ -39,6 +40,24 @@ def test_matcher_manifest_has_stable_unique_coverage():
     assert len({case.case_id for case in CASES}) == len(CASES)
     assert {case.case_id for case in _MATCHER_CASES} == _EXPECTED_MATCHER_CASE_IDS
     assert all(case.expected_strategy is not None for case in _MATCHER_CASES)
+
+
+def test_selective_process_pattern_is_literal_first_balanced_v5_case():
+    process_case = next(case for case in CASES if case.case_id == "e2e.selective16.late.contiguous64m")
+    matcher_case = next(case for case in CASES if case.case_id == "matcher.selective16.uniform")
+    tokens = process_case.pattern.split()
+
+    assert MANIFEST_VERSION == "scanning-manifest-v5"
+    assert process_case.pattern == "8B 45 F8 48 85 C0 75 05 ?? ?? ?? ?? ?? ?? ?? ??"
+    assert len(tokens) == 16
+    assert tokens[0] != "??"
+    assert sum(token == "??" for token in tokens) == 8
+    assert sum(token != "??" for token in tokens) == 8
+    assert process_case.parameters == {"injections": ["late"]}
+    assert process_case.semantic_fingerprint("release") == (
+        "f0a3140d6fb949028640c955c757d7e3d41f50c34361d62fc39ec7969aaa10a7"
+    )
+    assert matcher_case.pattern == "?? ?? ?? ?? 8B 45 F8 48 85 C0 75 05 ?? ?? ?? ??"
 
 
 def test_corpus_and_semantic_fingerprint_are_deterministic():

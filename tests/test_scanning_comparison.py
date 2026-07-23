@@ -19,6 +19,8 @@ from benchmarks.scanning import (
     CANDIDATE_WATCHDOG_FLOOR_S,
     CORPUS_VERSION,
     DRIVER_PROTOCOL,
+    HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S,
+    HISTORICAL_PREPARATION_ERROR_MARGIN_S,
     MANIFEST_VERSION,
     PAIRING_PROTOCOL,
 )
@@ -52,6 +54,7 @@ from benchmarks.scanning.run import (
     _cleanup_owned_worktree,
     _cleanup_stale_owned_worktrees,
     _environment_metadata_for_python,
+    _historical_preparation_timeout_seconds,
     _observation_timeout_seconds,
     _parse_driver_output,
     _run_observation,
@@ -520,6 +523,40 @@ def test_historical_count_preflight_rejects_wrong_exact_addresses(observed: list
         _legacy_exact_preflight(case, metadata, FakeScanning, session)
 
 
+def test_historical_preflight_attributes_timeout_before_checksum_mismatch():
+    case = CASE_BY_ID["e2e.selective16.late.contiguous64m"]
+    metadata = SimpleNamespace(
+        expected_addresses=(0x1010,),
+        expected_checksum=address_checksum([0x1010]),
+        module={"name": "python.exe"},
+        base_address=0x1000,
+        end_exclusive=0x3000,
+    )
+    session = SimpleNamespace(read_bytes=lambda _address, size: b"x" * size)
+    captured: dict[str, object] = {}
+
+    class FakeScanning:
+        @staticmethod
+        def scan_aob_addresses(*_args, **kwargs):
+            captured.update(kwargs)
+            session.read_bytes(0x1000, 32)
+            return {
+                "success": True,
+                "matches": [],
+                "metadata": {
+                    "timeout_hit": True,
+                    "scanned_region_count": 7,
+                    "bytes_scanned": 4096,
+                },
+            }
+
+    with pytest.raises(RuntimeError, match="metadata.timeout_hit=true") as error:
+        _legacy_exact_preflight(case, metadata, FakeScanning, session)
+
+    assert "address mismatch" not in str(error.value)
+    assert captured["timeout_ms"] == int(HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S * 1000)
+
+
 def test_expected_strategy_is_enforced_separately_from_semantic_identity():
     before, after = _paired_artifacts()
     case_id = "matcher.exact16.uniform"
@@ -640,6 +677,15 @@ def test_candidate_process_deadline_has_margin_but_historical_censorship_stays_f
 
     assert _observation_timeout_seconds(case, "before") == case.process_timeout_s
     assert _observation_timeout_seconds(case, "after") == 30.0
+
+
+def test_historical_preparation_timeout_includes_bounded_error_margin():
+    case = CASE_BY_ID["e2e.selective16.late.contiguous64m"]
+
+    assert _historical_preparation_timeout_seconds(case) == (
+        max(case.process_timeout_s, HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S) + HISTORICAL_PREPARATION_ERROR_MARGIN_S
+    )
+    assert _historical_preparation_timeout_seconds(case) == 35.0
 
 
 def test_candidate_subprocess_timeout_is_blocking_not_censored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1075,7 +1121,8 @@ def test_historical_timeout_without_ready_is_driver_error(tmp_path: Path, monkey
         "benchmarks.scanning.run._driver_command",
         lambda **_kwargs: [sys.executable, str(script)],
     )
-    monkeypatch.setattr("benchmarks.scanning.run.CANDIDATE_WATCHDOG_FLOOR_S", 0.05)
+    monkeypatch.setattr("benchmarks.scanning.run.HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("benchmarks.scanning.run.HISTORICAL_PREPARATION_ERROR_MARGIN_S", 0.02)
 
     observation = _run_observation(
         repo_root=tmp_path,
@@ -1091,6 +1138,60 @@ def test_historical_timeout_without_ready_is_driver_error(tmp_path: Path, monkey
     assert observation["status"] == "driver_error"
     assert observation["correct"] is False
     assert "historical preparation phase exceeded" in observation["error"]
+    assert "censorship" not in observation
+
+
+def test_historical_preparation_margin_captures_delayed_child_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    case = replace(CASE_BY_ID["compile.exact16"], process_timeout_s=0.05)
+    before, _after = _paired_artifacts(cases=(case,))
+    source = before["observations"][0]
+    error_record = {
+        key: deepcopy(source[key])
+        for key in (
+            "case_id",
+            "implementation",
+            "profile",
+            "block",
+            "pair_seed",
+            "pair_order",
+            "semantic_fingerprint_payload",
+            "semantic_fingerprint",
+            "semantic_descriptor",
+        )
+    }
+    error_record.update(
+        {
+            "status": "error",
+            "correct": False,
+            "error_type": "RuntimeError",
+            "error": "historical exact preflight timed out before readiness (metadata.timeout_hit=true)",
+            "traceback": "synthetic delayed preflight timeout",
+        }
+    )
+    script = tmp_path / "delayed-preparation-error.py"
+    script.write_text(
+        f"import time\ntime.sleep(0.08)\nprint({json.dumps(error_record)!r}, flush=True)\nraise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("benchmarks.scanning.run._driver_command", lambda **_kwargs: [sys.executable, str(script)])
+    monkeypatch.setattr("benchmarks.scanning.run.HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("benchmarks.scanning.run.HISTORICAL_PREPARATION_ERROR_MARGIN_S", 0.20)
+
+    observation = _run_observation(
+        repo_root=tmp_path,
+        python=Path(sys.executable),
+        target_root=tmp_path,
+        case=case,
+        implementation="before",
+        profile="smoke",
+        block=0,
+        pair_order=pair_order_label(case.case_id, 0),
+    )
+
+    assert observation["status"] == "error"
+    assert observation["correct"] is False
+    assert "metadata.timeout_hit=true" in observation["error"]
+    assert "censorship" not in observation
 
 
 def test_historical_pre_ready_error_is_preserved_as_blocking_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

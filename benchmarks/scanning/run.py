@@ -22,6 +22,8 @@ from benchmarks.scanning import (
     CANDIDATE_WATCHDOG_FLOOR_S,
     CORPUS_VERSION,
     DRIVER_PROTOCOL,
+    HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S,
+    HISTORICAL_PREPARATION_ERROR_MARGIN_S,
     MANIFEST_VERSION,
     PAIRING_PROTOCOL,
 )
@@ -412,7 +414,8 @@ def _run_historical_phased_observation(
     stdout_thread.start()
     stderr_thread.start()
     overall_started = time.perf_counter_ns()
-    preparation_timeout = max(case.process_timeout_s, CANDIDATE_WATCHDOG_FLOOR_S)
+    preparation_timeout = _historical_preparation_timeout_seconds(case)
+    timed_start_timeout = max(case.process_timeout_s, CANDIDATE_WATCHDOG_FLOOR_S)
     try:
         try:
             first_line = stdout_queue.get(timeout=preparation_timeout)
@@ -523,7 +526,7 @@ def _run_historical_phased_observation(
         process.stdin.write("run-timed\n")
         process.stdin.flush()
         try:
-            second_line = stdout_queue.get(timeout=preparation_timeout)
+            second_line = stdout_queue.get(timeout=timed_start_timeout)
         except queue.Empty:
             process.kill()
             process.wait()
@@ -534,7 +537,7 @@ def _run_historical_phased_observation(
                 pair_order=pair_order,
                 ready=ready,
                 error=(
-                    f"historical timed-start phase exceeded its protocol deadline of {preparation_timeout:.1f} seconds"
+                    f"historical timed-start phase exceeded its protocol deadline of {timed_start_timeout:.1f} seconds"
                 ),
                 wall_duration_ns=time.perf_counter_ns() - overall_started,
                 stdout="".join(stdout_lines),
@@ -789,6 +792,10 @@ def _parse_json_object(line: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("driver phase record must be a JSON object")
     return value
+
+
+def _historical_preparation_timeout_seconds(case: BenchmarkCase) -> float:
+    return max(case.process_timeout_s, HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S) + HISTORICAL_PREPARATION_ERROR_MARGIN_S
 
 
 def _observation_timeout_seconds(case: BenchmarkCase, implementation: str) -> float:
