@@ -851,6 +851,104 @@ def test_false_correct_count_is_recomputed_and_rejected():
     assert row["notes"] == ["candidate block 0 timed correctness flag differs from exact fields"]
 
 
+def test_strict_unknown_candidate_producer_emits_declared_non_timing_capability():
+    case = CASE_BY_ID["public.strict_unknown_field"]
+
+    observation = run_case(
+        case,
+        implementation="after",
+        profile="smoke",
+        target_root=Path(__file__).resolve().parents[1],
+    )
+
+    assert case.observation_metric_contract == "non_timing_capability"
+    assert observation["status"] == "ok"
+    assert observation["correct"] is True
+    assert observation["duration_ns"] == 0
+    assert observation["logical_bytes"] == 0
+    assert observation["throughput_mib_s"] is None
+    assert observation["termination"] == "complete"
+    assert observation["metrics"]["strict_unknown_rejection"] is True
+
+
+def test_strict_unknown_paired_comparison_accepts_zero_work_null_throughput():
+    case = CASE_BY_ID["public.strict_unknown_field"]
+    before, after = _paired_artifacts(cases=(case,), blocks=2)
+
+    comparison = compare_artifacts(before, after)
+    row = comparison["rows"][0]
+
+    assert row["status"] == "ok"
+    assert row["blocking"] is False
+    assert row["before"]["duration_ns"]["count"] == 2
+    assert row["before"]["duration_ns"]["median"] == 0
+    assert row["after"]["duration_ns"]["median"] == 0
+    assert row["before"]["throughput_mib_s"]["count"] == 0
+    assert row["after"]["throughput_mib_s"]["count"] == 0
+    assert row["after"]["throughput_mib_s"]["median"] is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("duration_ns", 1), ("logical_bytes", 1), ("throughput_mib_s", 0.0)),
+)
+def test_strict_unknown_non_timing_contract_rejects_nonzero_work_or_numeric_throughput(field: str, value: object):
+    case = CASE_BY_ID["public.strict_unknown_field"]
+    before, after = _paired_artifacts(cases=(case,))
+    after["observations"][0][field] = value
+
+    with pytest.raises(ValueError, match="zero duration/logical bytes and null throughput"):
+        compare_artifacts(before, after)
+
+
+def test_strict_unknown_non_timing_contract_requires_validation_metrics():
+    case = CASE_BY_ID["public.strict_unknown_field"]
+    before, after = _paired_artifacts(cases=(case,))
+    after["observations"][0]["metrics"]["strict_unknown_rejection"] = False
+
+    with pytest.raises(ValueError, match="strict-validation capability correctness evidence is invalid"):
+        compare_artifacts(before, after)
+
+
+@pytest.mark.parametrize("case_id", ("matcher.exact16.uniform", "e2e.boundary.split_protection.exact"))
+def test_timed_contract_rejects_null_throughput_even_for_invariant_capability(case_id: str):
+    case = CASE_BY_ID[case_id]
+    before, after = _paired_artifacts(cases=(case,))
+    after["observations"][0]["throughput_mib_s"] = None
+
+    assert case.observation_metric_contract == "timed"
+    with pytest.raises(ValueError, match="throughput must be finite and non-negative"):
+        compare_artifacts(before, after)
+
+
+def test_report_accepts_non_timing_capability_empty_throughput_summary(tmp_path: Path):
+    case = CASE_BY_ID["public.strict_unknown_field"]
+    comparison = compare_artifacts(*_paired_artifacts(cases=(case,), blocks=2))
+
+    generate_bundle(comparison, tmp_path)
+
+    report = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "`public.strict_unknown_field`" in report
+    assert "n/a" in report
+
+
+def test_report_rejects_empty_throughput_summary_for_timed_case(tmp_path: Path):
+    case = CASE_BY_ID["matcher.exact16.uniform"]
+    comparison = compare_artifacts(*_paired_artifacts(cases=(case,)))
+    comparison["rows"][0]["after"]["throughput_mib_s"] = {
+        "count": 0,
+        "median": None,
+        "p95": None,
+        "minimum": None,
+        "maximum": None,
+        "mad": None,
+    }
+    comparison["content_digest"] = comparison_content_digest(comparison)
+
+    with pytest.raises(ValueError, match="primary summary counts are inconsistent"):
+        generate_bundle(comparison, tmp_path)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     (
@@ -1490,6 +1588,69 @@ def test_live_candidate_timeout_rows_record_effective_outer_watchdog(case_id: st
     assert metrics["process_watchdog_ns"] == 30_000_000_000
 
 
+def test_live_paired_candidate_reader_ceiling_records_enforced_watchdog():
+    case = CASE_BY_ID["reader.ceiling.contiguous64m"]
+    root = Path(__file__).resolve().parents[1]
+
+    observation = _run_observation(
+        repo_root=root,
+        python=Path(sys.executable),
+        target_root=root,
+        case=case,
+        implementation="after",
+        profile="smoke",
+        block=0,
+        pair_order=pair_order_label(case.case_id, 0),
+    )
+
+    metrics = observation["metrics"]
+    assert observation["status"] == "ok"
+    assert observation["correct"] is True
+    assert metrics["candidate_watchdog_timeout_ns"] == 30_000_000_000
+    assert metrics["candidate_watchdog_enforced"] is True
+    assert metrics["candidate_watchdog_context"] == "paired_parent_outer_watchdog"
+    assert metrics["process_watchdog_ns"] == 30_000_000_000
+    assert "timed_out" not in metrics
+    assert "timeout_budget_ns" not in metrics
+    assert "control_polls" not in metrics
+    assert "timeout_overshoot_ns" not in metrics
+
+
+def test_standalone_candidate_reader_ceiling_records_unenforced_watchdog():
+    case = CASE_BY_ID["reader.ceiling.contiguous64m"]
+
+    observation = run_case(
+        case,
+        implementation="after",
+        profile="smoke",
+        target_root=Path(__file__).resolve().parents[1],
+    )
+
+    metrics = observation["metrics"]
+    assert observation["status"] == "ok"
+    assert observation["correct"] is True
+    assert metrics["candidate_watchdog_timeout_ns"] == 30_000_000_000
+    assert metrics["candidate_watchdog_enforced"] is False
+    assert metrics["candidate_watchdog_context"] == "standalone_diagnostic_no_outer_watchdog"
+    assert metrics["process_watchdog_ns"] is None
+    assert "timed_out" not in metrics
+    assert "timeout_budget_ns" not in metrics
+    assert "control_polls" not in metrics
+    assert "timeout_overshoot_ns" not in metrics
+
+
+def test_candidate_reader_ceiling_rejects_forged_watchdog_provenance():
+    case = CASE_BY_ID["reader.ceiling.contiguous64m"]
+    before, after = _paired_artifacts(cases=(case,))
+    metrics = after["observations"][0]["metrics"]
+    metrics["candidate_watchdog_enforced"] = False
+    metrics["candidate_watchdog_context"] = "standalone_diagnostic_no_outer_watchdog"
+    metrics["process_watchdog_ns"] = None
+
+    with pytest.raises(ValueError, match="candidate outer watchdog was not enforced"):
+        compare_artifacts(before, after)
+
+
 def test_historical_timeout_control_requires_timeout_hit_evidence():
     case = CASE_BY_ID["control.timeout100.common_masked"]
     before, after = _paired_artifacts(cases=(case,))
@@ -1810,6 +1971,14 @@ def _paired_artifacts(
     }
     for case in cases:
         for block in range(blocks):
+            if case.observation_metric_contract == "non_timing_capability":
+                before_observations.append(
+                    _strict_unknown_observation(case, implementation="before", profile=profile, block=block)
+                )
+                after_observations.append(
+                    _strict_unknown_observation(case, implementation="after", profile=profile, block=block)
+                )
+                continue
             if is_candidate_only(case):
                 before_observations.append(_not_applicable(case, profile=profile, block=block))
             else:
@@ -2091,6 +2260,50 @@ def _not_applicable(case: BenchmarkCase, *, profile: str, block: int) -> dict:
         "status": "not_applicable",
         "correct": None,
         "reason": "the historical scanner exposes no configurable reader chunk",
+    }
+
+
+def _strict_unknown_observation(
+    case: BenchmarkCase,
+    *,
+    implementation: str,
+    profile: str,
+    block: int,
+) -> dict:
+    strict = implementation == "after"
+    descriptor = case.semantic_descriptor(profile)
+    fingerprint_payload = paired_semantic_fingerprint_payload(descriptor, None)
+    return {
+        "case_id": case.case_id,
+        "implementation": implementation,
+        "profile": profile,
+        "block": block,
+        "pair_seed": pair_seed(case.case_id, block),
+        "pair_order": pair_order_label(case.case_id, block),
+        "semantic_fingerprint_payload": fingerprint_payload,
+        "semantic_fingerprint": semantic_fingerprint(fingerprint_payload),
+        "semantic_descriptor": descriptor,
+        "status": "ok",
+        "correct": True,
+        "duration_ns": 0,
+        "logical_bytes": 0,
+        "throughput_mib_s": None,
+        "peak_python_bytes": None,
+        "actual_count": int(strict),
+        "expected_count": int(strict),
+        "actual_checksum": None,
+        "expected_checksum": None,
+        "termination": "complete",
+        "comparison_identity": None,
+        "expected_historical_failure": False,
+        "metrics": {
+            "strict_unknown_rejection": strict,
+            "historical_signature": "(pattern: str) -> dict" if implementation == "before" else None,
+            "committed_public_case_id": "public.fastmcp.strict_flat_contract" if strict else None,
+            "committed_public_fingerprint": "f" * 64 if strict else None,
+        },
+        "wall_duration_ns": 1_000_000,
+        "driver_returncode": 0,
     }
 
 

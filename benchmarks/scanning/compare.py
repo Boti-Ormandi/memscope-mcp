@@ -349,11 +349,18 @@ def _canonical_reporting_row(row: Any, case: BenchmarkCase, *, blocks: int) -> d
             "timeout_overshoot_ns",
         ):
             _validate_reporting_stats(case.case_id, side, field, summary[field], observation_count)
+        expected_throughput_count = (
+            0 if case.observation_metric_contract == "non_timing_capability" else observation_count
+        )
         if (
             summary["duration_ns"]["count"] != observation_count
-            or summary["throughput_mib_s"]["count"] != observation_count
+            or summary["throughput_mib_s"]["count"] != expected_throughput_count
         ):
             raise ValueError(f"comparison row {case.case_id} {side} primary summary counts are inconsistent")
+        if case.observation_metric_contract == "non_timing_capability" and observation_count:
+            duration = summary["duration_ns"]
+            if any(duration[field] != 0 for field in ("median", "p95", "minimum", "maximum", "mad")):
+                raise ValueError(f"comparison row {case.case_id} {side} non-timing duration summary is invalid")
 
     paired = row["paired_speedup"]
     if not isinstance(paired, dict) or set(paired) != {"count", "median", "ci_low", "ci_high"}:
@@ -640,6 +647,69 @@ def _validate_common_observation_fields(
     _validate_semantic_identity(case, observation, profile)
 
 
+def _validate_ok_observation_metric_contract(
+    case: BenchmarkCase,
+    observation: dict[str, Any],
+    *,
+    implementation: str,
+) -> None:
+    if case.observation_metric_contract == "timed":
+        if not is_finite_number(observation.get("throughput_mib_s")):
+            raise ValueError("ok observation throughput must be finite and non-negative")
+        return
+
+    if (
+        observation.get("duration_ns") != 0
+        or observation.get("logical_bytes") != 0
+        or observation.get("throughput_mib_s") is not None
+    ):
+        raise ValueError("non-timing capability observation must use zero duration/logical bytes and null throughput")
+    if (
+        observation.get("peak_python_bytes") is not None
+        or observation.get("actual_checksum") is not None
+        or observation.get("expected_checksum") is not None
+        or observation.get("comparison_identity") is not None
+        or observation.get("expected_historical_failure") is not False
+        or observation.get("termination") != "complete"
+    ):
+        raise ValueError("non-timing capability observation result fields are invalid")
+    if case.kind != "strict_unknown":
+        raise ValueError("non-timing capability observation kind is unsupported")
+
+    metrics = observation.get("metrics")
+    required_metrics = {
+        "strict_unknown_rejection",
+        "historical_signature",
+        "committed_public_case_id",
+        "committed_public_fingerprint",
+    }
+    if not isinstance(metrics, dict) or set(metrics) != required_metrics:
+        raise ValueError("strict-validation capability metrics are invalid")
+    expected_rejection = implementation == "after"
+    expected_count = int(expected_rejection)
+    if (
+        metrics.get("strict_unknown_rejection") is not expected_rejection
+        or observation.get("actual_count") != expected_count
+        or observation.get("expected_count") != expected_count
+        or observation.get("correct") is not True
+    ):
+        raise ValueError("strict-validation capability correctness evidence is invalid")
+    if implementation == "before":
+        if (
+            not isinstance(metrics.get("historical_signature"), str)
+            or not metrics["historical_signature"]
+            or metrics.get("committed_public_case_id") is not None
+            or metrics.get("committed_public_fingerprint") is not None
+        ):
+            raise ValueError("historical strict-validation capability metrics are invalid")
+    elif (
+        metrics.get("historical_signature") is not None
+        or metrics.get("committed_public_case_id") != "public.fastmcp.strict_flat_contract"
+        or not _sha256_value(metrics.get("committed_public_fingerprint"))
+    ):
+        raise ValueError("candidate strict-validation capability metrics are invalid")
+
+
 def validate_paired_observation(
     case: BenchmarkCase,
     observation: dict[str, Any],
@@ -667,8 +737,7 @@ def validate_paired_observation(
         for name in ("duration_ns", "logical_bytes", "actual_count", "expected_count", "wall_duration_ns"):
             if not is_exact_int(observation.get(name)):
                 raise ValueError(f"ok observation {name} must be a non-negative integer")
-        if not is_finite_number(observation.get("throughput_mib_s")):
-            raise ValueError("ok observation throughput must be finite and non-negative")
+        _validate_ok_observation_metric_contract(case, observation, implementation=implementation)
         peak = observation.get("peak_python_bytes")
         if peak is not None and not is_exact_int(peak):
             raise ValueError("ok observation peak allocation is invalid")

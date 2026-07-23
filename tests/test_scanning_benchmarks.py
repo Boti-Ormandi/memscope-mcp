@@ -60,6 +60,20 @@ def test_selective_process_pattern_is_literal_first_balanced_v5_case():
     assert matcher_case.pattern == "?? ?? ?? ?? 8B 45 F8 48 85 C0 75 05 ?? ?? ?? ??"
 
 
+def test_manifest_declares_only_strict_unknown_as_non_timing_capability():
+    strict = next(case for case in CASES if case.case_id == "public.strict_unknown_field")
+    boundary = next(case for case in CASES if case.case_id == "e2e.boundary.split_protection.exact")
+    matcher = next(case for case in CASES if case.case_id == "matcher.exact16.uniform")
+
+    assert strict.comparison_class == "new_capability"
+    assert strict.primary_metric == "invariant"
+    assert strict.size_bytes == 0
+    assert strict.observation_metric_contract == "non_timing_capability"
+    assert boundary.primary_metric == "invariant"
+    assert boundary.observation_metric_contract == "timed"
+    assert matcher.observation_metric_contract == "timed"
+
+
 def test_corpus_and_semantic_fingerprint_are_deterministic():
     case = next(case for case in _MATCHER_CASES if case.case_id == "matcher.sparse_rare16.skew")
 

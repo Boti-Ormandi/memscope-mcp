@@ -196,7 +196,13 @@ def run_case(
             )
         return _run_legacy_matcher(case, profile, before_timed=before_timed)
     if case.kind == "reader_ceiling":
-        return _run_reader_ceiling(case, profile, before_timed=before_timed)
+        return _run_reader_ceiling(
+            case,
+            profile,
+            implementation=implementation,
+            before_timed=before_timed,
+            candidate_outer_watchdog_s=candidate_outer_watchdog_s,
+        )
     if case.kind in _PROCESS_CASE_KINDS:
         if implementation == "after":
             return _run_current_evidence(
@@ -453,7 +459,9 @@ def _run_reader_ceiling(
     case: BenchmarkCase,
     profile: str,
     *,
+    implementation: str,
     before_timed: Callable[[dict[str, Any]], None] | None = None,
+    candidate_outer_watchdog_s: float | None = None,
 ) -> dict[str, Any]:
     chunk_size = int(case.parameters["chunk_size"])
     with ControlledProcessTarget(case, profile) as target:
@@ -494,6 +502,11 @@ def _run_reader_ceiling(
         termination="scope_exhausted",
         comparison_identity=identity,
         metrics={
+            **(
+                candidate_watchdog_metrics(case.process_timeout_s, candidate_outer_watchdog_s)
+                if implementation == "after"
+                else {}
+            ),
             "operation_identity": operation_identity(metadata, phase="timed"),
             "physical_read_calls": calls,
             "physical_bytes_read": bytes_read,

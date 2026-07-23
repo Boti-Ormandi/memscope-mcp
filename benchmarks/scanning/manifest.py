@@ -9,9 +9,11 @@ from benchmarks.scanning import CANDIDATE_WATCHDOG_FLOOR_S, CORPUS_VERSION, MANI
 from benchmarks.scanning.common import sha256_json
 
 ComparisonClass = Literal["apples_to_apples", "eliminated_work", "new_capability"]
+ObservationMetricContract = Literal["timed", "non_timing_capability"]
 SuiteTier = Literal["headline", "coverage"]
 
 _CANDIDATE_ONLY_KINDS = frozenset({"chunk_sweep", "chunk_salvage", "chunk_timeout"})
+_NON_TIMING_CAPABILITY_KINDS = frozenset({"strict_unknown"})
 _CONTROLLED_TARGET_KINDS = frozenset(
     {
         "reader_ceiling",
@@ -97,6 +99,16 @@ class BenchmarkCase:
             raise ValueError("timeouts must be positive")
         if self.expected_strategy not in {None, "exact", "anchor", "regex", "all_wildcard"}:
             raise ValueError("expected_strategy is invalid")
+        if self.kind in _NON_TIMING_CAPABILITY_KINDS and (
+            self.comparison_class != "new_capability" or self.primary_metric != "invariant" or self.size_bytes != 0
+        ):
+            raise ValueError("non-timing capability cases require new_capability, invariant, and zero size")
+
+    @property
+    def observation_metric_contract(self) -> ObservationMetricContract:
+        if self.kind in _NON_TIMING_CAPABILITY_KINDS:
+            return "non_timing_capability"
+        return "timed"
 
     def effective_size(self, profile: str) -> int:
         if profile == "release" or self.size_bytes == 0:
