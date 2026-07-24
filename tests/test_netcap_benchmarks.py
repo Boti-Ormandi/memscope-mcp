@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import statistics
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 
@@ -129,15 +130,22 @@ def test_frozen_converter_is_independent_and_candidate_corruption_breaks_parity(
 
 
 def test_diagnostic_artifact_validates_but_is_insufficient(diagnostic_artifact):
-    validate_artifact(diagnostic_artifact)
+    validation = validate_artifact(diagnostic_artifact)
+    reasons = diagnostic_artifact["gates"]["insufficiency_reasons"]
+    before_dirty = diagnostic_artifact["metadata"]["identity_before"]["git"]["dirty"]
+    after_dirty = diagnostic_artifact["metadata"]["identity_after"]["git"]["dirty"]
+
+    assert validation["structurally_valid"] is True
+    assert validation["release_eligible"] is False
     assert diagnostic_artifact["schema_version"] == 2
     assert diagnostic_artifact["correctness"]["passed"] is True
     assert diagnostic_artifact["correctness"]["check_count"] == 633
     assert diagnostic_artifact["gates"]["status"] == "insufficient"
-    assert "profile-not-release" in diagnostic_artifact["gates"]["insufficiency_reasons"]
-    assert "candidate-tree-dirty" in diagnostic_artifact["gates"]["insufficiency_reasons"]
+    assert "profile-not-release" in reasons
+    assert "incomplete-release-case-matrix" in reasons
+    assert ("candidate-tree-dirty" in reasons) is (before_dirty or after_dirty)
     assert diagnostic_artifact["metadata"]["identity_unchanged"] is True
-    assert diagnostic_artifact["metadata"]["identity_before"]["git"]["dirty"] is True
+    assert before_dirty is after_dirty
     assert all("search_only" not in case for case in diagnostic_artifact["cases"])
     assert diagnostic_artifact["contract"]["performance_surface"].endswith("production NetcapPlugin calls only")
 
@@ -480,11 +488,39 @@ def test_local_and_offline_repository_verification_are_distinct(diagnostic_artif
     assert local["release_eligible"] is False
 
 
-def test_full_git_status_records_every_untracked_path(diagnostic_artifact):
-    status_lines = diagnostic_artifact["metadata"]["identity_before"]["git"]["status_lines"]
-    assert "?? benchmarks/netcap/README.md" in status_lines
-    assert "?? benchmarks/netcap/buffer_search.py" in status_lines
-    assert "?? tests/test_netcap_benchmarks.py" in status_lines
+def test_full_git_status_records_every_untracked_path(tmp_path):
+    repo_root = tmp_path / "status-repository"
+    repo_root.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", *args],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+    git("init")
+    git("config", "user.name", "Netcap Test")
+    git("config", "user.email", "netcap-test@example.invalid")
+    (repo_root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    git("add", "tracked.txt")
+    git("commit", "-m", "initialize fixture")
+
+    untracked_paths = (
+        Path("benchmarks/netcap/README.md"),
+        Path("benchmarks/netcap/buffer_search.py"),
+        Path("tests/test_netcap_benchmarks.py"),
+    )
+    for relative_path in untracked_paths:
+        path = repo_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("untracked\n", encoding="utf-8")
+
+    status_lines = benchmark._git_identity(repo_root)["status_lines"]
+    assert status_lines == [f"?? {path.as_posix()}" for path in untracked_paths]
     assert "?? benchmarks/netcap/" not in status_lines
 
 
@@ -514,8 +550,21 @@ def test_forged_git_snapshot_identity_cannot_verify_locally(
     assert local["release_eligible"] is False
 
 
-def test_forged_clean_git_identity_cannot_verify_locally(diagnostic_artifact):
-    forged = deepcopy(diagnostic_artifact)
+def test_forged_clean_git_identity_cannot_verify_locally(diagnostic_artifact, monkeypatch):
+    recorded_dirty = deepcopy(diagnostic_artifact)
+    dirty_status_lines = ["?? controlled/untracked-evidence.json"]
+    dirty_status_hash = hashlib.sha256("\n".join(dirty_status_lines).encode("utf-8")).hexdigest()
+    for identity_name in ("identity_before", "identity_after"):
+        git = recorded_dirty["metadata"][identity_name]["git"]
+        git["dirty"] = True
+        git["status_lines"] = dirty_status_lines.copy()
+        git["status_sha256"] = dirty_status_hash
+    recorded_dirty["metadata"]["identity_unchanged"] = True
+    recorded_dirty["gates"] = recompute_gates(recorded_dirty)
+    assert "candidate-tree-dirty" in recorded_dirty["gates"]["insufficiency_reasons"]
+    assert validate_artifact(recorded_dirty)["structurally_valid"] is True
+
+    forged = deepcopy(recorded_dirty)
     empty_status_hash = hashlib.sha256(b"").hexdigest()
     for identity_name in ("identity_before", "identity_after"):
         git = forged["metadata"][identity_name]["git"]
@@ -531,6 +580,8 @@ def test_forged_clean_git_identity_cannot_verify_locally(diagnostic_artifact):
     assert offline["repository_verified"] is False
     assert offline["release_eligible"] is False
 
+    live_dirty_identity = deepcopy(recorded_dirty["metadata"]["identity_after"])
+    monkeypatch.setattr(benchmark, "capture_identity", lambda _repo_root: deepcopy(live_dirty_identity))
     repo_root = Path(__file__).resolve().parents[1]
     local = validate_artifact(forged, repo_root=repo_root)
     assert local["repository_verified"] is False

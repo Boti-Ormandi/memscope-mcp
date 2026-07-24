@@ -11,7 +11,7 @@ Release timing gates use only those end-to-end production calls. Conversion-only
 
 ## Profiles
 
-Run the bounded dirty-tree smoke diagnostic:
+Run the bounded smoke diagnostic:
 
 ```powershell
 python -m benchmarks.netcap.buffer_search `
