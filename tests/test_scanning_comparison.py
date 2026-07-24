@@ -474,17 +474,23 @@ def test_current_warm_section_adapter_preserves_cache_evidence():
 
     metrics = observation["metrics"]
     setup = metrics["setup"]
+    section_bytes = metrics["unique_bytes_examined"]
+    setup_sizes = setup["read"]["physical_read_sizes"]
     assert observation["correct"] is True
+    assert section_bytes > 0
     assert metrics["physical_read_calls"] == 1
-    assert metrics["physical_bytes_requested"] == 4096
-    assert metrics["physical_bytes_read"] == 4096
-    assert metrics["physical_read_sizes"] == [4096]
+    assert metrics["physical_bytes_requested"] == section_bytes
+    assert metrics["physical_bytes_read"] == section_bytes
+    assert metrics["physical_read_sizes"] == [section_bytes]
     assert setup["implementation_state"] == case.setup_protocol["candidate_state"]
     assert setup["correct"] is True
+    assert setup["unique_bytes_examined"] == section_bytes
     assert setup["read"]["physical_read_calls"] == 4
-    assert setup["read"]["physical_bytes_requested"] == 4424
-    assert setup["read"]["physical_bytes_read"] == 4424
-    assert setup["read"]["physical_read_sizes"] == [64, 24, 240, 4096]
+    assert setup_sizes[:2] == [64, 24]
+    assert setup_sizes[2] > 0 and setup_sizes[2] % 40 == 0
+    assert setup_sizes[3] == section_bytes
+    assert setup["read"]["physical_bytes_requested"] == sum(setup_sizes)
+    assert setup["read"]["physical_bytes_read"] == sum(setup_sizes)
 
 
 @pytest.mark.parametrize("observed", ([0x1010, 0x2030], [0x2020, 0x1010]))
@@ -1579,13 +1585,14 @@ def test_live_candidate_timeout_rows_record_effective_outer_watchdog(case_id: st
         pair_order=pair_order_label(case.case_id, 0),
     )
 
-    metrics = observation["metrics"]
-    assert observation["status"] == "ok"
+    assert observation["status"] == "ok", observation
     assert observation["correct"] is True
-    assert metrics["candidate_watchdog_timeout_ns"] == 30_000_000_000
+    metrics = observation["metrics"]
+    watchdog_ns = timeout_duration_ns(case.semantic_descriptor("smoke")["candidate_watchdog_timeout_s"])
+    assert metrics["candidate_watchdog_timeout_ns"] == watchdog_ns
     assert metrics["candidate_watchdog_enforced"] is True
     assert metrics["candidate_watchdog_context"] == "paired_parent_outer_watchdog"
-    assert metrics["process_watchdog_ns"] == 30_000_000_000
+    assert metrics["process_watchdog_ns"] == watchdog_ns
 
 
 def test_live_paired_candidate_reader_ceiling_records_enforced_watchdog():

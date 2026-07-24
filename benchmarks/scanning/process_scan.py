@@ -736,6 +736,7 @@ def _measure_case_once(
         query_memory=io.query_memory,
         read_memory=io.read_memory,
         section_cache=section_cache,
+        clock=time.perf_counter_ns,
     )
     request = _scan_request(case, metadata)
 

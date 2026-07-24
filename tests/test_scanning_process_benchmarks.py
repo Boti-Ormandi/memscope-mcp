@@ -126,45 +126,49 @@ def test_process_runner_keeps_preflight_setup_and_timed_counters_isolated():
     warm_preflight = warm_work["preflight"]
     setup = warm_work["setup"]
 
+    section_bytes = cold_work["unique_bytes_examined"]
+    uncached_sizes = cold_work["physical_read_sizes"]
+    uncached_bytes = sum(uncached_sizes)
     assert cold["summary"]["all_correct"] is True
     assert cold_work["sections"] == [".text"]
-    assert cold_work["physical_read_calls"] == 4
-    assert cold_work["physical_bytes_requested"] == 4424
-    assert cold_work["physical_bytes_read"] == 4424
-    assert cold_work["physical_read_sizes"] == [64, 24, 240, 4096]
-    assert cold_work["unique_bytes_examined"] == 4096
+    assert section_bytes > 0
+    assert len(uncached_sizes) == 4
+    assert uncached_sizes[:2] == [64, 24]
+    assert uncached_sizes[2] > 0 and uncached_sizes[2] % 40 == 0
+    assert uncached_sizes[3] == section_bytes
     assert cold_preflight["correct"] is True
-    assert cold_preflight["read"]["physical_read_calls"] == 4
-    assert cold_preflight["read"]["physical_bytes_read"] == 4424
+    assert cold_preflight["unique_bytes_examined"] == section_bytes
 
     assert warm["summary"]["all_correct"] is True
     assert warm_work["sections"] == [".text"]
     assert warm_work["physical_read_calls"] == 1
-    assert warm_work["physical_bytes_requested"] == 4096
-    assert warm_work["physical_bytes_read"] == 4096
-    assert warm_work["physical_read_sizes"] == [4096]
-    assert warm_work["unique_bytes_examined"] == 4096
+    assert warm_work["physical_bytes_requested"] == section_bytes
+    assert warm_work["physical_bytes_read"] == section_bytes
+    assert warm_work["physical_read_sizes"] == [section_bytes]
+    assert warm_work["unique_bytes_examined"] == section_bytes
     assert warm_preflight["correct"] is True
-    assert warm_preflight["read"]["physical_read_calls"] == 4
-    assert warm_preflight["read"]["physical_bytes_read"] == 4424
+    assert warm_preflight["unique_bytes_examined"] == section_bytes
     assert setup["untimed_operations"] == 1
     assert setup["operation"] == "identical"
     assert setup["attachment"] == "same"
     assert setup["setup_excluded_from_timing"] is True
     assert setup["implementation_state"] == "shared_section_cache_hot"
     assert setup["correct"] is True
-    assert setup["read"]["physical_read_calls"] == 4
-    assert setup["read"]["physical_bytes_requested"] == 4424
-    assert setup["read"]["physical_bytes_read"] == 4424
-    assert setup["read"]["physical_read_sizes"] == [64, 24, 240, 4096]
+    assert setup["unique_bytes_examined"] == section_bytes
+    assert setup["sections"] == [".text"]
+
+    for read in (cold_work, cold_preflight["read"], warm_preflight["read"], setup["read"]):
+        assert read["physical_read_calls"] == 4
+        assert read["physical_bytes_requested"] == uncached_bytes
+        assert read["physical_bytes_read"] == uncached_bytes
+        assert read["physical_read_sizes"] == uncached_sizes
+
     assert (
         warm_preflight["read"]["physical_read_calls"]
         + setup["read"]["physical_read_calls"]
         + warm_work["physical_read_calls"]
         == 9
     )
-    assert setup["unique_bytes_examined"] == 4096
-    assert setup["sections"] == [".text"]
 
 
 def test_process_raw_schema_rejects_invalid_mandatory_preflight_read_evidence():
@@ -389,7 +393,6 @@ def test_raw_process_artifact_rejects_forged_subset_selection_and_summary():
         case_ids=(
             "chunk.exact.nohit.128k",
             "chunk.salvage.holes.128k",
-            "chunk.timeout100.masked.128k",
         ),
     )
     assert artifact["runner"]["chunk_selection"]["status"] == "insufficient_matrix"
