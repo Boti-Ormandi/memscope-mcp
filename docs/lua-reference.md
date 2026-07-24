@@ -377,6 +377,8 @@ bufferContains(data, pattern)          -- boolean
 bufferFindAll(data, pattern)           -- table of offsets
 ```
 
+Search inputs are dense, 1-indexed sequences. Reading stops at the first missing or `nil` element, and each retained value is converted to an integer; conversion errors propagate. Arbitrary converted integers retain exact legacy comparison semantics. Values in the range `0` through `255` use the byte-search fast path, while other integers use the exact legacy fallback. Returned offsets are 1-indexed. `bufferFindAll` includes overlapping matches in ascending order. An empty pattern matches every boundary: `bufferFind` returns `1`, `bufferContains` returns `true`, and `bufferFindAll` returns offsets `1` through the converted data length plus `1`.
+
 ### Stream assembly
 
 ```lua

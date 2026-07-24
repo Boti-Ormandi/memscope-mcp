@@ -154,6 +154,7 @@ AF_INET6 = 23
 
 WSABUF_LEN_OFFSET = 0  # uint32
 WSABUF_BUF_OFFSET = 8  # pointer (uint64)
+_BUFFER_FIND_ALL_LIST_LIMIT = 64
 
 
 # ==================== Helpers ====================
@@ -1389,10 +1390,21 @@ for known function prologues.
         data_list = _lua_table_to_list(data)
         pat_list = _lua_table_to_list(pattern)
         pat_len = len(pat_list)
-        for i in range(len(data_list) - pat_len + 1):
-            if data_list[i : i + pat_len] == pat_list:
-                return i + 1  # 1-indexed
-        return None
+
+        if data_list[:pat_len] == pat_list:
+            return 1
+
+        try:
+            data_bytes = bytes(data_list)
+            pat_bytes = bytes(pat_list)
+        except (ValueError, OverflowError):
+            for i in range(1, len(data_list) - pat_len + 1):
+                if data_list[i : i + pat_len] == pat_list:
+                    return i + 1
+            return None
+
+        offset = data_bytes.find(pat_bytes, 1)
+        return offset + 1 if offset >= 0 else None
 
     def _buffer_contains(self, data, pattern):
         """bufferContains(data, pattern_bytes) -> bool"""
@@ -1403,10 +1415,30 @@ for known function prologues.
         data_list = _lua_table_to_list(data)
         pat_list = _lua_table_to_list(pattern)
         pat_len = len(pat_list)
-        offsets = []
-        for i in range(len(data_list) - pat_len + 1):
-            if data_list[i : i + pat_len] == pat_list:
-                offsets.append(i + 1)
+
+        if len(data_list) <= _BUFFER_FIND_ALL_LIST_LIMIT:
+            offsets = [i + 1 for i in range(len(data_list) - pat_len + 1) if data_list[i : i + pat_len] == pat_list]
+            return self._table(*offsets) if offsets else self._table()
+
+        try:
+            data_bytes = bytes(data_list)
+            pat_bytes = bytes(pat_list)
+        except (ValueError, OverflowError):
+            offsets = [i + 1 for i in range(len(data_list) - pat_len + 1) if data_list[i : i + pat_len] == pat_list]
+            return self._table(*offsets) if offsets else self._table()
+
+        if not pat_bytes:
+            offsets = list(range(1, len(data_bytes) + 2))
+        else:
+            offsets = []
+            start = 0
+            while True:
+                offset = data_bytes.find(pat_bytes, start)
+                if offset < 0:
+                    break
+                offsets.append(offset + 1)
+                start = offset + 1
+
         return self._table(*offsets) if offsets else self._table()
 
     # ==================== Stream Assembly ====================
