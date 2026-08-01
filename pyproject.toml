@@ -38,7 +38,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff>=0.15,<0.16", "pre-commit"]
+dev = ["pytest", "ruff>=0.15,<0.17", "pre-commit"]
 
 [project.urls]
 Repository = "https://github.com/Boti-Ormandi/memscope-mcp"
