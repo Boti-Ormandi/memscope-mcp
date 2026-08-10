@@ -32,7 +32,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: git switch -c "pr-${{ github.event.pull_request.number }}"
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
