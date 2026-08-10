@@ -10,7 +10,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: astral-sh/ruff-action@v4.0.0
         with:
@@ -27,7 +27,7 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Name pull request checkout for benchmark identity
         if: github.event_name == 'pull_request'
         run: git switch -c "pr-${{ github.event.pull_request.number }}"
