@@ -40,7 +40,7 @@ jobs:
       - name: Name tag checkout for benchmark identity
         if: startsWith(github.ref, 'refs/tags/')
         run: git switch -c "release-${{ github.ref_name }}"
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Install build tools
