@@ -9,11 +9,9 @@ import logging
 import time
 from typing import Any, Optional
 
-from mcp.server.fastmcp import FastMCP
-
 from .extensions.bootstrap import bootstrap_extensions
 from .instructions import build_instructions
-from .scanning.boundary import register_strict_model_tool
+from .scanning.boundary import MemscopeMCPServer, StrictModelToolSpec
 from .scanning.contract import (
     ScanInput,
     ScanManyInput,
@@ -48,7 +46,7 @@ _extensions = bootstrap_extensions(LUA_ENGINE, SESSION)
 _instructions = build_instructions(_extensions)
 
 # Initialize MCP server with instructions
-mcp = FastMCP(
+mcp = MemscopeMCPServer(
     "memscope-mcp",
     instructions=f"""{_instructions}
 
@@ -572,17 +570,18 @@ async def _scan_handler(request: ScanInput, _context) -> ScanResponse:
     return response
 
 
-register_strict_model_tool(
-    mcp,
-    name="scan",
-    description=(
-        "Scan target memory with strict AOB patterns. Supports address pages with authenticated cursor "
-        "continuation, first-hit mode, count mode, structured scopes, planner filters, and bounded diagnostics."
-    ),
-    input_model=ScanInput,
-    output_model=ScanResponse,
-    handler=_scan_handler,
-    validation_failure_mapper=scan_input_validation_failure,
+mcp.add_strict_model_tool(
+    StrictModelToolSpec(
+        name="scan",
+        description=(
+            "Scan target memory with strict AOB patterns. Supports address pages with authenticated cursor "
+            "continuation, first-hit mode, count mode, structured scopes, planner filters, and bounded diagnostics."
+        ),
+        input_model=ScanInput,
+        output_model=ScanResponse,
+        handler=_scan_handler,
+        validation_failure_mapper=scan_input_validation_failure,
+    )
 )
 
 
@@ -625,17 +624,18 @@ async def _scan_many_handler(request: ScanManyInput, _context) -> ScanManyRespon
     return response
 
 
-register_strict_model_tool(
-    mcp,
-    name="scan_many",
-    description=(
-        "Scan 1-32 keyed AOB patterns in one shared target-memory traversal. Supports only bounded "
-        "first-hit and count modes, structured scopes, PE-section filters, and shared diagnostics."
-    ),
-    input_model=ScanManyInput,
-    output_model=ScanManyResponse,
-    handler=_scan_many_handler,
-    validation_failure_mapper=scan_many_input_validation_failure,
+mcp.add_strict_model_tool(
+    StrictModelToolSpec(
+        name="scan_many",
+        description=(
+            "Scan 1-32 keyed AOB patterns in one shared target-memory traversal. Supports only bounded "
+            "first-hit and count modes, structured scopes, PE-section filters, and shared diagnostics."
+        ),
+        input_model=ScanManyInput,
+        output_model=ScanManyResponse,
+        handler=_scan_many_handler,
+        validation_failure_mapper=scan_many_input_validation_failure,
+    )
 )
 
 
@@ -769,7 +769,7 @@ def main():
     print(f"[memscope] data dir: {_MEMSCOPE_HOME}", file=sys.stderr)
 
     try:
-        mcp.run()
+        mcp.run(transport="stdio")
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:

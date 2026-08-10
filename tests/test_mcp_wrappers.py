@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from mcp.types import CallToolResult
 
 import memscope_mcp.server as server
 from memscope_mcp.scanning.contract import AddressScanSuccess, ScanHit, ScanResponse, ScanStatus
@@ -11,6 +12,13 @@ from memscope_mcp.scanning.contract import AddressScanSuccess, ScanHit, ScanResp
 @pytest.fixture(autouse=True)
 def disable_session_logging(monkeypatch):
     monkeypatch.setattr(server, "_log", lambda _tool, _args, result, _start_time: result)
+
+
+def _call_tool_structured(name: str, arguments: dict) -> dict:
+    result = asyncio.run(server.mcp.call_tool(name, arguments))
+    assert isinstance(result, CallToolResult)
+    assert isinstance(result.structured_content, dict)
+    return result.structured_content
 
 
 def _empty_scan_response() -> ScanResponse:
@@ -38,7 +46,7 @@ def test_registered_scan_uses_strict_async_executor_and_redacted_logging(monkeyp
     monkeypatch.setattr(server, "execute_scan_async", fake_execute)
     monkeypatch.setattr(server.LOGGER, "log", lambda *args: logs.append(args))
 
-    _content, structured = asyncio.run(server.mcp.call_tool("scan", {"pattern": "48 8B ??"}))
+    structured = _call_tool_structured("scan", {"pattern": "48 8B ??"})
 
     assert structured["success"] is True
     assert len(calls) == 1
@@ -94,7 +102,7 @@ def test_registered_scan_rejects_removed_fields_before_execution(monkeypatch):
 
     monkeypatch.setattr(server, "execute_scan_async", fake_execute)
 
-    _content, structured = asyncio.run(server.mcp.call_tool("scan", {"pattern": "48 8B ??", "offset": 1}))
+    structured = _call_tool_structured("scan", {"pattern": "48 8B ??", "offset": 1})
 
     assert structured == {
         "success": False,

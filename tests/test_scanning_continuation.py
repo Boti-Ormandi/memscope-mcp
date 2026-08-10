@@ -10,9 +10,9 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult
 
-from memscope_mcp.scanning.boundary import register_strict_model_tool
+from memscope_mcp.scanning.boundary import MemscopeMCPServer, StrictModelToolSpec
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
     CountScanSuccess,
@@ -441,24 +441,25 @@ def test_cursor_rejects_oversized_malformed_and_unknown_token_versions():
         assert captured.value.error == "INVALID_CURSOR"
 
 
-def test_real_fastmcp_boundary_runs_the_async_executor_without_route_specific_mutation():
+def test_mcp_boundary_runs_async_executor_through_continuation():
     executor, _session, _reads = make_executor(b"AAAA")
-    server = FastMCP("scan-execution-test")
+    server = MemscopeMCPServer("scan-execution-test")
 
     async def handler(request, _context):
         return await execute_scan_async(executor, request)
 
-    register_strict_model_tool(
-        server,
-        name="scan",
-        description="Internal scan execution proof",
-        input_model=ScanInput,
-        output_model=ScanResponse,
-        handler=handler,
-        validation_failure_mapper=scan_input_validation_failure,
+    server.add_strict_model_tool(
+        StrictModelToolSpec(
+            name="scan",
+            description="Internal scan execution proof",
+            input_model=ScanInput,
+            output_model=ScanResponse,
+            handler=handler,
+            validation_failure_mapper=scan_input_validation_failure,
+        )
     )
 
-    first_result_value = asyncio.run(
+    first_result = asyncio.run(
         server.call_tool(
             "scan",
             {
@@ -468,14 +469,18 @@ def test_real_fastmcp_boundary_runs_the_async_executor_without_route_specific_mu
             },
         )
     )
-    _first_content, first_structured = first_result_value
+    assert isinstance(first_result, CallToolResult)
+    assert isinstance(first_result.structured_content, dict)
+    first_structured = first_result.structured_content
     assert first_structured["matches"] == [
         {"address": "0x1000", "module": None, "module_offset": None},
         {"address": "0x1001", "module": None, "module_offset": None},
     ]
     assert first_structured["next_cursor"] is not None
 
-    second_result_value = asyncio.run(server.call_tool("scan", {"cursor": first_structured["next_cursor"], "limit": 2}))
-    _second_content, second_structured = second_result_value
+    second_result = asyncio.run(server.call_tool("scan", {"cursor": first_structured["next_cursor"], "limit": 2}))
+    assert isinstance(second_result, CallToolResult)
+    assert isinstance(second_result.structured_content, dict)
+    second_structured = second_result.structured_content
     assert [item["address"] for item in second_structured["matches"]] == ["0x1002", "0x1003"]
     assert second_structured["sequence_returned_count"] == 4

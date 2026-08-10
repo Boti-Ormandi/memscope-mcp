@@ -2306,7 +2306,7 @@ def _strict_unknown_observation(
         "metrics": {
             "strict_unknown_rejection": strict,
             "historical_signature": "(pattern: str) -> dict" if implementation == "before" else None,
-            "committed_public_case_id": "public.fastmcp.strict_flat_contract" if strict else None,
+            "committed_public_case_id": "public.mcpserver.strict_flat_contract" if strict else None,
             "committed_public_fingerprint": "f" * 64 if strict else None,
         },
         "wall_duration_ns": 1_000_000,

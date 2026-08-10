@@ -1,4 +1,4 @@
-"""Deterministic FastMCP, Lua, formatting, and clean-break scanning evidence."""
+"""Deterministic MCPServer, Lua, formatting, and clean-break scanning evidence."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 
-from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult
 
 from benchmarks.scanning import BENCHMARK_SCHEMA_VERSION, CORPUS_VERSION, MANIFEST_VERSION
 from benchmarks.scanning.common import (
@@ -28,7 +28,7 @@ from benchmarks.scanning.common import (
     write_raw_artifact,
 )
 from memscope_mcp.extensions.core.module_scan import ModuleScanExtension
-from memscope_mcp.scanning.boundary import register_strict_model_tool
+from memscope_mcp.scanning.boundary import MemscopeMCPServer, StrictModelToolSpec
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
     CountScanSuccess,
@@ -90,10 +90,10 @@ class EvidenceCase:
 
 CASES: tuple[EvidenceCase, ...] = (
     EvidenceCase(
-        "public.fastmcp.strict_flat_contract",
-        "FastMCP",
+        "public.mcpserver.strict_flat_contract",
+        "MCPServer",
         "new_capability",
-        "The real FastMCP boundary rejects unknown fields before the handler and returns flat structured unions.",
+        "The public MCPServer boundary rejects unknown fields before the handler and returns flat structured unions.",
     ),
     EvidenceCase(
         "public.output.formatting_sizes",
@@ -252,9 +252,9 @@ def _run_case(
     }
 
 
-def _fastmcp_contract(_repo_root: Path) -> dict[str, Any]:
+def _mcpserver_contract(_repo_root: Path) -> dict[str, Any]:
     calls: list[ScanInput] = []
-    server = FastMCP("scanning-public-evidence")
+    server = MemscopeMCPServer("scanning-public-evidence")
 
     async def handler(request: ScanInput, _context):
         calls.append(request)
@@ -283,24 +283,25 @@ def _fastmcp_contract(_repo_root: Path) -> dict[str, Any]:
             status=ScanStatus(termination="scope_exhausted", read_gaps_detected=False),
         )
 
-    register_strict_model_tool(
-        server,
-        name="scan",
-        description="Strict scanning evidence tool",
-        input_model=ScanInput,
-        output_model=ScanResponse,
-        handler=handler,
-        validation_failure_mapper=scan_input_validation_failure,
+    server.add_strict_model_tool(
+        StrictModelToolSpec(
+            name="scan",
+            description="Strict scanning evidence tool",
+            input_model=ScanInput,
+            output_model=ScanResponse,
+            handler=handler,
+            validation_failure_mapper=scan_input_validation_failure,
+        )
     )
 
     async def scenario() -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
         tools = await server.list_tools()
         if len(tools) != 1:
-            raise EvidenceFailure("FastMCP evidence server registered an unexpected tool set")
+            raise EvidenceFailure("MCPServer evidence server registered an unexpected tool set")
         tool = tools[0]
         invalid_result = await server.call_tool("scan", {"pattern": "AA", "legacy": True})
         if len(calls) != 0:
-            raise EvidenceFailure("unknown FastMCP input reached the handler")
+            raise EvidenceFailure("unknown MCPServer input reached the handler")
         outputs: list[dict[str, Any]] = []
         for arguments in (
             {"pattern": "AA"},
@@ -308,14 +309,12 @@ def _fastmcp_contract(_repo_root: Path) -> dict[str, Any]:
             {"pattern": "AA", "mode": "count"},
         ):
             result = await server.call_tool("scan", arguments)
-            if not isinstance(result, tuple):
-                raise EvidenceFailure("FastMCP call did not return structured content")
-            _content, structured = result
-            outputs.append(structured)
-        if not isinstance(invalid_result, tuple):
-            raise EvidenceFailure("FastMCP invalid call did not return structured content")
-        _invalid_content, invalid_structured = invalid_result
-        return invalid_structured, outputs, tool.inputSchema, tool.outputSchema
+            if not isinstance(result, CallToolResult) or not isinstance(result.structured_content, dict):
+                raise EvidenceFailure("MCPServer call did not return structured content")
+            outputs.append(result.structured_content)
+        if not isinstance(invalid_result, CallToolResult) or not isinstance(invalid_result.structured_content, dict):
+            raise EvidenceFailure("MCPServer invalid call did not return structured content")
+        return invalid_result.structured_content, outputs, tool.input_schema, tool.output_schema or {}
 
     started = time.perf_counter_ns()
     invalid, outputs, input_schema, output_schema = asyncio.run(scenario())
@@ -346,12 +345,12 @@ def _fastmcp_contract(_repo_root: Path) -> dict[str, Any]:
         and [output.get("mode") for output in outputs] == ["addresses", "first", "count"]
     )
     if not correct:
-        raise EvidenceFailure("FastMCP strict flat-contract evidence differs from the expected boundary")
+        raise EvidenceFailure("MCPServer strict flat-contract evidence differs from the expected boundary")
     return {
         "duration_ns": duration_ns,
         "throughput_mib_s": 0.0,
         "corpus": {
-            "kind": "fastmcp-in-memory",
+            "kind": "mcpserver-in-memory",
             "input_schema_sha256": sha256_json(input_schema),
             "output_schema_sha256": sha256_json(output_schema),
         },
@@ -709,7 +708,7 @@ def _make_executor(
 
 
 _EXERCISES: dict[str, Callable[[Path], dict[str, Any]]] = {
-    "public.fastmcp.strict_flat_contract": _fastmcp_contract,
+    "public.mcpserver.strict_flat_contract": _mcpserver_contract,
     "public.output.formatting_sizes": _formatting_sizes,
     "public.lua.normalization_and_formatting": _lua_normalization,
     "public.lua.serialized_runtime": _lua_serialization,

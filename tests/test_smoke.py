@@ -1,5 +1,14 @@
 """Smoke tests - verify imports, tool registration, and engine initialization."""
 
+import asyncio
+import inspect
+
+
+def _registered_tool_names() -> list[str]:
+    from memscope_mcp.server import mcp
+
+    return [tool.name for tool in asyncio.run(mcp.list_tools())]
+
 
 def test_server_imports():
     """All server modules load without error."""
@@ -8,17 +17,13 @@ def test_server_imports():
 
 def test_tool_count():
     """Server registers exactly 11 MCP tools."""
-    from memscope_mcp.server import mcp
-
-    tools = mcp._tool_manager._tools
-    assert len(tools) == 11, f"Expected 11 tools, got {len(tools)}: {sorted(tools.keys())}"
+    tools = _registered_tool_names()
+    assert len(tools) == 11, f"Expected 11 tools, got {len(tools)}: {tools}"
 
 
 def test_tool_names():
     """All expected tools are registered."""
-    from memscope_mcp.server import mcp
-
-    tools = set(mcp._tool_manager._tools.keys())
+    tools = set(_registered_tool_names())
     expected = {
         "processes",
         "attach",
@@ -33,6 +38,14 @@ def test_tool_names():
         "scripts",
     }
     assert tools == expected, f"Tool mismatch. Missing: {expected - tools}, Extra: {tools - expected}"
+
+
+def test_ordinary_tool_functions_remain_directly_synchronous():
+    """Business functions stay synchronous even though their MCP registration is async-wrapped."""
+    import memscope_mcp.server as server
+
+    ordinary_tools = ("processes", "attach", "modules", "read", "write", "dump", "chain", "lua", "scripts")
+    assert all(not inspect.iscoroutinefunction(getattr(server, name)) for name in ordinary_tools)
 
 
 def test_lua_engine_initializes():

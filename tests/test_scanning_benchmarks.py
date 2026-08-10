@@ -279,7 +279,7 @@ def test_raw_artifact_rejects_forged_summary_and_observation_correctness():
     ("runner", "case_id"),
     (
         (run_engine_suite, "control.in_band_cancellation"),
-        (run_public_api_suite, "public.fastmcp.strict_flat_contract"),
+        (run_public_api_suite, "public.mcpserver.strict_flat_contract"),
     ),
 )
 def test_deterministic_raw_suites_reject_rehashed_expected_mutation(runner, case_id: str):

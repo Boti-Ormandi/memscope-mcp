@@ -1196,7 +1196,7 @@ def _run_strict_unknown(
             warmups=0,
             repetitions=1,
             implementation_label="after",
-            case_ids=("public.fastmcp.strict_flat_contract",),
+            case_ids=("public.mcpserver.strict_flat_contract",),
         )["cases"][0]
         try:
             ScanInput.model_validate({"pattern": "AA", "unknown_field": True})

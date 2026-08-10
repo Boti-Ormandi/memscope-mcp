@@ -704,7 +704,7 @@ def _validate_ok_observation_metric_contract(
             raise ValueError("historical strict-validation capability metrics are invalid")
     elif (
         metrics.get("historical_signature") is not None
-        or metrics.get("committed_public_case_id") != "public.fastmcp.strict_flat_contract"
+        or metrics.get("committed_public_case_id") != "public.mcpserver.strict_flat_contract"
         or not _sha256_value(metrics.get("committed_public_fingerprint"))
     ):
         raise ValueError("candidate strict-validation capability metrics are invalid")

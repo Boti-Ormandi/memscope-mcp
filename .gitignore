@@ -47,3 +47,4 @@ scripts/*/
 .mcp.json
 .claude/
 .pi/
+/.agents/

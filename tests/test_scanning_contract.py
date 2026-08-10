@@ -1,23 +1,29 @@
-"""Strict scan contract and FastMCP boundary tests."""
+"""Strict scan contract and public MCPServer boundary tests."""
 
 import asyncio
+import inspect
 import json
+import threading
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent
 from pydantic import ValidationError
 
 import memscope_mcp.server as public_server
-from memscope_mcp.scanning.boundary import register_strict_model_tool
+from memscope_mcp.scanning.boundary import MemscopeMCPServer, StrictModelToolSpec
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
     CountScanSuccess,
+    FirstScanManyItem,
+    FirstScanManySuccess,
     FirstScanSuccess,
     LuaScanFailure,
     ScanFailure,
     ScanHit,
     ScanInput,
+    ScanManyResponse,
+    ScanManyShared,
     ScanResponse,
     ScanStatus,
     scan_input_validation_failure,
@@ -26,15 +32,18 @@ from memscope_mcp.scanning.contract import (
 SNAPSHOT_DIR = Path(__file__).with_name("snapshots")
 
 
-def _call(server: FastMCP, arguments: dict) -> dict:
+def _call(server: MemscopeMCPServer, arguments: dict) -> dict:
     result = asyncio.run(server.call_tool("scan", arguments))
-    assert isinstance(result, tuple)
-    _content, structured = result
-    return structured
+    assert isinstance(result, CallToolResult)
+    assert isinstance(result.structured_content, dict)
+    assert len(result.content) == 1
+    assert isinstance(result.content[0], TextContent)
+    assert json.loads(result.content[0].text) == result.structured_content
+    return result.structured_content
 
 
-def _make_server(calls: list[ScanInput]) -> FastMCP:
-    server = FastMCP("scan-contract-test")
+def _make_server(calls: list[ScanInput]) -> MemscopeMCPServer:
+    server = MemscopeMCPServer("scan-contract-test")
 
     async def handler(request: ScanInput, _context):
         calls.append(request)
@@ -65,14 +74,15 @@ def _make_server(calls: list[ScanInput]) -> FastMCP:
             status=ScanStatus(termination="scope_exhausted", read_gaps_detected=False),
         )
 
-    register_strict_model_tool(
-        server,
-        name="scan",
-        description="Strict scan contract test tool",
-        input_model=ScanInput,
-        output_model=ScanResponse,
-        handler=handler,
-        validation_failure_mapper=scan_input_validation_failure,
+    server.add_strict_model_tool(
+        StrictModelToolSpec(
+            name="scan",
+            description="Strict scan contract test tool",
+            input_model=ScanInput,
+            output_model=ScanResponse,
+            handler=handler,
+            validation_failure_mapper=scan_input_validation_failure,
+        )
     )
     return server
 
@@ -81,28 +91,34 @@ def _load_snapshot(name: str) -> dict:
     return json.loads((SNAPSHOT_DIR / name).read_text(encoding="utf-8"))
 
 
+def _assert_output_schema_matches_snapshot(schema: dict | None, snapshot_name: str) -> None:
+    assert schema == _load_snapshot(snapshot_name)
+
+
 def test_supported_boundary_dependency_range_is_explicit():
     pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
 
-    assert '"mcp[cli]>=1.27,<1.28"' in pyproject
+    assert '"mcp>=2,<3"' in pyproject
+    assert "mcp[cli]" not in pyproject
     assert '"pydantic>=2.12,<3"' in pyproject
 
 
 def test_strict_boundary_requires_async_handlers():
-    server = FastMCP("sync-handler-test")
+    server = MemscopeMCPServer("sync-handler-test")
 
     def handler(_request, _context):
         return ScanFailure(error="INTERNAL_SCAN_ERROR", detail="not called")
 
     with pytest.raises(TypeError, match="must be async"):
-        register_strict_model_tool(
-            server,
-            name="scan",
-            description="test",
-            input_model=ScanInput,
-            output_model=ScanResponse,
-            handler=handler,
-            validation_failure_mapper=scan_input_validation_failure,
+        server.add_strict_model_tool(
+            StrictModelToolSpec(
+                name="scan",
+                description="test",
+                input_model=ScanInput,
+                output_model=ScanResponse,
+                handler=handler,
+                validation_failure_mapper=scan_input_validation_failure,
+            )
         )
 
 
@@ -113,25 +129,46 @@ def test_strict_boundary_rejects_duplicate_tool_names():
         return ScanFailure(error="INTERNAL_SCAN_ERROR", detail="not called")
 
     with pytest.raises(ValueError, match="Tool already exists"):
-        register_strict_model_tool(
-            server,
-            name="scan",
-            description="test",
-            input_model=ScanInput,
-            output_model=ScanResponse,
-            handler=handler,
-            validation_failure_mapper=scan_input_validation_failure,
+        server.add_strict_model_tool(
+            StrictModelToolSpec(
+                name="scan",
+                description="test",
+                input_model=ScanInput,
+                output_model=ScanResponse,
+                handler=handler,
+                validation_failure_mapper=scan_input_validation_failure,
+            )
         )
 
 
-def test_real_fastmcp_scan_schemas_match_snapshots():
+def test_sync_tool_registration_runs_on_the_request_thread_without_changing_the_function():
+    server = MemscopeMCPServer("same-thread-test")
+    request_thread = threading.get_ident()
+
+    @server.tool()
+    def thread_probe(value: int = 7) -> dict:
+        return {"thread": threading.get_ident(), "value": value}
+
+    assert inspect.iscoroutinefunction(thread_probe) is False
+    assert thread_probe(3) == {"thread": request_thread, "value": 3}
+
+    result = asyncio.run(server.call_tool("thread_probe", {"value": 9}))
+
+    assert isinstance(result, CallToolResult)
+    assert result.structured_content is None
+    assert isinstance(result.content[0], TextContent)
+    payload = json.loads(result.content[0].text)
+    assert payload == {"thread": request_thread, "value": 9}
+
+
+def test_mcpserver_scan_schemas_match_snapshots():
     server = _make_server([])
     tools = asyncio.run(server.list_tools())
 
     assert len(tools) == 1
-    assert tools[0].inputSchema == _load_snapshot("scan-input-schema.json")
-    assert tools[0].outputSchema == _load_snapshot("scan-output-schema.json")
-    assert set(tools[0].inputSchema["properties"]) == {
+    assert tools[0].input_schema == _load_snapshot("scan-input-schema.json")
+    _assert_output_schema_matches_snapshot(tools[0].output_schema, "scan-output-schema.json")
+    assert set(tools[0].input_schema["properties"]) == {
         "pattern",
         "scope",
         "mode",
@@ -141,25 +178,25 @@ def test_real_fastmcp_scan_schemas_match_snapshots():
         "diagnostics",
         "cursor",
     }
-    assert "result" not in tools[0].outputSchema.get("properties", {})
-    assert "anyOf" in tools[0].outputSchema
+    assert "result" not in tools[0].output_schema.get("properties", {})
+    assert "anyOf" in tools[0].output_schema
 
 
 def test_registered_public_scan_schemas_match_snapshots():
     tools = asyncio.run(public_server.mcp.list_tools())
     scan_tool = next(tool for tool in tools if tool.name == "scan")
 
-    assert scan_tool.inputSchema == _load_snapshot("scan-input-schema.json")
-    assert scan_tool.outputSchema == _load_snapshot("scan-output-schema.json")
+    assert scan_tool.input_schema == _load_snapshot("scan-input-schema.json")
+    _assert_output_schema_matches_snapshot(scan_tool.output_schema, "scan-output-schema.json")
 
 
 def test_registered_public_scan_many_schemas_match_snapshots():
     tools = asyncio.run(public_server.mcp.list_tools())
     scan_many_tool = next(tool for tool in tools if tool.name == "scan_many")
 
-    assert scan_many_tool.inputSchema == _load_snapshot("scan-many-input-schema.json")
-    assert scan_many_tool.outputSchema == _load_snapshot("scan-many-output-schema.json")
-    assert set(scan_many_tool.inputSchema["properties"]) == {
+    assert scan_many_tool.input_schema == _load_snapshot("scan-many-input-schema.json")
+    _assert_output_schema_matches_snapshot(scan_many_tool.output_schema, "scan-many-output-schema.json")
+    assert set(scan_many_tool.input_schema["properties"]) == {
         "patterns",
         "scope",
         "mode",
@@ -167,9 +204,113 @@ def test_registered_public_scan_many_schemas_match_snapshots():
         "timeout_ms",
         "diagnostics",
     }
-    assert "cursor" not in scan_many_tool.inputSchema["properties"]
-    assert "limit" not in scan_many_tool.inputSchema["properties"]
-    assert "anyOf" in scan_many_tool.outputSchema
+    assert "cursor" not in scan_many_tool.input_schema["properties"]
+    assert "limit" not in scan_many_tool.input_schema["properties"]
+    assert "anyOf" in scan_many_tool.output_schema
+
+
+def test_registered_public_scan_many_rejects_raw_invalid_inputs_before_execution(monkeypatch):
+    calls = []
+
+    async def fake_execute(_executor, request):
+        calls.append(request)
+        return ScanManyResponse.model_validate(
+            FirstScanManySuccess(
+                success=True,
+                mode="first",
+                results=[
+                    FirstScanManyItem(
+                        key=request.patterns[0].key,
+                        match=None,
+                        status=ScanStatus(termination="scope_exhausted", read_gaps_detected=False),
+                    )
+                ],
+                shared=ScanManyShared(termination="scope_exhausted", read_gaps_detected=False),
+            )
+        )
+
+    monkeypatch.setattr(public_server, "execute_scan_many_async", fake_execute)
+    monkeypatch.setattr(public_server.LOGGER, "log", lambda *_args: None)
+
+    invalid_cases = [
+        (
+            {"patterns": [{"key": "a", "pattern": "AA"}], "legacy": True},
+            {
+                "success": False,
+                "error": "INVALID_ARGUMENT",
+                "detail": "Unknown scan_many argument 'legacy'",
+                "field": "legacy",
+            },
+        ),
+        (
+            {"patterns": [{"key": "a", "pattern": "AA"}, {"key": "a", "pattern": "BB"}]},
+            {
+                "success": False,
+                "error": "INVALID_ARGUMENT",
+                "detail": "Batch pattern keys must be unique",
+                "field": "patterns[1].key",
+            },
+        ),
+        (
+            {"patterns": [{"key": "a", "pattern": "AA"}], "mode": "addresses"},
+            {
+                "success": False,
+                "error": "INVALID_MODE",
+                "detail": "Mode must be one of: first, count",
+                "field": "mode",
+            },
+        ),
+        (
+            {"patterns": [{"key": "a", "pattern": "AA"}], "mode": "first", "max_matches": 1},
+            {
+                "success": False,
+                "error": "INVALID_ARGUMENT",
+                "detail": "Mode 'first' does not accept 'max_matches'",
+                "field": "max_matches",
+            },
+        ),
+    ]
+
+    for arguments, expected in invalid_cases:
+        result = asyncio.run(public_server.mcp.call_tool("scan_many", arguments))
+        assert isinstance(result, CallToolResult)
+        assert result.structured_content == expected
+        assert len(result.content) == 1
+        assert isinstance(result.content[0], TextContent)
+        assert json.loads(result.content[0].text) == expected
+        assert result.is_error is False
+
+    assert calls == []
+
+    valid = asyncio.run(
+        public_server.mcp.call_tool(
+            "scan_many",
+            {"patterns": [{"key": "a", "pattern": "AA"}], "mode": "first"},
+        )
+    )
+    assert isinstance(valid, CallToolResult)
+    assert valid.structured_content == {
+        "success": True,
+        "mode": "first",
+        "results": [
+            {
+                "key": "a",
+                "match": None,
+                "status": {"termination": "scope_exhausted", "read_gaps_detected": False},
+            }
+        ],
+        "shared": {
+            "termination": "scope_exhausted",
+            "read_gaps_detected": False,
+            "diagnostics": None,
+        },
+    }
+    assert len(valid.content) == 1
+    assert isinstance(valid.content[0], TextContent)
+    assert json.loads(valid.content[0].text) == valid.structured_content
+    assert valid.is_error is False
+    assert len(calls) == 1
+    assert calls[0].patterns[0].key == "a"
 
 
 @pytest.mark.parametrize(
@@ -342,7 +483,7 @@ def test_public_bounds_and_nested_strictness_fail_before_handler(arguments, erro
         ),
     ],
 )
-def test_real_fastmcp_structured_content_uses_the_top_level_union(arguments, expected):
+def test_mcpserver_structured_content_uses_the_top_level_union(arguments, expected):
     server = _make_server([])
 
     assert _call(server, arguments) == expected

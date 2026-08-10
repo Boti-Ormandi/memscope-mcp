@@ -89,7 +89,7 @@ def test_engine_evidence_records_exact_cursor_batch_and_control_invariants(tmp_p
     assert read_raw_artifact(output) == artifact
 
 
-def test_public_evidence_records_strict_fastmcp_lua_formatting_and_clean_break(tmp_path):
+def test_public_evidence_records_strict_mcpserver_lua_formatting_and_clean_break(tmp_path):
     artifact = run_public_api_suite(
         repo_root=ROOT,
         profile="smoke",
@@ -101,11 +101,11 @@ def test_public_evidence_records_strict_fastmcp_lua_formatting_and_clean_break(t
     validate_raw_artifact(artifact)
     by_id = {case["case_id"]: case for case in artifact["cases"]}
 
-    fastmcp = by_id["public.fastmcp.strict_flat_contract"]["observations"][0]["work"]
-    assert fastmcp["unknown_rejected_before_handler"] is True
-    assert fastmcp["handler_calls"] == 3
-    assert fastmcp["flat_structured_union"] is True
-    assert fastmcp["modes"] == ["addresses", "first", "count"]
+    mcpserver = by_id["public.mcpserver.strict_flat_contract"]["observations"][0]["work"]
+    assert mcpserver["unknown_rejected_before_handler"] is True
+    assert mcpserver["handler_calls"] == 3
+    assert mcpserver["flat_structured_union"] is True
+    assert mcpserver["modes"] == ["addresses", "first", "count"]
 
     formatting = by_id["public.output.formatting_sizes"]["observations"][0]["work"]
     sizes = formatting["serialized_bytes"]

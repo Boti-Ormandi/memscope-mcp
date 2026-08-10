@@ -1,4 +1,4 @@
-﻿# Scanning Engine and Adapter Evidence
+# Scanning Engine and Adapter Evidence
 
 The scanning benchmark package includes deterministic evidence runners for contracts that are more useful as exact invariants than as noisy timing comparisons.
 
@@ -26,7 +26,7 @@ The artifact records:
 
 ## Public adapter evidence
 
-Run the FastMCP, output-formatting, Lua, and clean-break cases with:
+Run the MCPServer, output-formatting, Lua, and clean-break cases with:
 
 ```powershell
 python -m benchmarks.scanning.public_api `
@@ -38,7 +38,7 @@ python -m benchmarks.scanning.public_api `
 
 The artifact records:
 
-- rejection of unknown FastMCP fields before handler invocation;
+- rejection of unknown MCPServer fields before handler invocation;
 - the flat structured response union and registered input/output schema hashes;
 - serialization sizes for supported retained-result counts;
 - Lua named-table normalization, result metadata, batch ordering, and stable error tuples;

@@ -446,5 +446,6 @@
       "$ref": "#/$defs/ScanFailure"
     }
   ],
-  "title": "ScanManyResponse"
+  "title": "ScanManyResponse",
+  "type": "object"
 }
