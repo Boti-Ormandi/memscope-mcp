@@ -31,7 +31,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "mcp[cli]>=1.27,<1.28",
+    "mcp[cli]>=1.27,<2.1",
     "pydantic>=2.12,<3",
     'pymem>=1.13.0; sys_platform == "win32"',
     "lupa>=2.0",
