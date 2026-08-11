@@ -29,7 +29,6 @@ from memscope_mcp.scanning.model import (
     SearchWindow,
     TerminationReason,
 )
-from memscope_mcp.scanning.oracle import find_oracle_matches, parse_oracle_pattern
 from memscope_mcp.scanning.pattern import (
     PatternCompileError,
     PatternErrorReason,
@@ -40,6 +39,7 @@ from memscope_mcp.scanning.pattern import (
     make_aob_query,
     make_exact_query,
 )
+from tests.scanning_oracle import find_oracle_matches, parse_oracle_pattern
 
 
 @pytest.mark.parametrize(

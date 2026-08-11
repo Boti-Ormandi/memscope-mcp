@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from memscope_mcp.scanning.oracle import find_oracle_matches, parse_oracle_pattern
+from tests.scanning_oracle import find_oracle_matches, parse_oracle_pattern
 
 
 @pytest.mark.parametrize(
