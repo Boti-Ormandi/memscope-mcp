@@ -8,8 +8,9 @@ from dataclasses import dataclass
 import pymem.exception
 import pymem.memory
 
-from memscope_mcp.scanning.lifecycle import ScanLease, bind_scan_control
-from memscope_mcp.scanning.model import ModuleRecord, ScanControl, TerminationReason
+from memscope_mcp.attachment import ModuleRecord, ScanLease
+from memscope_mcp.scanning.lifecycle import bind_scan_control
+from memscope_mcp.scanning.model import ScanControl, TerminationReason
 from memscope_mcp.scanning.scopes import MemoryType, PermissionRequirement, ScanScope, ScopeKind
 from memscope_mcp.scanning.sections import (
     ReadMemory,

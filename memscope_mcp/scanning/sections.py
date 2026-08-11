@@ -9,8 +9,8 @@ from dataclasses import dataclass
 
 import pymem.exception
 
-from memscope_mcp.scanning.lifecycle import ScanLease
-from memscope_mcp.scanning.model import ModuleRecord, ScanControl, TerminationReason
+from memscope_mcp.attachment import ModuleRecord, ScanLease
+from memscope_mcp.scanning.model import ScanControl, TerminationReason
 from memscope_mcp.scanning.scopes import ScopeNormalizationError
 
 ReadMemory = Callable[[int, int, int], bytes | bytearray | memoryview]

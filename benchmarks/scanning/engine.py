@@ -22,6 +22,8 @@ from benchmarks.scanning.common import (
     validate_raw_artifact,
     write_raw_artifact,
 )
+from memscope_mcp.attachment import ModuleSnapshot, ScanLease
+from memscope_mcp.scanning.async_execution import execute_scan_async
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
     CountScanManySuccess,
@@ -34,8 +36,7 @@ from memscope_mcp.scanning.contract import (
     ScanManyInput,
 )
 from memscope_mcp.scanning.cursor import CursorCodec
-from memscope_mcp.scanning.execution import ScanExecutor, execute_scan_async
-from memscope_mcp.scanning.lifecycle import ModuleSnapshot, ScanLease
+from memscope_mcp.scanning.execution import ScanExecutor
 from memscope_mcp.scanning.planner import MEM_COMMIT, MEM_PRIVATE, PAGE_READWRITE
 
 _BASE_ADDRESS = 0x1000

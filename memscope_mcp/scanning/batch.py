@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from memscope_mcp.attachment import ScanLease
 from memscope_mcp.scanning.collectors import CollectorResult, ScanCollector
-from memscope_mcp.scanning.lifecycle import ScanLease
 from memscope_mcp.scanning.matcher import search_window
 from memscope_mcp.scanning.model import (
     COLLECTOR_TERMINATIONS,

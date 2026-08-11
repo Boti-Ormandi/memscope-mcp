@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import memscope_mcp.session as session_module
-from memscope_mcp.scanning.lifecycle import (
+from memscope_mcp.attachment import (
     AttachmentState,
     ModuleSnapshot,
     ModuleSnapshotError,
@@ -66,6 +66,30 @@ class TestModuleSnapshot:
         assert snapshot.find_by_address(0x11FF).name == "target.exe"
         assert snapshot.find_by_address(0x2200) is None
         assert snapshot.find_by_address(0x3000).name == "FOO.dll"
+
+    def test_legacy_view_and_session_lookup_preserve_exact_duplicate_and_case_variant_behavior(self):
+        snapshot = ModuleSnapshot.create(
+            build_module_records(
+                [
+                    module("dup.dll", 0x100000, 0x100),
+                    module("DUP.dll", 0x200000, 0x200),
+                    module("dup.dll", 0x300000, 0x300),
+                ]
+            ),
+            generation=1,
+        )
+
+        legacy = snapshot.to_legacy_dict()
+        assert list(legacy) == ["dup.dll", "DUP.dll"]
+        assert legacy["dup.dll"]["base"] == 0x300000
+        assert legacy["DUP.dll"]["base"] == 0x200000
+
+        session = DebugSession()
+        session._module_snapshot = snapshot
+        assert session.get_module_base("dup.dll") == 0x300000
+        assert session.get_module_base("DUP.dll") == 0x200000
+        assert session.get_module_base("DuP.DlL") == 0x300000
+        assert session.get_module_base("missing.dll") is None
 
     def test_snapshot_is_immutable_after_source_mutation(self):
         source_module = module("target.exe", 0x1000, 0x400)

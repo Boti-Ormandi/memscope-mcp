@@ -9,9 +9,10 @@ import logging
 import time
 from typing import Any, Optional
 
+from .boundary import MemscopeMCPServer, StrictModelToolSpec
 from .extensions.bootstrap import bootstrap_extensions
 from .instructions import build_instructions
-from .scanning.boundary import MemscopeMCPServer, StrictModelToolSpec
+from .scanning.async_execution import execute_scan_async, execute_scan_many_async
 from .scanning.contract import (
     ScanInput,
     ScanManyInput,
@@ -20,7 +21,7 @@ from .scanning.contract import (
     scan_input_validation_failure,
     scan_many_input_validation_failure,
 )
-from .scanning.execution import ScanExecutor, execute_scan_async, execute_scan_many_async
+from .scanning.execution import ScanExecutor
 from .session import SESSION
 from .tools.lua.engine import LUA_ENGINE, execute_lua
 from .tools.lua_scripts import (
@@ -354,7 +355,9 @@ def attach(process_name: str, pid: Optional[int] = None) -> dict:
     LOGGER.set_process(process_name)
 
     # Return largest modules (most likely to be interesting)
-    sorted_mods = sorted(SESSION.modules.items(), key=lambda x: x[1]["size"], reverse=True)
+    snapshot = SESSION.module_snapshot
+    legacy_modules = snapshot.to_legacy_dict() if snapshot is not None else {}
+    sorted_mods = sorted(legacy_modules.items(), key=lambda x: x[1]["size"], reverse=True)
     modules_info = {}
     for name, info in sorted_mods[:10]:
         modules_info[name] = {"base": format_address(info["base"]), "size": info["size"]}
@@ -366,7 +369,7 @@ def attach(process_name: str, pid: Optional[int] = None) -> dict:
         "success": True,
         "pid": SESSION.pid,
         "process": process_name,
-        "total_modules": len(SESSION.modules),
+        "total_modules": len(legacy_modules),
         "key_modules": modules_info,
         "saved_scripts": scripts_info.get("scripts", []),
         "scripts_dir": str(SCRIPTS_DIR / process_name),
@@ -401,10 +404,11 @@ def modules(filter: Optional[str] = None, limit: int = 30, refresh: bool = False
         )
 
     snapshot = SESSION.module_snapshot
-    if snapshot is None:
-        records = [(name, info["base"], info["size"], info.get("path", "")) for name, info in SESSION.modules.items()]
-    else:
-        records = [(record.name, record.base, record.size, record.path) for record in snapshot.ordered_by_base]
+    records = (
+        []
+        if snapshot is None
+        else [(record.name, record.base, record.size, record.path) for record in snapshot.ordered_by_base]
+    )
 
     mods = []
     for name, base, size, path in records:

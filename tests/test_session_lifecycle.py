@@ -6,8 +6,21 @@ and integrate with the canonical switch_process path.
 
 from types import SimpleNamespace
 
+import pytest
+
 import memscope_mcp.session as session_module
+from memscope_mcp.attachment import ModuleSnapshot, build_module_records
 from memscope_mcp.session import DebugSession
+
+
+def _module_snapshot(name: str = "test.dll", base: int = 0x1000, size: int = 0x100) -> ModuleSnapshot:
+    module = SimpleNamespace(
+        name=name,
+        lpBaseOfDll=base,
+        SizeOfImage=size,
+        filename=rf"C:\Target\{name}",
+    )
+    return ModuleSnapshot.create(build_module_records([module]), generation=1)
 
 
 class TestCallbackRegistration:
@@ -149,6 +162,49 @@ class TestCallbackIsolation:
         assert "good" in calls
 
 
+class TestLegacyModulesCompatibility:
+    def test_modules_property_is_getter_only_and_detached_reads_are_fresh(self):
+        session = DebugSession()
+
+        first = session.modules
+        second = session.modules
+
+        assert first == second == {}
+        assert first is not second
+        assert "modules" not in session.__dict__
+        with pytest.raises(AttributeError):
+            session.modules = {"test.dll": {"base": 0x1000, "size": 0x100}}
+        assert "modules" not in session.__dict__
+
+    def test_modules_property_materializes_fresh_nested_mappings(self):
+        session = DebugSession()
+        snapshot = _module_snapshot()
+        session._module_snapshot = snapshot
+
+        first = session.modules
+        second = session.modules
+
+        assert first == second == snapshot.to_legacy_dict()
+        assert first is not second
+        assert first["test.dll"] is not second["test.dll"]
+
+    def test_modules_property_mutations_do_not_write_through(self):
+        session = DebugSession()
+        snapshot = _module_snapshot()
+        session._module_snapshot = snapshot
+        expected = snapshot.to_legacy_dict()
+
+        modules = session.modules
+        modules["test.dll"]["base"] = 0xDEADBEEF
+        modules["test.dll"]["size"] = 0x200
+        modules["inserted.dll"] = {"base": 0x2000, "size": 0x80, "path": r"C:\Target\inserted.dll"}
+        del modules["test.dll"]
+
+        assert session.modules == expected
+        assert snapshot.to_legacy_dict() == expected
+        assert session._module_snapshot is snapshot
+
+
 class TestDetachFiresCallbacks:
     """detach() fires detach callbacks before teardown."""
 
@@ -164,9 +220,14 @@ class TestDetachFiresCallbacks:
         """After detach, pid and modules are cleared."""
         session = DebugSession()
         session.pid = 1234
-        session.modules = {"test.dll": {"base": 0x1000, "size": 0x100}}
+        snapshot = _module_snapshot()
+        session._module_snapshot = snapshot
+        assert session.modules == snapshot.to_legacy_dict()
+
         session.detach()
+
         assert session.pid == 0
+        assert session.module_snapshot is None
         assert session.modules == {}
 
     def test_detach_clears_tracked_allocations(self):

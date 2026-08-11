@@ -8,8 +8,8 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import memscope_mcp.server as server
+from memscope_mcp.attachment import ModuleSnapshot, ScanLease, build_module_records
 from memscope_mcp.scanning.execution import ScanExecutor
-from memscope_mcp.scanning.lifecycle import ModuleSnapshot, ScanLease, build_module_records
 from memscope_mcp.scanning.planner import MEM_COMMIT, MEM_IMAGE, PAGE_READWRITE
 from memscope_mcp.tools.lua.engine import LUA_ENGINE
 

@@ -14,13 +14,7 @@ import pymem.memory
 import pymem.process
 import pymem.ressources.structure as structs
 
-from .scanning.lifecycle import (
-    AttachmentState,
-    ModuleSnapshot,
-    ScanLease,
-    ScanLeaseUnavailable,
-    build_module_records,
-)
+from .attachment import AttachmentState, ModuleSnapshot, ScanLease, ScanLeaseUnavailable, build_module_records
 
 logger = logging.getLogger(__name__)
 
@@ -179,10 +173,6 @@ class DebugSession:
     target_process: str = ""
     pid: int = 0
 
-    # Module cache (base addresses don't change during session)
-    modules: dict[str, dict] = field(default_factory=dict)
-    # Format: {"module.dll": {"base": 0x7FFE..., "size": 0x...}}
-
     # Lifecycle callbacks: {name: callback}
     _on_attach_callbacks: dict[str, Callable] = field(default_factory=dict)
     _on_detach_callbacks: dict[str, Callable] = field(default_factory=dict)
@@ -269,6 +259,11 @@ class DebugSession:
 
         with self._lifecycle_condition:
             return self._module_snapshot
+
+    @property
+    def modules(self) -> dict[str, dict[str, int | str]]:
+        snapshot = self.module_snapshot
+        return snapshot.to_legacy_dict() if snapshot is not None else {}
 
     @property
     def active_scan_leases(self) -> int:
@@ -370,7 +365,6 @@ class DebugSession:
                 self._generation_counter = next_generation
                 self._attachment_generation = next_generation
                 self._module_snapshot = snapshot
-                self.modules = snapshot.to_legacy_dict()
                 self._lifecycle_cancel = threading.Event()
                 self._attachment_state = AttachmentState.ATTACHED
                 self._lifecycle_condition.notify_all()
@@ -403,7 +397,6 @@ class DebugSession:
                 self.pm = None
                 self._module_snapshot = None
                 self._lifecycle_cancel = None
-                self.modules.clear()
                 self._attachment_generation = 0
                 self._attachment_state = AttachmentState.DETACHED
                 self._lifecycle_condition.notify_all()
@@ -415,7 +408,6 @@ class DebugSession:
             self._generation_counter = next_generation
             self._attachment_generation = next_generation
             self._module_snapshot = snapshot
-            self.modules = snapshot.to_legacy_dict()
             self._lifecycle_cancel = threading.Event()
             self._attachment_state = AttachmentState.ATTACHED
             self._lifecycle_condition.notify_all()
@@ -453,11 +445,15 @@ class DebugSession:
 
     def _find_module(self, module_name: str) -> Optional[dict]:
         """Case-insensitive module lookup."""
-        mod = self.modules.get(module_name)
+        snapshot = self.module_snapshot
+        if snapshot is None:
+            return None
+        modules = snapshot.to_legacy_dict()
+        mod = modules.get(module_name)
         if mod:
             return mod
         lower = module_name.lower()
-        for name, info in self.modules.items():
+        for name, info in modules.items():
             if name.lower() == lower:
                 return info
         return None
@@ -958,7 +954,6 @@ class DebugSession:
             self.pm = None
             self._tracked_allocations.clear()
             self.pid = 0
-            self.modules.clear()
             self._module_snapshot = None
             self._lifecycle_cancel = None
             self._attachment_generation = 0

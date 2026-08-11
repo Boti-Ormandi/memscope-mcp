@@ -115,10 +115,12 @@ getRegionInfo(addr)              -- Region at address
 
             LOGGER.set_process(process_name)
 
+            snapshot = self._session.module_snapshot
+            module_count = len(snapshot.to_legacy_dict()) if snapshot is not None else 0
             result = self._table()
             result["pid"] = self._session.pid
             result["name"] = process_name
-            result["module_count"] = len(self._session.modules)
+            result["module_count"] = module_count
             return result
 
         except Exception as e:
@@ -156,8 +158,10 @@ getRegionInfo(addr)              -- Region at address
         """
         if self._session.pm is None:
             return None
+        snapshot = self._session.module_snapshot
+        module_count = len(snapshot.to_legacy_dict()) if snapshot is not None else 0
         result = self._table()
         result["pid"] = self._session.pid
         result["name"] = self._session.target_process or ""
-        result["module_count"] = len(self._session.modules)
+        result["module_count"] = module_count
         return result

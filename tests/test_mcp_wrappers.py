@@ -6,12 +6,29 @@ import pytest
 from mcp.types import CallToolResult
 
 import memscope_mcp.server as server
+from memscope_mcp.attachment import ModuleRecord, ModuleSnapshot, normalize_module_name
 from memscope_mcp.scanning.contract import AddressScanSuccess, ScanHit, ScanResponse, ScanStatus
 
 
 @pytest.fixture(autouse=True)
 def disable_session_logging(monkeypatch):
     monkeypatch.setattr(server, "_log", lambda _tool, _args, result, _start_time: result)
+
+
+def _module_snapshot(*entries: tuple[str, int, int, str]) -> ModuleSnapshot:
+    return ModuleSnapshot.create(
+        (
+            ModuleRecord(
+                name=name,
+                normalized_name=normalize_module_name(name),
+                base=base,
+                size=size,
+                path=path,
+            )
+            for name, base, size, path in entries
+        ),
+        generation=1,
+    )
 
 
 def _call_tool_structured(name: str, arguments: dict) -> dict:
@@ -181,19 +198,42 @@ def test_modules_response_includes_module_path_and_tolerates_missing_path(monkey
     monkeypatch.setattr(server.SESSION, "pm", object())
     monkeypatch.setattr(
         server.SESSION,
-        "modules",
-        {
-            "target.exe": {"base": 0x140000000, "size": 0x2000, "path": r"C:\\Games\\target.exe"},
-            "helper.dll": {"base": 0x7FFE0000, "size": 0x1000},
-        },
+        "_module_snapshot",
+        _module_snapshot(
+            ("target.exe", 0x140000000, 0x2000, r"C:\\Games\\target.exe"),
+            ("helper.dll", 0x7FFE0000, 0x1000, ""),
+        ),
     )
 
     result = server.modules()
 
     assert result["success"] is True
     assert result["modules"] == [
-        {"name": "target.exe", "base": "0x140000000", "size": 0x2000, "path": r"C:\\Games\\target.exe"},
         {"name": "helper.dll", "base": "0x7FFE0000", "size": 0x1000, "path": ""},
+        {"name": "target.exe", "base": "0x140000000", "size": 0x2000, "path": r"C:\\Games\\target.exe"},
+    ]
+
+
+def test_modules_preserves_snapshot_duplicate_records(monkeypatch):
+    monkeypatch.setattr(server.SESSION, "pm", object())
+    monkeypatch.setattr(
+        server.SESSION,
+        "_module_snapshot",
+        _module_snapshot(
+            ("dup.dll", 0x100000, 0x100, "first"),
+            ("DUP.dll", 0x200000, 0x200, "case"),
+            ("dup.dll", 0x300000, 0x300, "last"),
+        ),
+    )
+
+    result = server.modules()
+
+    assert result["success"] is True
+    assert result["total"] == 3
+    assert [(entry["name"], entry["base"]) for entry in result["modules"]] == [
+        ("dup.dll", "0x100000"),
+        ("DUP.dll", "0x200000"),
+        ("dup.dll", "0x300000"),
     ]
 
 
@@ -201,12 +241,12 @@ def test_modules_filter_and_limit_apply_before_formatting(monkeypatch):
     monkeypatch.setattr(server.SESSION, "pm", object())
     monkeypatch.setattr(
         server.SESSION,
-        "modules",
-        {
-            "target.exe": {"base": 0x140000000, "size": 0x2000},
-            "helper.dll": {"base": 0x7FFE0000, "size": 0x1000},
-            "helper_extra.dll": {"base": 0x7FFF0000, "size": 0x3000},
-        },
+        "_module_snapshot",
+        _module_snapshot(
+            ("target.exe", 0x140000000, 0x2000, ""),
+            ("helper.dll", 0x7FFE0000, 0x1000, ""),
+            ("helper_extra.dll", 0x7FFF0000, 0x3000, ""),
+        ),
     )
 
     result = server.modules(filter="helper", limit=1)
@@ -219,8 +259,11 @@ def test_modules_filter_and_limit_apply_before_formatting(monkeypatch):
 def test_modules_refreshes_snapshot_when_requested(monkeypatch):
     calls = []
     monkeypatch.setattr(server.SESSION, "pm", object())
-    monkeypatch.setattr(server.SESSION, "modules", {"target.exe": {"base": 0x1000, "size": 0x2000}})
-    monkeypatch.setattr(server.SESSION, "_module_snapshot", None)
+    monkeypatch.setattr(
+        server.SESSION,
+        "_module_snapshot",
+        _module_snapshot(("target.exe", 0x1000, 0x2000, "")),
+    )
     monkeypatch.setattr(server.SESSION, "refresh_modules", lambda: calls.append("refresh") or True)
 
     result = server.modules(refresh=True)

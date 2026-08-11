@@ -12,7 +12,9 @@ from types import SimpleNamespace
 import pytest
 from mcp.types import CallToolResult
 
-from memscope_mcp.scanning.boundary import MemscopeMCPServer, StrictModelToolSpec
+from memscope_mcp.attachment import ModuleSnapshot, ScanLease, build_module_records
+from memscope_mcp.boundary import MemscopeMCPServer, StrictModelToolSpec
+from memscope_mcp.scanning.async_execution import execute_scan_async
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
     CountScanSuccess,
@@ -24,8 +26,7 @@ from memscope_mcp.scanning.contract import (
     scan_input_validation_failure,
 )
 from memscope_mcp.scanning.cursor import CursorCodec, CursorError
-from memscope_mcp.scanning.execution import ScanExecutor, execute_scan_async
-from memscope_mcp.scanning.lifecycle import ModuleSnapshot, ScanLease, build_module_records
+from memscope_mcp.scanning.execution import ScanExecutor
 from memscope_mcp.scanning.planner import MEM_COMMIT, MEM_IMAGE, MEM_PRIVATE, PAGE_READWRITE
 
 

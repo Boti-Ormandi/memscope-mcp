@@ -1,7 +1,24 @@
 """Lua runtime discovery helper tests."""
 
 import memscope_mcp.server as server
+from memscope_mcp.attachment import ModuleRecord, ModuleSnapshot, normalize_module_name
 from memscope_mcp.tools.lua.engine import LUA_ENGINE
+
+
+def _module_snapshot(*entries: tuple[str, int, int, str]) -> ModuleSnapshot:
+    return ModuleSnapshot.create(
+        (
+            ModuleRecord(
+                name=name,
+                normalized_name=normalize_module_name(name),
+                base=base,
+                size=size,
+                path=path,
+            )
+            for name, base, size, path in entries
+        ),
+        generation=1,
+    )
 
 
 def test_list_lua_functions_reports_names_and_owner_filter():
@@ -81,7 +98,7 @@ def test_get_capabilities_reports_detached_state_paths_and_wrapper_flags(monkeyp
     monkeypatch.setattr(server.SESSION, "pm", None)
     monkeypatch.setattr(server.SESSION, "pid", 0)
     monkeypatch.setattr(server.SESSION, "target_process", "")
-    monkeypatch.setattr(server.SESSION, "modules", {})
+    monkeypatch.setattr(server.SESSION, "_module_snapshot", None)
 
     result = LUA_ENGINE.execute(
         """
@@ -122,15 +139,24 @@ def test_get_capabilities_includes_attached_process_info(monkeypatch):
     monkeypatch.setattr(server.SESSION, "pm", object())
     monkeypatch.setattr(server.SESSION, "pid", 1234)
     monkeypatch.setattr(server.SESSION, "target_process", "Target.exe")
-    monkeypatch.setattr(server.SESSION, "modules", {"Target.exe": {}, "helper.dll": {}})
+    monkeypatch.setattr(
+        server.SESSION,
+        "_module_snapshot",
+        _module_snapshot(
+            ("Target.exe", 0x140000000, 0x2000, r"C:\\Games\\Target.exe"),
+            ("helper.dll", 0x7FFE0000, 0x1000, r"C:\\Games\\helper.dll"),
+        ),
+    )
 
     result = LUA_ENGINE.execute(
         """
         local caps = getCapabilities()
+        local proc = getAttachedProcess()
         addResult("attached", caps.attached)
         addResult("pid", caps.process.pid)
         addResult("name", caps.process.name)
         addResult("module_count", caps.process.module_count)
+        addResult("process_module_count", proc.module_count)
         """
     )
 
@@ -140,4 +166,5 @@ def test_get_capabilities_includes_attached_process_info(monkeypatch):
         "pid": 1234,
         "name": "Target.exe",
         "module_count": 2,
+        "process_module_count": 2,
     }

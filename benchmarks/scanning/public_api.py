@@ -27,8 +27,9 @@ from benchmarks.scanning.common import (
     validate_raw_artifact,
     write_raw_artifact,
 )
+from memscope_mcp.attachment import ModuleSnapshot, ScanLease
+from memscope_mcp.boundary import MemscopeMCPServer, StrictModelToolSpec
 from memscope_mcp.extensions.core.module_scan import ModuleScanExtension
-from memscope_mcp.scanning.boundary import MemscopeMCPServer, StrictModelToolSpec
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
     CountScanSuccess,
@@ -42,7 +43,6 @@ from memscope_mcp.scanning.contract import (
 )
 from memscope_mcp.scanning.cursor import CursorCodec
 from memscope_mcp.scanning.execution import ScanExecutor
-from memscope_mcp.scanning.lifecycle import ModuleSnapshot, ScanLease
 from memscope_mcp.scanning.lua import LuaScanAdapter
 from memscope_mcp.scanning.planner import MEM_COMMIT, MEM_PRIVATE, PAGE_READWRITE
 from memscope_mcp.tools.lua.engine import MemscopeLuaEngine

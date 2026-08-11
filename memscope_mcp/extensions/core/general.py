@@ -162,11 +162,13 @@ Lua 5.4 also supports native operators: `a & b`, `a | b`, `a ~ b`, `a << n`, `a 
         caps["attached"] = attached
 
         if attached:
+            snapshot = self._session.module_snapshot
+            module_count = len(snapshot.to_legacy_dict()) if snapshot is not None else 0
             caps["process"] = self._mapping_table(
                 {
                     "pid": self._session.pid,
                     "name": self._session.target_process or "",
-                    "module_count": len(self._session.modules),
+                    "module_count": module_count,
                 }
             )
 

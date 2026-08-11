@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pymem.exception
 import pytest
 
+from memscope_mcp.attachment import ModuleSnapshot, ScanLease, build_module_records
 from memscope_mcp.scanning.collectors import BoundedAddressCollector
 from memscope_mcp.scanning.contract import (
     AllModulesScopeInput,
@@ -20,7 +21,6 @@ from memscope_mcp.scanning.contract import (
     ScanFiltersInput,
 )
 from memscope_mcp.scanning.engine import execute_scan_plan
-from memscope_mcp.scanning.lifecycle import ModuleSnapshot, ScanLease, build_module_records
 from memscope_mcp.scanning.model import ScanControl, ScanStats, TerminationReason
 from memscope_mcp.scanning.pattern import make_exact_query
 from memscope_mcp.scanning.planner import (

@@ -10,6 +10,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from memscope_mcp.attachment import ModuleRecord
 from memscope_mcp.scanning import pattern as pattern_module
 from memscope_mcp.scanning.collectors import (
     BoundedAddressCollector,
@@ -23,7 +24,6 @@ from memscope_mcp.scanning.model import (
     CompiledPattern,
     FixedSegment,
     MatcherStrategy,
-    ModuleRecord,
     ScanControl,
     ScanHit,
     SearchWindow,

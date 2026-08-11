@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from memscope_mcp.attachment import ModuleSnapshot, ScanLease, build_module_records
+from memscope_mcp.scanning.async_execution import execute_scan_many_async
 from memscope_mcp.scanning.contract import (
     CountScanManySuccess,
     FirstScanManySuccess,
@@ -22,8 +24,7 @@ from memscope_mcp.scanning.contract import (
     ScanInput,
     ScanManyInput,
 )
-from memscope_mcp.scanning.execution import ScanExecutor, execute_scan_many_async
-from memscope_mcp.scanning.lifecycle import ModuleSnapshot, ScanLease, build_module_records
+from memscope_mcp.scanning.execution import ScanExecutor
 from memscope_mcp.scanning.planner import MEM_COMMIT, MEM_IMAGE, MEM_PRIVATE, PAGE_READWRITE
 
 

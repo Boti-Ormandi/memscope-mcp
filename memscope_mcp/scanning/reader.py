@@ -10,9 +10,9 @@ from dataclasses import dataclass
 import pymem.exception
 import pymem.memory
 
-from memscope_mcp.scanning.lifecycle import ModuleSnapshot, ScanLease, bind_scan_control
+from memscope_mcp.attachment import ModuleRecord, ModuleSnapshot, ScanLease
+from memscope_mcp.scanning.lifecycle import bind_scan_control
 from memscope_mcp.scanning.model import (
-    ModuleRecord,
     ScanControl,
     ScanQuery,
     ScanStats,

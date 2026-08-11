@@ -8,6 +8,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
+from memscope_mcp.attachment import ModuleRecord
+
 MAX_PATTERN_BYTES = 1024
 MAX_ALIGNMENT = 4096
 _MAX_ADDRESS_EXCLUSIVE = 1 << 64
@@ -129,33 +131,6 @@ class ScanQuery:
         _require_positive_bounded_int("alignment", self.alignment, MAX_ALIGNMENT)
         if self.kind in {QueryKind.EXACT, QueryKind.POINTER} and self.pattern.exact_bytes is None:
             raise ValueError(f"{self.kind.value} queries require an exact pattern")
-
-
-@dataclass(frozen=True, slots=True)
-class ModuleRecord:
-    """Immutable module identity carried into plans, windows, and hits."""
-
-    name: str
-    normalized_name: str
-    base: int
-    size: int
-    path: str
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not self.name:
-            raise ValueError("name must be a non-empty string")
-        if not isinstance(self.normalized_name, str) or not self.normalized_name:
-            raise ValueError("normalized_name must be a non-empty string")
-        if not isinstance(self.path, str):
-            raise TypeError("path must be a string")
-        _require_address("base", self.base)
-        _require_positive_bounded_int("size", self.size, _MAX_ADDRESS_EXCLUSIVE)
-        if self.base + self.size > _MAX_ADDRESS_EXCLUSIVE:
-            raise ValueError("module range exceeds the x64 address space")
-
-    @property
-    def end_exclusive(self) -> int:
-        return self.base + self.size
 
 
 @dataclass(frozen=True, slots=True)

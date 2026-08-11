@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+from memscope_mcp.attachment import ModuleRecord, ModuleSnapshot, ScanLease, normalize_module_name
 from memscope_mcp.scanning.contract import (
     AllModulesScopeInput,
     ModulesScopeInput,
@@ -14,8 +15,6 @@ from memscope_mcp.scanning.contract import (
     ScanFiltersInput,
     ScanScopeInput,
 )
-from memscope_mcp.scanning.lifecycle import ModuleSnapshot, ScanLease, normalize_module_name
-from memscope_mcp.scanning.model import ModuleRecord
 
 USER_MODE_END_EXCLUSIVE = 1 << 47
 _MAX_ADDRESS_EXCLUSIVE = 1 << 64

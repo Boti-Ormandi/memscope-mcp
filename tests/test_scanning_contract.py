@@ -11,7 +11,7 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import ValidationError
 
 import memscope_mcp.server as public_server
-from memscope_mcp.scanning.boundary import MemscopeMCPServer, StrictModelToolSpec
+from memscope_mcp.boundary import MemscopeMCPServer, StrictModelToolSpec
 from memscope_mcp.scanning.contract import (
     AddressScanSuccess,
     CountScanSuccess,

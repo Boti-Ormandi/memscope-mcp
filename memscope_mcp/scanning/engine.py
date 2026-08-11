@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterable
 
+from memscope_mcp.attachment import ScanLease
 from memscope_mcp.scanning.collectors import ScanCollector
-from memscope_mcp.scanning.lifecycle import ScanLease
 from memscope_mcp.scanning.matcher import poll_control, search_window
 from memscope_mcp.scanning.model import (
     ScanControl,
