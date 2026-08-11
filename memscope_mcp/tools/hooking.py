@@ -9,7 +9,7 @@ import logging
 import struct
 from dataclasses import dataclass, field
 
-from ..session import SESSION
+from ..session import DebugSession
 from ..utils.disasm import RelocationOverflowError, decode_prologue_ex
 from ..utils.shellcode import build_hook_trampoline
 
@@ -98,12 +98,18 @@ class HookInfo:
 class HookManager:
     """Manages hook installation, ring buffer, and lifecycle cleanup."""
 
-    def __init__(self) -> None:
+    def __init__(self, session: DebugSession) -> None:
+        self._session = session
         self.hooks: dict[int, HookInfo] = {}  # target_addr -> HookInfo
         self._hooks_by_id: dict[int, HookInfo] = {}  # hook_id -> HookInfo
         self.next_hook_id: int = 1
         self.ring_buffer: RingBufferConfig | None = None
         self._deferred_trampolines: list[tuple[int, int]] = []  # (addr, size)
+
+    @property
+    def session(self) -> DebugSession:
+        """Debug session owned by this manager for its lifetime."""
+        return self._session
 
     # ==================== Ring Buffer ====================
 
@@ -130,14 +136,14 @@ class HookManager:
         total_size = RB_CONTROL_SIZE + entry_count * entry_total_size
 
         # Allocate RW memory (not executable). VirtualAllocEx zero-initializes.
-        addr = SESSION.allocate(total_size, executable=False)
+        addr = self._session.allocate(total_size, executable=False)
 
         # Write control block fields
-        SESSION.write_uint64(addr + RB_ENTRY_COUNT, entry_count)
-        SESSION.write_uint64(addr + RB_MAX_DATA_SIZE, max_data_size)
-        SESSION.write_uint64(addr + RB_ENTRY_TOTAL_SIZE, entry_total_size)
-        SESSION.write_uint64(addr + RB_ENTRY_COUNT_MASK, entry_count - 1)
-        SESSION.write_uint64(addr + RB_FLAGS, 1)  # active
+        self._session.write_uint64(addr + RB_ENTRY_COUNT, entry_count)
+        self._session.write_uint64(addr + RB_MAX_DATA_SIZE, max_data_size)
+        self._session.write_uint64(addr + RB_ENTRY_TOTAL_SIZE, entry_total_size)
+        self._session.write_uint64(addr + RB_ENTRY_COUNT_MASK, entry_count - 1)
+        self._session.write_uint64(addr + RB_FLAGS, 1)  # active
 
         self.ring_buffer = RingBufferConfig(
             address=addr,
@@ -166,7 +172,7 @@ class HookManager:
         if self.hooks:
             raise RuntimeError(f"Cannot destroy ring buffer: {len(self.hooks)} hooks still active")
 
-        SESSION.free(self.ring_buffer.address)
+        self._session.free(self.ring_buffer.address)
         self.ring_buffer = None
         logger.info("Ring buffer destroyed")
 
@@ -191,7 +197,7 @@ class HookManager:
 
         rb = self.ring_buffer
         # Read control block header (first 0x48 bytes covers through entry_count_mask)
-        hdr = SESSION.read_bytes(rb.address, 0x48)
+        hdr = self._session.read_bytes(rb.address, 0x48)
         write_idx = struct.unpack_from("<Q", hdr, RB_WRITE_INDEX)[0]
         read_idx = struct.unpack_from("<Q", hdr, RB_READ_INDEX)[0]
 
@@ -200,7 +206,7 @@ class HookManager:
             slot = read_idx & (rb.entry_count - 1)
             entry_addr = rb.address + RB_CONTROL_SIZE + slot * rb.entry_total_size
 
-            ehdr = SESSION.read_bytes(entry_addr, ENTRY_HEADER_SIZE)
+            ehdr = self._session.read_bytes(entry_addr, ENTRY_HEADER_SIZE)
             status = struct.unpack_from("<I", ehdr, ENTRY_STATUS)[0]
 
             if status == STATUS_WRITING:
@@ -230,7 +236,7 @@ class HookManager:
                 captured = max(0, max_data - prefix_size)
 
             if extra_args_count > 0 and prefix_size <= max_data:
-                prefix_data = SESSION.read_bytes(entry_addr + ENTRY_DATA_OFFSET, prefix_size)
+                prefix_data = self._session.read_bytes(entry_addr + ENTRY_DATA_OFFSET, prefix_size)
                 for i in range(extra_args_count):
                     arg_val = struct.unpack_from("<Q", prefix_data, i * 8)[0]
                     extra_args[f"arg{4 + i}"] = arg_val
@@ -244,7 +250,7 @@ class HookManager:
             data = None
             data_hex = None
             if captured > 0:
-                data = SESSION.read_bytes(entry_addr + ENTRY_DATA_OFFSET + prefix_size, captured)
+                data = self._session.read_bytes(entry_addr + ENTRY_DATA_OFFSET + prefix_size, captured)
                 data_hex = " ".join(f"{b:02X}" for b in data)
 
             entry = {
@@ -275,7 +281,7 @@ class HookManager:
             read_idx += 1
 
         # Advance read pointer
-        SESSION.write_uint64(rb.address + RB_READ_INDEX, read_idx)
+        self._session.write_uint64(rb.address + RB_READ_INDEX, read_idx)
         return entries
 
     def ring_buffer_stats(self) -> dict:
@@ -291,7 +297,7 @@ class HookManager:
             raise RuntimeError("No ring buffer")
 
         rb = self.ring_buffer
-        hdr = SESSION.read_bytes(rb.address, 0x48)
+        hdr = self._session.read_bytes(rb.address, 0x48)
         write_idx = struct.unpack_from("<Q", hdr, RB_WRITE_INDEX)[0]
         read_idx = struct.unpack_from("<Q", hdr, RB_READ_INDEX)[0]
         total_captured = struct.unpack_from("<Q", hdr, RB_TOTAL_CAPTURED)[0]
@@ -326,11 +332,11 @@ class HookManager:
         rb = self.ring_buffer
 
         # Disable capture
-        SESSION.write_uint64(rb.address + RB_FLAGS, 0)
+        self._session.write_uint64(rb.address + RB_FLAGS, 0)
 
         try:
             # Read and increment write_index
-            write_idx = struct.unpack_from("<Q", SESSION.read_bytes(rb.address, 8), 0)[0]
+            write_idx = struct.unpack_from("<Q", self._session.read_bytes(rb.address, 8), 0)[0]
             slot = write_idx & (rb.entry_count - 1)
             entry_addr = rb.address + RB_CONTROL_SIZE + slot * rb.entry_total_size
 
@@ -345,15 +351,15 @@ class HookManager:
             struct.pack_into("<I", header, ENTRY_CAPTURED_LENGTH, len(label_bytes))
             struct.pack_into("<I", header, ENTRY_FLAGS, 1)  # has_data
 
-            SESSION.write_bytes(entry_addr, bytes(header))
+            self._session.write_bytes(entry_addr, bytes(header))
             if label_bytes:
-                SESSION.write_bytes(entry_addr + ENTRY_DATA_OFFSET, label_bytes)
+                self._session.write_bytes(entry_addr + ENTRY_DATA_OFFSET, label_bytes)
 
             # Advance write_index
-            SESSION.write_uint64(rb.address + RB_WRITE_INDEX, write_idx + 1)
+            self._session.write_uint64(rb.address + RB_WRITE_INDEX, write_idx + 1)
         finally:
             # Re-enable capture
-            SESSION.write_uint64(rb.address + RB_FLAGS, 1)
+            self._session.write_uint64(rb.address + RB_FLAGS, 1)
 
         return True
 
@@ -400,14 +406,14 @@ class HookManager:
             # Free deferred trampolines
             for addr, _size in self._deferred_trampolines:
                 try:
-                    SESSION.free(addr)
+                    self._session.free(addr)
                 except BaseException as e:
                     logger.warning(f"Failed to free trampoline at 0x{addr:X}: {e}")
 
             # Destroy ring buffer
             if self.ring_buffer is not None:
                 try:
-                    SESSION.free(self.ring_buffer.address)
+                    self._session.free(self.ring_buffer.address)
                 except BaseException as e:
                     logger.warning(f"Failed to free ring buffer: {e}")
 
@@ -443,13 +449,13 @@ class HookManager:
         Returns:
             Tuple of (adjusted_count, original_protection).
         """
-        suspended = SESSION.suspend_process_threads()
+        suspended = self._session.suspend_process_threads()
         adjusted = 0
         old_prot = 0
         try:
             for thread in suspended:
                 try:
-                    rip = SESSION.get_thread_rip(thread.handle)
+                    rip = self._session.get_thread_rip(thread.handle)
                 except OSError:
                     continue  # Thread may have exited between suspend and context read
 
@@ -457,19 +463,19 @@ class HookManager:
                     offset = rip - target_addr
                     new_rip = stub_addr + offset
                     try:
-                        SESSION.set_thread_rip(thread.handle, new_rip)
+                        self._session.set_thread_rip(thread.handle, new_rip)
                         adjusted += 1
                         logger.info(f"Thread {thread.tid}: adjusted RIP 0x{rip:X} -> 0x{new_rip:X}")
                     except OSError as e:
                         logger.warning(f"Thread {thread.tid}: failed to adjust RIP: {e}")
 
             # Write the patch
-            old_prot = SESSION.virtual_protect(target_addr, patch_size, PAGE_EXECUTE_READWRITE)
-            SESSION.write_bytes(target_addr, patch_bytes)
-            SESSION.virtual_protect(target_addr, patch_size, old_prot)
+            old_prot = self._session.virtual_protect(target_addr, patch_size, PAGE_EXECUTE_READWRITE)
+            self._session.write_bytes(target_addr, patch_bytes)
+            self._session.virtual_protect(target_addr, patch_size, old_prot)
         finally:
             # Always resume, even if write fails
-            SESSION.resume_process_threads(suspended)
+            self._session.resume_process_threads(suspended)
 
         return adjusted, old_prot
 
@@ -577,7 +583,7 @@ class HookManager:
                     raise ValueError(f"deref_args read_size must be 4 or 8, got {read_size}")
 
         # --- Check for existing hooks (prologue starts with JMP) ---
-        first_bytes = SESSION.read_bytes(target_addr, 32)
+        first_bytes = self._session.read_bytes(target_addr, 32)
         if first_bytes[0] == 0xE9:
             raise RuntimeError(
                 f"Address 0x{target_addr:X} appears already hooked (starts with E9 rel32 JMP). "
@@ -592,24 +598,24 @@ class HookManager:
         # --- Read prologue ---
 
         # --- Allocate trampoline (prefer near for 5-byte JMP) ---
-        trampoline_mem = SESSION.allocate_near(target_addr, TRAMPOLINE_MAX_SIZE, executable=True)
+        trampoline_mem = self._session.allocate_near(target_addr, TRAMPOLINE_MAX_SIZE, executable=True)
         if trampoline_mem:
             jmp_size = 5
         else:
-            trampoline_mem = SESSION.allocate(TRAMPOLINE_MAX_SIZE, executable=True)
+            trampoline_mem = self._session.allocate(TRAMPOLINE_MAX_SIZE, executable=True)
             jmp_size = 14
 
         # --- Decode prologue to find boundary >= jmp_size ---
         try:
             total_bytes, relocation_info = decode_prologue_ex(first_bytes, jmp_size)
         except ValueError:
-            SESSION.free(trampoline_mem)
+            self._session.free(trampoline_mem)
             raise
 
         # Early check: if prologue needs relocation but trampoline is far, fail fast
         needs_relocation = any(insn.fixup_offset >= 0 for insn in relocation_info)
         if needs_relocation and jmp_size == 14:
-            SESSION.free(trampoline_mem)
+            self._session.free(trampoline_mem)
             raise RuntimeError(
                 f"Function at 0x{target_addr:X} has position-dependent instructions in its prologue "
                 "and near allocation failed. Cannot hook: trampoline is too far for instruction relocation. "
@@ -662,11 +668,11 @@ class HookManager:
                 length_deref=internal_length_deref,
             )
         except RelocationOverflowError:
-            SESSION.free(trampoline_mem)
+            self._session.free(trampoline_mem)
             raise
 
         # --- Write trampoline to allocated memory ---
-        SESSION.write_bytes(trampoline_mem, shellcode)
+        self._session.write_bytes(trampoline_mem, shellcode)
 
         # --- Build JMP instruction ---
         if jmp_size == 5:
@@ -686,9 +692,9 @@ class HookManager:
                 logger.info(f"Adjusted {adjusted} thread(s) during hook install at 0x{target_addr:X}")
         else:
             # 5-byte JMP: effectively atomic at aligned function entries
-            old_prot = SESSION.virtual_protect(target_addr, total_bytes, PAGE_EXECUTE_READWRITE)
-            SESSION.write_bytes(target_addr, jmp_bytes)
-            SESSION.virtual_protect(target_addr, total_bytes, old_prot)
+            old_prot = self._session.virtual_protect(target_addr, total_bytes, PAGE_EXECUTE_READWRITE)
+            self._session.write_bytes(target_addr, jmp_bytes)
+            self._session.virtual_protect(target_addr, total_bytes, old_prot)
 
         # --- Record hook info ---
         hook = HookInfo(
@@ -755,9 +761,9 @@ class HookManager:
                 logger.info(f"Adjusted {adjusted} thread(s) during hook removal at 0x{hook.target_addr:X}")
         else:
             # 5-byte: direct write
-            old_prot = SESSION.virtual_protect(hook.target_addr, hook.saved_length, PAGE_EXECUTE_READWRITE)
-            SESSION.write_bytes(hook.target_addr, hook.saved_bytes)
-            SESSION.virtual_protect(hook.target_addr, hook.saved_length, old_prot)
+            old_prot = self._session.virtual_protect(hook.target_addr, hook.saved_length, PAGE_EXECUTE_READWRITE)
+            self._session.write_bytes(hook.target_addr, hook.saved_bytes)
+            self._session.virtual_protect(hook.target_addr, hook.saved_length, old_prot)
 
         # Defer trampoline free (thread safety)
         self._deferred_trampolines.append((hook.trampoline_addr, hook.trampoline_size))
@@ -768,7 +774,3 @@ class HookManager:
 
         logger.info(f"Hook '{hook.name}' (id={hook.hook_id}) removed from 0x{hook.target_addr:X}")
         return True
-
-
-# Module-level singleton
-HOOK_MANAGER = HookManager()

@@ -5,6 +5,7 @@ Pure data tests -- no process attachment required.
 """
 
 import struct
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -35,14 +36,20 @@ class MockContext:
     lua = None
     table_factory = None
     log_error = None
+    hook_manager = None
 
 
 def make_plugin() -> NetcapPlugin:
     """Create a NetcapPlugin and register it with a mock context."""
+    session = MagicMock()
+    hook_manager = MagicMock()
+    hook_manager.session = session
     plugin = NetcapPlugin()
     ctx = MockContext()
+    ctx.session = session
     ctx.table_factory = make_table
     ctx.log_error = lambda *a: None
+    ctx.hook_manager = hook_manager
     plugin.register(ctx)
     return plugin
 

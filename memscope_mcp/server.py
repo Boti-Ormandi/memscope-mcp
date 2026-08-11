@@ -23,6 +23,7 @@ from .scanning.contract import (
 )
 from .scanning.execution import ScanExecutor
 from .session import SESSION
+from .tools.hooking import HookManager
 from .tools.lua.engine import LUA_ENGINE, execute_lua
 from .tools.lua_scripts import (
     SCRIPTS_DIR,
@@ -41,7 +42,8 @@ from .utils.peb import read_process_peb
 logger = logging.getLogger(__name__)
 
 # Bootstrap all extensions (core + plugins)
-_extensions = bootstrap_extensions(LUA_ENGINE, SESSION)
+_hook_manager = HookManager(SESSION)
+_extensions = bootstrap_extensions(LUA_ENGINE, SESSION, hook_manager=_hook_manager)
 
 # Build instructions from base + loaded extensions
 _instructions = build_instructions(_extensions)
@@ -363,7 +365,7 @@ def attach(process_name: str, pid: Optional[int] = None) -> dict:
         modules_info[name] = {"base": format_address(info["base"]), "size": info["size"]}
 
     # Get saved scripts info
-    scripts_info = list_scripts()
+    scripts_info = list_scripts(session=SESSION)
 
     result = {
         "success": True,
@@ -681,12 +683,12 @@ def scripts(
     action = action.lower().strip()
 
     if action == "list":
-        result = list_scripts(process if process else None)
+        result = list_scripts(process if process else None, session=SESSION)
     elif action == "run":
         if not name:
             result = {"success": False, "error": "MISSING_PARAM", "detail": "name required"}
         else:
-            result = run_script(name, process if process else None, args, timeout=timeout)
+            result = run_script(name, process if process else None, args, timeout=timeout, engine=LUA_ENGINE)
     else:
         result = {
             "success": False,
@@ -723,12 +725,13 @@ def _shutdown():
 
     # Belt-and-suspenders: try hook cleanup directly first (in case detach
     # callbacks are not registered or SESSION.detach() fails early).
+    alive = False
     try:
-        from .tools.hooking import HOOK_MANAGER
-
-        if HOOK_MANAGER.hooks or HOOK_MANAGER.ring_buffer:
-            alive = SESSION.pm is not None and SESSION._is_process_alive()
-            HOOK_MANAGER.cleanup(process_alive=alive)
+        alive = SESSION.pm is not None and SESSION._is_process_alive()
+    except BaseException:
+        pass
+    try:
+        _hook_manager.cleanup(process_alive=alive)
     except BaseException:
         pass
 

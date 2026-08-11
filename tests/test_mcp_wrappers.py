@@ -194,6 +194,36 @@ def test_dump_forwards_custom_arguments_by_keyword(monkeypatch):
     ]
 
 
+def test_attach_summary_preserves_legacy_duplicate_collapse(monkeypatch):
+    script_calls = []
+    snapshot = _module_snapshot(
+        ("dup.dll", 0x100000, 0x100, r"C:\\First\\dup.dll"),
+        ("DUP.dll", 0x200000, 0x200, r"C:\\Case\\DUP.dll"),
+        ("dup.dll", 0x300000, 0x300, r"C:\\Last\\dup.dll"),
+    )
+    monkeypatch.setattr(server.SESSION, "_module_snapshot", snapshot)
+    monkeypatch.setattr(server.SESSION, "pid", 4321)
+    monkeypatch.setattr(server.SESSION, "switch_process", lambda _name, _pid=0: True)
+
+    def fake_list_scripts(*, session):
+        script_calls.append(session)
+        return {"scripts": []}
+
+    monkeypatch.setattr(server, "list_scripts", fake_list_scripts)
+    monkeypatch.setattr(server.LOGGER, "set_process", lambda _name: None)
+    monkeypatch.setattr(server.LOGGER, "_get_log_file", lambda: "session.jsonl")
+
+    result = server.attach("Target.exe")
+
+    assert result["success"] is True
+    assert script_calls == [server.SESSION]
+    assert result["total_modules"] == 2
+    assert result["key_modules"] == {
+        "dup.dll": {"base": "0x300000", "size": 0x300},
+        "DUP.dll": {"base": "0x200000", "size": 0x200},
+    }
+
+
 def test_modules_response_includes_module_path_and_tolerates_missing_path(monkeypatch):
     monkeypatch.setattr(server.SESSION, "pm", object())
     monkeypatch.setattr(
@@ -331,11 +361,11 @@ def test_read_write_docstrings_describe_current_basics():
     assert "[222, 173, 190, 239]" in server.write.__doc__
 
 
-def test_scripts_list_forwards_process_filter(monkeypatch):
+def test_scripts_list_forwards_process_filter_and_global_session(monkeypatch):
     calls = []
 
-    def fake_list_scripts(process):
-        calls.append(process)
+    def fake_list_scripts(process, *, session):
+        calls.append((process, session))
         return {"scripts": [], "count": 0, "scripts_dir": "scripts"}
 
     monkeypatch.setattr(server, "list_scripts", fake_list_scripts)
@@ -343,7 +373,7 @@ def test_scripts_list_forwards_process_filter(monkeypatch):
     result = server.scripts("list", process="*")
 
     assert result == {"scripts": [], "count": 0, "scripts_dir": "scripts"}
-    assert calls == ["*"]
+    assert calls == [("*", server.SESSION)]
 
 
 def test_scripts_run_requires_name_before_delegate(monkeypatch):
@@ -357,11 +387,11 @@ def test_scripts_run_requires_name_before_delegate(monkeypatch):
     assert result == {"success": False, "error": "MISSING_PARAM", "detail": "name required"}
 
 
-def test_scripts_run_forwards_namespace_args_and_timeout(monkeypatch):
+def test_scripts_run_forwards_namespace_args_timeout_and_global_engine(monkeypatch):
     calls = []
 
-    def fake_run_script(name, process, args, timeout=None):
-        calls.append((name, process, args, timeout))
+    def fake_run_script(name, process, args, timeout=None, *, engine):
+        calls.append((name, process, args, timeout, engine))
         return {"success": True, "script_name": name}
 
     monkeypatch.setattr(server, "run_script", fake_run_script)
@@ -375,7 +405,7 @@ def test_scripts_run_forwards_namespace_args_and_timeout(monkeypatch):
     )
 
     assert result == {"success": True, "script_name": "probe"}
-    assert calls == [("probe", "Target.exe", {"needle": "DE AD BE EF"}, 2.5)]
+    assert calls == [("probe", "Target.exe", {"needle": "DE AD BE EF"}, 2.5, server.LUA_ENGINE)]
 
 
 def test_scripts_docstring_describes_process_namespace_contract():

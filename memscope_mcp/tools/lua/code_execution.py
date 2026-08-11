@@ -5,7 +5,6 @@ Functions for calling code in the target process.
 
 from typing import Any, Callable, Generator, Optional
 
-from ...session import SESSION
 from ...utils.memory_utils import parse_address
 from .comparisons import to_lua_int64, to_uint64
 
@@ -127,6 +126,8 @@ def execute_code_lua(
     output: list[str],
     log_error: Callable[[str, Exception], None],
     guard: Optional[LuaExecutionGuard] = None,
+    *,
+    session,
 ) -> Optional[int]:
     """Execute function in target process with smart arg handling.
 
@@ -154,7 +155,7 @@ def execute_code_lua(
             return None
 
         if isinstance(func_addr, str):
-            addr = parse_address(func_addr)
+            addr = parse_address(func_addr, session=session)
         else:
             addr = to_uint64(func_addr)
 
@@ -167,7 +168,7 @@ def execute_code_lua(
         # Convert args - handle Lua types and large integers
         py_args = [parse_lua_arg(arg) for arg in args]
 
-        result = execute_code(addr, py_args, timeout_ms=5000)
+        result = execute_code(addr, py_args, timeout_ms=5000, session=session)
 
         if result.get("success"):
             res = result.get("result")
@@ -190,6 +191,8 @@ def execute_code_ex_lua(
     output: list[str],
     log_error: Callable[[str, Exception], None],
     guard: Optional[LuaExecutionGuard] = None,
+    *,
+    session,
 ) -> Optional[int]:
     """Execute function with extended options.
 
@@ -211,7 +214,7 @@ def execute_code_ex_lua(
             return None
 
         if isinstance(func_addr, str):
-            addr = parse_address(func_addr)
+            addr = parse_address(func_addr, session=session)
         else:
             addr = to_uint64(func_addr)
 
@@ -219,7 +222,7 @@ def execute_code_ex_lua(
         timeout_ms = int(timeout) if timeout else 5000
         py_args = [parse_lua_arg(arg) for arg in args]
 
-        result = execute_code_ex(flags_int, timeout_ms, addr, *py_args)
+        result = execute_code_ex(flags_int, timeout_ms, addr, *py_args, session=session)
 
         if result.get("success"):
             res = result.get("result")
@@ -240,7 +243,7 @@ def _lua_result_int(value) -> int:
     return to_lua_int64(int(value)) if value else 0
 
 
-def _run_call_sequence_lua(calls_table, timeout: int, output: list[str]) -> Optional[dict]:
+def _run_call_sequence_lua(calls_table, timeout: int, output: list[str], *, session) -> Optional[dict]:
     from ..execute import call_sequence
 
     py_calls = []
@@ -285,7 +288,7 @@ def _run_call_sequence_lua(calls_table, timeout: int, output: list[str]) -> Opti
         return None
 
     timeout_ms = int(timeout) if timeout else 5000
-    result = call_sequence(py_calls, timeout_ms)
+    result = call_sequence(py_calls, timeout_ms, session=session)
 
     if not result.get("success"):
         output.append(f"callSequence error: {result.get('error')} - {result.get('detail')}")
@@ -295,7 +298,7 @@ def _run_call_sequence_lua(calls_table, timeout: int, output: list[str]) -> Opti
 
 
 def call_sequence_lua(
-    calls_table, timeout: int, output: list[str], log_error: Callable[[str, Exception], None]
+    calls_table, timeout: int, output: list[str], log_error: Callable[[str, Exception], None], *, session
 ) -> Optional[int]:
     """Execute multiple calls in ONE thread. Critical for thread-local APIs.
 
@@ -321,7 +324,7 @@ def call_sequence_lua(
         -- Both calls ran in same thread, so thread-local state persisted
     """
     try:
-        result = _run_call_sequence_lua(calls_table, timeout, output)
+        result = _run_call_sequence_lua(calls_table, timeout, output, session=session)
         if result is None:
             return None
         return _lua_result_int(result.get("result", "0x0"))
@@ -332,11 +335,11 @@ def call_sequence_lua(
 
 
 def call_sequence_results_lua(
-    calls_table, timeout: int, lua_table, output: list[str], log_error: Callable[[str, Exception], None]
+    calls_table, timeout: int, lua_table, output: list[str], log_error: Callable[[str, Exception], None], *, session
 ):
     """Execute multiple calls and return final RAX plus every per-call RAX."""
     try:
-        result = _run_call_sequence_lua(calls_table, timeout, output)
+        result = _run_call_sequence_lua(calls_table, timeout, output, session=session)
         if result is None:
             return None
 
@@ -372,7 +375,7 @@ def get_lua_key(value, key: str):
         return None
 
 
-def alloc_lua(size_or_string, wide: bool, output: list[str]) -> Optional[int]:
+def alloc_lua(size_or_string, wide: bool, output: list[str], *, session) -> Optional[int]:
     """Allocate memory in target process. Remember to free with freeMemory().
 
     Smart allocation:
@@ -402,7 +405,7 @@ def alloc_lua(size_or_string, wide: bool, output: list[str]) -> Optional[int]:
             # String allocation - allocate and write
             from ..execute import alloc_string
 
-            result = alloc_string(size_or_string, wide)
+            result = alloc_string(size_or_string, wide, session=session)
             if result.get("success"):
                 addr_str = result.get("address", "0x0")
                 if isinstance(addr_str, str) and addr_str.startswith("0x"):
@@ -417,14 +420,14 @@ def alloc_lua(size_or_string, wide: bool, output: list[str]) -> Optional[int]:
             if size <= 0 or size > 0x100000:  # 1MB limit
                 output.append(f"alloc error: invalid size {size}")
                 return None
-            addr = SESSION.allocate(size, executable=False)
+            addr = session.allocate(size, executable=False)
             return addr
     except Exception as e:
         output.append(f"alloc exception: {e}")
         return None
 
 
-def free_memory_lua(address, log_error: Callable[[str, Exception], None]) -> bool:
+def free_memory_lua(address, log_error: Callable[[str, Exception], None], *, session) -> bool:
     """Free memory allocated by alloc().
 
     Args:
@@ -437,7 +440,7 @@ def free_memory_lua(address, log_error: Callable[[str, Exception], None]) -> boo
 
     try:
         addr = int(address)
-        result = free_alloc(addr)
+        result = free_alloc(addr, session=session)
         return result.get("success", False)
     except Exception as e:
         log_error("freeMemory", e)

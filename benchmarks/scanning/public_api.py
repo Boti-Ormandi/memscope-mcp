@@ -441,7 +441,7 @@ def _lua_normalization(_repo_root: Path) -> dict[str, Any]:
     adapter = LuaScanAdapter(
         executor,
         engine=engine,
-        table_factory=engine.lua.table,
+        table_factory=engine.table_factory,
         log_error=lambda name, error: logged_errors.append(f"{name}:{type(error).__name__}"),
     )
     options = {
@@ -451,27 +451,54 @@ def _lua_normalization(_repo_root: Path) -> dict[str, Any]:
         "diagnostics": True,
     }
 
-    started = time.perf_counter_ns()
-    aob = engine._lua_to_python(adapter.aob_scan("DE AD", options))
-    ascii_result = engine._lua_to_python(adapter.string_scan("memscope", {**options, "encoding": "ascii"}))
-    utf16_result = engine._lua_to_python(adapter.string_scan("memscope", {**options, "encoding": "utf-16le"}))
-    pointer_result = engine._lua_to_python(adapter.pointer_scan(pointer_value, {**options, "alignment": 1}))
-    batch_result = engine._lua_to_python(
-        adapter.aob_scan_many(
-            [
-                {"key": "aob", "pattern": "DE AD"},
-                {"key": "ascii", "pattern": "6D 65 6D 73 63 6F 70 65"},
-            ],
-            {
-                "scope": scope.model_dump(mode="python"),
-                "mode": "first",
-                "diagnostics": True,
-            },
-        )
+    engine.register_functions(
+        "scanning-evidence",
+        {
+            "benchmarkAob": lambda: adapter.aob_scan("DE AD", options),
+            "benchmarkAscii": lambda: adapter.string_scan("memscope", {**options, "encoding": "ascii"}),
+            "benchmarkUtf16": lambda: adapter.string_scan("memscope", {**options, "encoding": "utf-16le"}),
+            "benchmarkPointer": lambda: adapter.pointer_scan(pointer_value, {**options, "alignment": 1}),
+            "benchmarkBatch": lambda: adapter.aob_scan_many(
+                [
+                    {"key": "aob", "pattern": "DE AD"},
+                    {"key": "ascii", "pattern": "6D 65 6D 73 63 6F 70 65"},
+                ],
+                {
+                    "scope": scope.model_dump(mode="python"),
+                    "mode": "first",
+                    "diagnostics": True,
+                },
+            ),
+            "benchmarkInvalid": lambda: adapter.aob_scan("DE AD", {**options, "legacy": True}),
+        },
     )
-    invalid_value, invalid_error = adapter.aob_scan("DE AD", {**options, "legacy": True})
-    invalid = engine._lua_to_python(invalid_error)
+
+    started = time.perf_counter_ns()
+    execution = engine.execute(
+        """
+        local invalid_value, invalid_error = benchmarkInvalid()
+        return {
+            aob = benchmarkAob(),
+            ascii = benchmarkAscii(),
+            utf16 = benchmarkUtf16(),
+            pointer = benchmarkPointer(),
+            batch = benchmarkBatch(),
+            invalid_value_is_nil = invalid_value == nil,
+            invalid = invalid_error,
+        }
+        """
+    )
     duration_ns = time.perf_counter_ns() - started
+    if not execution["success"]:
+        raise EvidenceFailure(f"Lua normalization execution failed: {execution}")
+    observed = execution["results"]["return"]
+    aob = observed["aob"]
+    ascii_result = observed["ascii"]
+    utf16_result = observed["utf16"]
+    pointer_result = observed["pointer"]
+    batch_result = observed["batch"]
+    invalid_value = None if observed["invalid_value_is_nil"] else object()
+    invalid = observed["invalid"]
 
     correct = (
         aob[1] == _BASE_ADDRESS + 8
@@ -570,7 +597,7 @@ def _lua_serialization(_repo_root: Path) -> dict[str, Any]:
     second.start()
     if not second_started.wait(2):
         raise EvidenceFailure("second Lua execution did not start")
-    observed_locked_runtime = engine._execution_lock.locked() and not second_entered.is_set()
+    observed_locked_runtime = not second_entered.is_set()
     release_first.set()
     first.join(2)
     second.join(2)

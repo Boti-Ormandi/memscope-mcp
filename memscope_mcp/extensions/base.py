@@ -7,7 +7,10 @@ User plugins live in plugins/ and are loaded at startup when present.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from ..tools.hooking import HookManager
 
 
 @dataclass(slots=True)
@@ -16,17 +19,18 @@ class ExtensionContext:
 
     Attributes:
         engine: MemscopeLuaEngine instance (for per-execution helpers like print, results).
-        session: DebugSession singleton.
-        lua: LuaRuntime instance (for raw Lua access).
-        table_factory: Callable that creates Lua tables (engine.lua.table).
+        session: DebugSession belonging to this bootstrap domain.
+        table_factory: Guarded callable that creates Lua tables only during
+            engine-owned bootstrap or execution operations.
         log_error: Callable[[func_name, exception], None] for error reporting.
+        hook_manager: HookManager shared by hook-capable extensions in this bootstrap domain.
     """
 
     engine: Any
     session: Any
-    lua: Any
     table_factory: Callable[..., Any]
     log_error: Callable[[str, Exception], None]
+    hook_manager: "HookManager | None" = None
 
 
 class LuaExtension(ABC):
@@ -59,7 +63,13 @@ class LuaExtension(ABC):
 
     @abstractmethod
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
-        """Register Lua functions. Called once at startup.
+        """Build and return one complete Lua function mapping at startup.
+
+        Bootstrap preflights the returned mapping before installing any name.
+        Registration runs before the composition is ready, so extensions must
+        not execute scripts or publish lifecycle callbacks themselves. Arbitrary
+        external side effects performed here are not rollback-guaranteed; a hard
+        bootstrap failure instead permanently quarantines the composition.
 
         Args:
             ctx: Shared context with engine, session, and helpers.

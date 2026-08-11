@@ -1,6 +1,6 @@
 """Tests for the network capture plugin (contrib/plugins/netcap.py).
 
-All tests use mocks for HOOK_MANAGER and resolve_export.
+All tests use mocks for the injected hook manager and resolve_export.
 No process attachment required.
 """
 
@@ -33,12 +33,21 @@ class MockContext:
     lua: Any = None
     table_factory: Any = None
     log_error: Any = None
+    hook_manager: Any = None
 
 
 def make_plugin() -> NetcapPlugin:
     """Create a NetcapPlugin and register it with a mock context."""
+    session = MagicMock()
+    hook_manager = MagicMock()
+    hook_manager.session = session
     plugin = NetcapPlugin()
-    ctx = MockContext(table_factory=make_table, log_error=lambda *a: None)
+    ctx = MockContext(
+        session=session,
+        table_factory=make_table,
+        log_error=lambda *a: None,
+        hook_manager=hook_manager,
+    )
     plugin.register(ctx)
     return plugin
 
@@ -85,7 +94,7 @@ def make_ring_buffer_entry(
     sequence: int = 1,
     timestamp: int = 12345,
 ) -> dict:
-    """Build a ring buffer entry dict as returned by HOOK_MANAGER.read_ring_buffer()."""
+    """Build a ring buffer entry dict as returned by the injected hook manager.read_ring_buffer()."""
     captured = len(data) if data else 0
     return {
         "sequence": sequence,
@@ -452,7 +461,7 @@ class TestBufferSearch:
 
 
 class TestReadPackets:
-    """readPackets with mocked HOOK_MANAGER.read_ring_buffer."""
+    """readPackets with mocked the injected hook manager.read_ring_buffer."""
 
     def setup_method(self):
         self.plugin = make_plugin()
@@ -469,7 +478,8 @@ class TestReadPackets:
         entry = make_ring_buffer_entry(hook_id=1, hook_name="send", data=b"hello", result=5, arg0=0x1A4)
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = self.plugin._session
+        monkeypatch.setattr(self.plugin, "_hook_manager", mock_hm)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
@@ -486,7 +496,8 @@ class TestReadPackets:
         entry = make_ring_buffer_entry(hook_id=2, hook_name="recv", data=b"\x01\x02\x03", result=3)
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = self.plugin._session
+        monkeypatch.setattr(self.plugin, "_hook_manager", mock_hm)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
@@ -501,7 +512,8 @@ class TestReadPackets:
         entry = make_ring_buffer_entry(hook_id=3, hook_name="connect", data=sockaddr, arg0=0x200)
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = self.plugin._session
+        monkeypatch.setattr(self.plugin, "_hook_manager", mock_hm)
 
         self.plugin._read_packets(100)
         assert 0x200 in self.plugin._connections
@@ -517,7 +529,8 @@ class TestReadPackets:
         entry = make_ring_buffer_entry(hook_id=4, hook_name="closesocket", data=None, arg0=0x200)
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = self.plugin._session
+        monkeypatch.setattr(self.plugin, "_hook_manager", mock_hm)
 
         self.plugin._read_packets(100)
         assert 0x200 not in self.plugin._connections
@@ -528,7 +541,8 @@ class TestReadPackets:
         entry = make_ring_buffer_entry(is_marker=True, data=b"checkpoint-1")
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = self.plugin._session
+        monkeypatch.setattr(self.plugin, "_hook_manager", mock_hm)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
@@ -540,7 +554,8 @@ class TestReadPackets:
         self._activate_capture()
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = []
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = self.plugin._session
+        monkeypatch.setattr(self.plugin, "_hook_manager", mock_hm)
 
         packets = self.plugin._read_packets(100)
         # No integer keys -> empty
@@ -557,7 +572,8 @@ class TestReadPackets:
         entry = make_ring_buffer_entry(hook_id=1, hook_name="send", data=b"\xaa\xbb\xcc")
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = self.plugin._session
+        monkeypatch.setattr(self.plugin, "_hook_manager", mock_hm)
 
         packets = self.plugin._read_packets(100)
         data = packets[1]["data"]
@@ -571,7 +587,8 @@ class TestReadPackets:
         entry = make_ring_buffer_entry(hook_id=99, hook_name="custom_hook", data=b"x")
         mock_hm = MagicMock()
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = self.plugin._session
+        monkeypatch.setattr(self.plugin, "_hook_manager", mock_hm)
 
         packets = self.plugin._read_packets(100)
         assert packets[1]["hook_name"] == "custom_hook"
@@ -581,7 +598,7 @@ class TestReadPackets:
 
 
 class TestStartCapture:
-    """startCapture flow with mocked HOOK_MANAGER and resolve_export."""
+    """startCapture flow with mocked the injected hook manager and resolve_export."""
 
     def test_default_options(self, monkeypatch):
         """Default options: resolves send+recv+connect+closesocket, installs 4 hooks."""
@@ -609,14 +626,21 @@ class TestStartCapture:
         mock_hm.create_ring_buffer.side_effect = create_rb_side_effect
         mock_hm.ring_buffer = None  # Start with no ring buffer
 
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr(
-            "memscope_mcp._contrib.plugins.netcap.resolve_export",
-            lambda mod, fn: 0x70001000 + hash(fn) % 0x1000,
-        )
+        resolver_sessions = []
+
+        def mock_resolve(mod, fn, *, session):
+            resolver_sessions.append(session)
+            return 0x70001000 + hash(fn) % 0x1000
+
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.resolve_export", mock_resolve)
 
         plugin._start_capture()
 
+        assert resolver_sessions
+        assert all(session is plugin._session for session in resolver_sessions)
+        assert plugin._hook_manager.session is plugin._session
         # 4 hooks: send, recv, connect, closesocket
         assert mock_hm.install_hook.call_count == 4
         assert plugin._capture_active is True
@@ -641,8 +665,11 @@ class TestStartCapture:
             return {"hook_id": hook_id_counter[0]}
 
         mock_hm.install_hook.side_effect = mock_install_hook
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.resolve_export", lambda mod, fn: 0x70001000)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
+        monkeypatch.setattr(
+            "memscope_mcp._contrib.plugins.netcap.resolve_export", lambda mod, fn, *, session: 0x70001000
+        )
 
         # Only hook "send", with connect tracking
         opts = {"hooks": {1: "send"}, "connect": True, "buffer_size": None, "max_packet_size": None}
@@ -668,8 +695,11 @@ class TestStartCapture:
             return {"hook_id": hook_id_counter[0]}
 
         mock_hm.install_hook.side_effect = mock_install_hook
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.resolve_export", lambda mod, fn: 0x70001000)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
+        monkeypatch.setattr(
+            "memscope_mcp._contrib.plugins.netcap.resolve_export", lambda mod, fn, *, session: 0x70001000
+        )
 
         opts = {"hooks": None, "connect": False, "buffer_size": None, "max_packet_size": None}
         plugin._start_capture(opts)
@@ -691,13 +721,14 @@ class TestStartCapture:
 
         call_count = [0]
 
-        def mock_resolve(mod, fn):
+        def mock_resolve(mod, fn, *, session):
             call_count[0] += 1
             if call_count[0] == 1:
                 return 0x70001000  # "send" resolves fine
             return None  # "recv" fails
 
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
         monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.resolve_export", mock_resolve)
 
         with pytest.raises(RuntimeError, match="Cannot resolve"):
@@ -716,7 +747,7 @@ class TestStartCapture:
             plugin._start_capture()
 
     def test_ring_buffer_reuse(self, monkeypatch):
-        """If HOOK_MANAGER.ring_buffer exists, doesn't create a new one."""
+        """If the injected hook manager.ring_buffer exists, doesn't create a new one."""
         plugin = make_plugin()
 
         mock_hm = MagicMock()
@@ -730,8 +761,11 @@ class TestStartCapture:
             return {"hook_id": hook_id_counter[0]}
 
         mock_hm.install_hook.side_effect = mock_install_hook
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.resolve_export", lambda mod, fn: 0x70001000)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
+        monkeypatch.setattr(
+            "memscope_mcp._contrib.plugins.netcap.resolve_export", lambda mod, fn, *, session: 0x70001000
+        )
 
         plugin._start_capture()
 
@@ -739,7 +773,7 @@ class TestStartCapture:
         assert plugin._created_ring_buffer is False
 
     def test_creates_ring_buffer_when_none(self, monkeypatch):
-        """Creates ring buffer when HOOK_MANAGER.ring_buffer is None."""
+        """Creates ring buffer when the injected hook manager.ring_buffer is None."""
         plugin = make_plugin()
 
         mock_hm = MagicMock()
@@ -758,8 +792,11 @@ class TestStartCapture:
             return {"hook_id": hook_id_counter[0]}
 
         mock_hm.install_hook.side_effect = mock_install_hook
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.resolve_export", lambda mod, fn: 0x70001000)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
+        monkeypatch.setattr(
+            "memscope_mcp._contrib.plugins.netcap.resolve_export", lambda mod, fn, *, session: 0x70001000
+        )
 
         plugin._start_capture()
 
@@ -780,8 +817,9 @@ class TestStartCapture:
         mock_hm.hooks = {}  # No hooks remain after rollback
 
         # resolve_export always fails
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.resolve_export", lambda mod, fn: None)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
+        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.resolve_export", lambda mod, fn, *, session: None)
 
         with pytest.raises(RuntimeError):
             plugin._start_capture()
@@ -794,7 +832,8 @@ class TestStartCapture:
         plugin = make_plugin()
         mock_hm = MagicMock()
         mock_hm.ring_buffer = _make_rb_config(0x1000)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
 
         opts = {"hooks": {1: "invalid_hook"}, "connect": None, "buffer_size": None, "max_packet_size": None}
         with pytest.raises(ValueError, match="Unknown hook"):
@@ -816,7 +855,8 @@ class TestStopCapture:
 
         mock_hm = MagicMock()
         mock_hm.hooks = {999: "some_user_hook"}  # Other hooks exist
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
 
         plugin._stop_capture()
 
@@ -835,7 +875,8 @@ class TestStopCapture:
 
         mock_hm = MagicMock()
         mock_hm.hooks = {}  # No hooks remain after removal
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
 
         plugin._stop_capture()
 
@@ -850,7 +891,8 @@ class TestStopCapture:
 
         mock_hm = MagicMock()
         mock_hm.hooks = {999: "some_user_hook"}  # Other hooks exist
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
 
         plugin._stop_capture()
 
@@ -865,7 +907,8 @@ class TestStopCapture:
 
         mock_hm = MagicMock()
         mock_hm.hooks = {}
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
 
         plugin._stop_capture()
 
@@ -881,7 +924,8 @@ class TestStopCapture:
 
         mock_hm = MagicMock()
         mock_hm.hooks = {}
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
 
         plugin._stop_capture()
 
@@ -912,7 +956,8 @@ class TestLifecycle:
 
         mock_hm = MagicMock()
         mock_hm.hooks = {}
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
 
         plugin.on_process_detaching(session=None, process_alive=True)
 
@@ -929,7 +974,8 @@ class TestLifecycle:
         plugin._created_ring_buffer = True
 
         mock_hm = MagicMock()
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
 
         plugin.on_process_detaching(session=None, process_alive=False)
 
@@ -949,7 +995,8 @@ class TestLifecycle:
         plugin._capture_active = False
 
         mock_hm = MagicMock()
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
 
         plugin.on_process_detaching(session=None, process_alive=True)
 
@@ -976,7 +1023,8 @@ class TestCaptureStats:
             "entries_pending": 10,
             "utilization_pct": 15.6,
         }
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
+        mock_hm.session = plugin._session
+        monkeypatch.setattr(plugin, "_hook_manager", mock_hm)
 
         result = plugin._capture_stats()
         assert result["total"] == 42
@@ -1031,13 +1079,29 @@ class TestRegistration:
 
     def test_register_returns_expected_count(self):
         plugin = NetcapPlugin()
-        ctx = MockContext(table_factory=make_table, log_error=lambda *a: None)
+        session = MagicMock()
+        hook_manager = MagicMock()
+        hook_manager.session = session
+        ctx = MockContext(
+            session=session,
+            table_factory=make_table,
+            log_error=lambda *a: None,
+            hook_manager=hook_manager,
+        )
         funcs = plugin.register(ctx)
         assert len(funcs) == 38
 
     def test_expected_function_names(self):
         plugin = NetcapPlugin()
-        ctx = MockContext(table_factory=make_table, log_error=lambda *a: None)
+        session = MagicMock()
+        hook_manager = MagicMock()
+        hook_manager.session = session
+        ctx = MockContext(
+            session=session,
+            table_factory=make_table,
+            log_error=lambda *a: None,
+            hook_manager=hook_manager,
+        )
         funcs = plugin.register(ctx)
         expected = {
             "startCapture",
@@ -1080,6 +1144,26 @@ class TestRegistration:
             "listRecordings",
         }
         assert set(funcs.keys()) == expected
+
+    def test_registration_retains_exact_session_and_manager(self):
+        plugin = make_plugin()
+        assert plugin._hook_manager.session is plugin._session
+
+    def test_registration_rejects_manager_session_mismatch(self):
+        plugin = NetcapPlugin()
+        session_a = MagicMock(name="session_a")
+        session_b = MagicMock(name="session_b")
+        manager_b = MagicMock(name="manager_b")
+        manager_b.session = session_b
+        ctx = MockContext(
+            session=session_a,
+            table_factory=make_table,
+            log_error=lambda *a: None,
+            hook_manager=manager_b,
+        )
+
+        with pytest.raises(ValueError, match="HookManager/session ownership mismatch"):
+            plugin.register(ctx)
 
     def test_plugin_metadata(self):
         plugin = NetcapPlugin()

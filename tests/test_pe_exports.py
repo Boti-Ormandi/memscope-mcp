@@ -1,6 +1,6 @@
 """Tests for PE export table parser.
 
-Builds minimal PE images in bytearrays and monkeypatches SESSION
+Builds minimal PE images in bytearrays and injects a fake session
 to serve memory reads from them. No real process attachment needed.
 """
 
@@ -8,6 +8,8 @@ import struct
 
 import pytest
 
+from memscope_mcp.attachment import ModuleRecord, ModuleSnapshot, normalize_module_name
+from memscope_mcp.utils import pe
 from memscope_mcp.utils.pe import resolve_export
 
 # ---------- PE Builder ----------
@@ -121,6 +123,22 @@ class MockSession:
         self.modules[name] = {"base": base, "size": len(image), "path": f"C:\\Windows\\System32\\{name}"}
         self._images[base] = image
 
+    @property
+    def module_snapshot(self):
+        return ModuleSnapshot.create(
+            (
+                ModuleRecord(
+                    name=name,
+                    normalized_name=normalize_module_name(name),
+                    base=info["base"],
+                    size=info["size"],
+                    path=info["path"],
+                )
+                for name, info in self.modules.items()
+            ),
+            generation=1,
+        )
+
     def read_bytes(self, address, size):
         for base, image in self._images.items():
             offset = address - base
@@ -143,11 +161,9 @@ BASE_ADDR = 0x7FF800000000
 
 
 @pytest.fixture()
-def mock_session(monkeypatch):
-    """Provide a MockSession and patch it into the pe module."""
-    session = MockSession()
-    monkeypatch.setattr("memscope_mcp.utils.pe.SESSION", session)
-    return session
+def mock_session():
+    """Provide a fake session for direct resolver injection."""
+    return MockSession()
 
 
 @pytest.fixture()
@@ -166,17 +182,23 @@ def pe_with_exports(mock_session):
 # ---------- Tests ----------
 
 
+class TestExplicitSession:
+    def test_session_argument_is_mandatory(self):
+        with pytest.raises(TypeError):
+            resolve_export("ws2_32.dll", "send")
+
+
 class TestResolveKnownExport:
     def test_resolve_send(self, pe_with_exports):
-        addr = resolve_export("ws2_32.dll", "send")
+        addr = resolve_export("ws2_32.dll", "send", session=pe_with_exports)
         assert addr == BASE_ADDR + 0x4000
 
     def test_resolve_connect(self, pe_with_exports):
-        addr = resolve_export("ws2_32.dll", "connect")
+        addr = resolve_export("ws2_32.dll", "connect", session=pe_with_exports)
         assert addr == BASE_ADDR + 0x2000
 
     def test_resolve_recv(self, pe_with_exports):
-        addr = resolve_export("ws2_32.dll", "recv")
+        addr = resolve_export("ws2_32.dll", "recv", session=pe_with_exports)
         assert addr == BASE_ADDR + 0x3000
 
 
@@ -185,50 +207,50 @@ class TestBinarySearchBoundaries:
 
     def test_first_name(self, pe_with_exports):
         # "connect" is first in sorted order
-        assert resolve_export("ws2_32.dll", "connect") == BASE_ADDR + 0x2000
+        assert resolve_export("ws2_32.dll", "connect", session=pe_with_exports) == BASE_ADDR + 0x2000
 
     def test_last_name(self, pe_with_exports):
         # "send" is last in sorted order
-        assert resolve_export("ws2_32.dll", "send") == BASE_ADDR + 0x4000
+        assert resolve_export("ws2_32.dll", "send", session=pe_with_exports) == BASE_ADDR + 0x4000
 
     def test_middle_name(self, pe_with_exports):
         # "recv" is in the middle
-        assert resolve_export("ws2_32.dll", "recv") == BASE_ADDR + 0x3000
+        assert resolve_export("ws2_32.dll", "recv", session=pe_with_exports) == BASE_ADDR + 0x3000
 
     def test_single_export(self, mock_session):
         """Binary search on a table with exactly one entry."""
         exports = [("solo", 0x5000)]
         image = _build_pe(BASE_ADDR, exports)
         mock_session.add_module("single.dll", BASE_ADDR, image)
-        assert resolve_export("single.dll", "solo") == BASE_ADDR + 0x5000
+        assert resolve_export("single.dll", "solo", session=mock_session) == BASE_ADDR + 0x5000
 
     def test_two_exports(self, mock_session):
         """Binary search on a table with exactly two entries."""
         exports = [("alpha", 0x5000), ("beta", 0x6000)]
         image = _build_pe(BASE_ADDR, exports)
         mock_session.add_module("pair.dll", BASE_ADDR, image)
-        assert resolve_export("pair.dll", "alpha") == BASE_ADDR + 0x5000
-        assert resolve_export("pair.dll", "beta") == BASE_ADDR + 0x6000
+        assert resolve_export("pair.dll", "alpha", session=mock_session) == BASE_ADDR + 0x5000
+        assert resolve_export("pair.dll", "beta", session=mock_session) == BASE_ADDR + 0x6000
 
 
 class TestExportNotFound:
     def test_nonexistent_function(self, pe_with_exports):
-        assert resolve_export("ws2_32.dll", "nonexistent") is None
+        assert resolve_export("ws2_32.dll", "nonexistent", session=pe_with_exports) is None
 
     def test_empty_function_name(self, pe_with_exports):
-        assert resolve_export("ws2_32.dll", "") is None
+        assert resolve_export("ws2_32.dll", "", session=pe_with_exports) is None
 
     def test_case_sensitive_function_name(self, pe_with_exports):
         # PE export names are case-sensitive
-        assert resolve_export("ws2_32.dll", "Send") is None
+        assert resolve_export("ws2_32.dll", "Send", session=pe_with_exports) is None
 
 
 class TestModuleNotLoaded:
     def test_missing_module(self, mock_session):
-        assert resolve_export("not_loaded.dll", "send") is None
+        assert resolve_export("not_loaded.dll", "send", session=mock_session) is None
 
     def test_empty_modules(self, mock_session):
-        assert resolve_export("ws2_32.dll", "connect") is None
+        assert resolve_export("ws2_32.dll", "connect", session=mock_session) is None
 
 
 class TestNoExportDirectory:
@@ -242,7 +264,7 @@ class TestNoExportDirectory:
         struct.pack_into("<I", image, dd_offset, 0)  # export_dir_rva = 0
         struct.pack_into("<I", image, dd_offset + 4, 0)  # size = 0
         mock_session.add_module("noexport.dll", BASE_ADDR, image)
-        assert resolve_export("noexport.dll", "send") is None
+        assert resolve_export("noexport.dll", "send", session=mock_session) is None
 
 
 class TestForwardedExport:
@@ -260,8 +282,32 @@ class TestForwardedExport:
         source_image = _build_pe(BASE_ADDR, source_exports, forwarded={"send": "MSWSOCK.SendReal"})
         mock_session.add_module("ws2_32.dll", BASE_ADDR, source_image)
 
-        addr = resolve_export("ws2_32.dll", "send")
+        addr = resolve_export("ws2_32.dll", "send", session=mock_session)
         assert addr == target_base + 0x8000
+
+    def test_forwarding_preserves_injected_session_identity(self, mock_session, monkeypatch):
+        target_base = 0x7FF900000000
+        mock_session.add_module("MSWSOCK.dll", target_base, _build_pe(target_base, [("SendReal", 0x8000)]))
+        mock_session.add_module(
+            "ws2_32.dll",
+            BASE_ADDR,
+            _build_pe(BASE_ADDR, [("send", 0x9999)], forwarded={"send": "MSWSOCK.SendReal"}),
+        )
+
+        original = pe._resolve_export
+        seen_sessions = []
+        seen_depths = []
+
+        def tracking_resolve(module_name, function_name, *, session, depth):
+            seen_sessions.append(session)
+            seen_depths.append(depth)
+            return original(module_name, function_name, session=session, depth=depth)
+
+        monkeypatch.setattr(pe, "_resolve_export", tracking_resolve)
+
+        assert resolve_export("ws2_32.dll", "send", session=mock_session) == target_base + 0x8000
+        assert seen_depths == [0, 1]
+        assert all(session is mock_session for session in seen_sessions)
 
     def test_forwarded_without_dll_suffix(self, mock_session):
         """Forwarder string without .dll suffix should still resolve (parser appends .dll)."""
@@ -276,7 +322,7 @@ class TestForwardedExport:
         source_image = _build_pe(BASE_ADDR, source_exports, forwarded={"DoStuff": "helper.DoStuff"})
         mock_session.add_module("main.dll", BASE_ADDR, source_image)
 
-        addr = resolve_export("main.dll", "DoStuff")
+        addr = resolve_export("main.dll", "DoStuff", session=mock_session)
         assert addr == target_base + 0x7000
 
     def test_forwarded_target_not_loaded(self, mock_session):
@@ -285,7 +331,7 @@ class TestForwardedExport:
         source_image = _build_pe(BASE_ADDR, source_exports, forwarded={"send": "MISSING.SendFunc"})
         mock_session.add_module("ws2_32.dll", BASE_ADDR, source_image)
 
-        assert resolve_export("ws2_32.dll", "send") is None
+        assert resolve_export("ws2_32.dll", "send", session=mock_session) is None
 
 
 class TestForwardChainLimit:
@@ -313,13 +359,13 @@ class TestForwardChainLimit:
 
         # mod0 -> mod1 -> mod2 -> mod3 -> mod4 -> mod5 -> mod6
         # Depths:  0       1       2       3       4       5      6 (blocked at >5)
-        assert resolve_export("mod0.dll", "func") is None
+        assert resolve_export("mod0.dll", "func", session=mock_session) is None
 
     def test_chain_at_exact_depth_limit(self, mock_session):
         """A chain of exactly 6 forwards (depths 0..5) should succeed -- depth 5 is the last allowed."""
-        # The limit check is `if _depth > 5`, so _depth=6 is the first blocked.
+        # The private recursion limit is `if depth > 5`, so depth=6 is the first blocked.
         # 6 modules: mod0 forwards to mod1 ... mod4 forwards to mod5 (real).
-        # resolve_export is called with _depth=5 for mod5, and 5 > 5 is False, so it succeeds.
+        # The private helper reaches depth=5 for mod5, and 5 > 5 is False, so it succeeds.
         num_modules = 6
         bases = [0x7FF800000000 + i * 0x100000 for i in range(num_modules)]
 
@@ -334,7 +380,7 @@ class TestForwardChainLimit:
             mock_session.add_module(f"mod{i}.dll", bases[i], image)
 
         # mod0(depth=0) -> mod1(1) -> mod2(2) -> mod3(3) -> mod4(4) -> mod5(5=real)
-        assert resolve_export("mod0.dll", "func") == bases[-1] + 0x5000
+        assert resolve_export("mod0.dll", "func", session=mock_session) == bases[-1] + 0x5000
 
 
 class TestInvalidPESignature:
@@ -342,14 +388,14 @@ class TestInvalidPESignature:
         image = _build_pe(BASE_ADDR, [("send", 0x4000)])
         image[0:2] = b"\x00\x00"  # corrupt MZ
         mock_session.add_module("bad.dll", BASE_ADDR, image)
-        assert resolve_export("bad.dll", "send") is None
+        assert resolve_export("bad.dll", "send", session=mock_session) is None
 
     def test_bad_pe_signature(self, mock_session):
         image = _build_pe(BASE_ADDR, [("send", 0x4000)])
         pe_offset = struct.unpack_from("<I", image, 0x3C)[0]
         image[pe_offset : pe_offset + 4] = b"\x00\x00\x00\x00"  # corrupt PE\0\0
         mock_session.add_module("bad.dll", BASE_ADDR, image)
-        assert resolve_export("bad.dll", "send") is None
+        assert resolve_export("bad.dll", "send", session=mock_session) is None
 
     def test_bad_optional_header_magic(self, mock_session):
         image = _build_pe(BASE_ADDR, [("send", 0x4000)])
@@ -357,15 +403,22 @@ class TestInvalidPESignature:
         opt_offset = pe_offset + 4 + 20
         struct.pack_into("<H", image, opt_offset, 0x010B)  # PE32 instead of PE32+
         mock_session.add_module("bad.dll", BASE_ADDR, image)
-        assert resolve_export("bad.dll", "send") is None
+        assert resolve_export("bad.dll", "send", session=mock_session) is None
 
 
 class TestCaseInsensitiveModuleLookup:
+    def test_case_variant_duplicate_preserves_first_legacy_match(self, mock_session):
+        second_base = BASE_ADDR + 0x100000
+        mock_session.add_module("ws2_32.dll", BASE_ADDR, _build_pe(BASE_ADDR, [("send", 0x4000)]))
+        mock_session.add_module("WS2_32.DLL", second_base, _build_pe(second_base, [("send", 0x5000)]))
+
+        assert resolve_export("WS2_32.DLL", "send", session=mock_session) == BASE_ADDR + 0x4000
+
     def test_uppercase_query(self, pe_with_exports):
-        assert resolve_export("WS2_32.DLL", "send") == BASE_ADDR + 0x4000
+        assert resolve_export("WS2_32.DLL", "send", session=pe_with_exports) == BASE_ADDR + 0x4000
 
     def test_mixed_case_query(self, pe_with_exports):
-        assert resolve_export("Ws2_32.Dll", "send") == BASE_ADDR + 0x4000
+        assert resolve_export("Ws2_32.Dll", "send", session=pe_with_exports) == BASE_ADDR + 0x4000
 
     def test_lowercase_query(self, pe_with_exports):
-        assert resolve_export("ws2_32.dll", "send") == BASE_ADDR + 0x4000
+        assert resolve_export("ws2_32.dll", "send", session=pe_with_exports) == BASE_ADDR + 0x4000

@@ -11,7 +11,6 @@ import pymem.memory
 import pymem.process
 import pymem.ressources.structure as structs
 
-from ...session import SESSION
 from ...utils.peb import read_process_environment, read_process_modules, read_process_peb
 
 # Windows API constants
@@ -126,7 +125,7 @@ def get_process_list(lua_table_fn: Callable, filter_str: Optional[str] = None, l
     return t
 
 
-def get_process_info(lua_table_fn: Callable, pid: Optional[int] = None):
+def get_process_info(lua_table_fn: Callable, pid: Optional[int] = None, *, session):
     """Get detailed process information.
 
     Args:
@@ -136,7 +135,7 @@ def get_process_info(lua_table_fn: Callable, pid: Optional[int] = None):
     Returns:
         Lua table with pid, name, path, parent_pid, or nil on error
     """
-    target_pid = pid if pid else (SESSION.pid if SESSION.pm else 0)
+    target_pid = pid if pid else (session.pid if session.pm else 0)
     if not target_pid:
         return None
 
@@ -175,7 +174,7 @@ def get_process_info(lua_table_fn: Callable, pid: Optional[int] = None):
     return result
 
 
-def get_memory_regions(lua_table_fn: Callable, filter_prot: Optional[str] = None, limit: int = 1000):
+def get_memory_regions(lua_table_fn: Callable, filter_prot: Optional[str] = None, limit: int = 1000, *, session):
     """List memory regions of attached process.
 
     Args:
@@ -186,7 +185,7 @@ def get_memory_regions(lua_table_fn: Callable, filter_prot: Optional[str] = None
     Returns:
         Lua table of {base, size, protection, type, state}
     """
-    if SESSION.pm is None:
+    if session.pm is None:
         return lua_table_fn()
 
     results = []
@@ -195,7 +194,7 @@ def get_memory_regions(lua_table_fn: Callable, filter_prot: Optional[str] = None
 
     while address < max_addr and len(results) < limit:
         try:
-            mbi = pymem.memory.virtual_query(SESSION.pm.process_handle, address)
+            mbi = pymem.memory.virtual_query(session.pm.process_handle, address)
         except:
             break
 
@@ -266,7 +265,7 @@ def get_memory_regions(lua_table_fn: Callable, filter_prot: Optional[str] = None
     return t
 
 
-def get_region_info(lua_table_fn: Callable, address: int):
+def get_region_info(lua_table_fn: Callable, address: int, *, session):
     """Get info about memory region containing address.
 
     Args:
@@ -276,12 +275,12 @@ def get_region_info(lua_table_fn: Callable, address: int):
     Returns:
         Lua table with base, size, protection, type, state, or nil
     """
-    if SESSION.pm is None:
+    if session.pm is None:
         return None
 
     try:
         addr = int(address)
-        mbi = pymem.memory.virtual_query(SESSION.pm.process_handle, addr)
+        mbi = pymem.memory.virtual_query(session.pm.process_handle, addr)
     except:
         return None
 
@@ -311,7 +310,7 @@ def get_region_info(lua_table_fn: Callable, address: int):
     return result
 
 
-def get_threads(lua_table_fn: Callable, pid: Optional[int] = None):
+def get_threads(lua_table_fn: Callable, pid: Optional[int] = None, *, session):
     """List threads of a process.
 
     Args:
@@ -321,7 +320,7 @@ def get_threads(lua_table_fn: Callable, pid: Optional[int] = None):
     Returns:
         Lua table of {tid, owner_pid, priority}
     """
-    target_pid = pid if pid else (SESSION.pid if SESSION.pm else 0)
+    target_pid = pid if pid else (session.pid if session.pm else 0)
     if not target_pid:
         return lua_table_fn()
 
@@ -512,7 +511,7 @@ def get_services(lua_table_fn: Callable, pid: Optional[int] = None):
     return t
 
 
-def is_being_debugged(pid: Optional[int] = None) -> bool | None:
+def is_being_debugged(pid: Optional[int] = None, *, session) -> bool | None:
     """Check if a process has a debugger attached via PEB.
 
     Args:
@@ -521,7 +520,7 @@ def is_being_debugged(pid: Optional[int] = None) -> bool | None:
     Returns:
         True if debugger attached, False otherwise, None on error.
     """
-    target_pid = pid if pid else (SESSION.pid if SESSION.pm else 0)
+    target_pid = pid if pid else (session.pid if session.pm else 0)
     if not target_pid:
         return None
 
@@ -531,7 +530,7 @@ def is_being_debugged(pid: Optional[int] = None) -> bool | None:
     return peb_data.get("being_debugged", False)
 
 
-def get_environment(lua_table_fn: Callable, pid: Optional[int] = None):
+def get_environment(lua_table_fn: Callable, pid: Optional[int] = None, *, session):
     """Read environment variables from a process via PEB.
 
     Args:
@@ -541,7 +540,7 @@ def get_environment(lua_table_fn: Callable, pid: Optional[int] = None):
     Returns:
         Lua table of {KEY = "value", ...} or empty table on failure.
     """
-    target_pid = pid if pid else (SESSION.pid if SESSION.pm else 0)
+    target_pid = pid if pid else (session.pid if session.pm else 0)
     if not target_pid:
         return lua_table_fn()
 
@@ -555,7 +554,7 @@ def get_environment(lua_table_fn: Callable, pid: Optional[int] = None):
     return t
 
 
-def get_modules_remote(lua_table_fn: Callable, pid: Optional[int] = None):
+def get_modules_remote(lua_table_fn: Callable, pid: Optional[int] = None, *, session):
     """Enumerate modules from a process without attaching, via PEB Ldr.
 
     Args:
@@ -565,7 +564,7 @@ def get_modules_remote(lua_table_fn: Callable, pid: Optional[int] = None):
     Returns:
         Lua table of {name, base, size, path} entries, or empty table.
     """
-    target_pid = pid if pid else (SESSION.pid if SESSION.pm else 0)
+    target_pid = pid if pid else (session.pid if session.pm else 0)
     if not target_pid:
         return lua_table_fn()
 

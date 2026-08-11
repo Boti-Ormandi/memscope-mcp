@@ -33,7 +33,7 @@ class DetectedValue:
     confidence: float  # 0.0 to 1.0
 
 
-def detect_value_type(raw_bytes: bytes, address: int) -> DetectedValue:
+def detect_value_type(raw_bytes: bytes, address: int, *, session) -> DetectedValue:
     """Detect the type of an 8-byte value.
 
     Args:
@@ -55,10 +55,10 @@ def detect_value_type(raw_bytes: bytes, address: int) -> DetectedValue:
     # Check for valid pointer
     if is_valid_pointer(value):
         # Try to determine what it points to
-        annotation = _analyze_pointer(value)
+        annotation = _analyze_pointer(value, session=session)
 
         # Check if it points to a C string
-        c_str = safe_read_string(value, 64)
+        c_str = safe_read_string(value, 64, session=session)
         if c_str and len(c_str) > 2 and _is_printable(c_str):
             preview = c_str[:50] + "..." if len(c_str) > 50 else c_str
             return DetectedValue(
@@ -95,9 +95,9 @@ def detect_value_type(raw_bytes: bytes, address: int) -> DetectedValue:
     return DetectedValue(value_type=ValueType.UNKNOWN, raw_value=value, annotation=f"0x{value:X}", confidence=0.0)
 
 
-def _analyze_pointer(ptr: int) -> str:
+def _analyze_pointer(ptr: int, *, session) -> str:
     """Create annotation for a pointer value."""
-    mod_info = get_module_for_address(ptr)
+    mod_info = get_module_for_address(ptr, session=session)
     if mod_info:
         name, offset = mod_info
         return f"-> {name}+0x{offset:X}"
@@ -133,7 +133,7 @@ def _looks_like_inline_string(data: bytes) -> bool:
 
 
 def analyze_memory_region(
-    address: int, data: bytes, entry_size: int = 8, include_confidence: bool = False
+    address: int, data: bytes, entry_size: int = 8, include_confidence: bool = False, *, session
 ) -> list[dict]:
     """Analyze a memory region and detect types for each entry.
 
@@ -153,7 +153,7 @@ def analyze_memory_region(
         entry_bytes = data[offset : offset + entry_size]
         entry_addr = address + offset
 
-        detected = detect_value_type(entry_bytes, entry_addr)
+        detected = detect_value_type(entry_bytes, entry_addr, session=session)
 
         entry = {
             "offset": f"+0x{offset:02X}",

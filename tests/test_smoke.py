@@ -53,7 +53,8 @@ def test_lua_engine_initializes():
     from memscope_mcp.tools.lua.engine import LUA_ENGINE
 
     assert LUA_ENGINE is not None
-    assert LUA_ENGINE.lua is not None
+    assert not hasattr(LUA_ENGINE, "lua")
+    assert LUA_ENGINE.execute("return 1")["results"]["return"] == 1
 
 
 def test_lua_engine_basic_execution():

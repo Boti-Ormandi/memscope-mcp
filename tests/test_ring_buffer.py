@@ -1,7 +1,7 @@
 """Tests for ring buffer reader in HookManager.
 
 Simulates a ring buffer in local memory using a bytearray.
-No process attachment needed -- SESSION is monkeypatched.
+No process attachment needed -- MockBuffer is injected as the manager session.
 """
 
 import struct
@@ -82,7 +82,7 @@ def make_ring_buffer(
         total_size=total_size,
     )
 
-    mgr = HookManager()
+    mgr = HookManager(buf)
     mgr.ring_buffer = cfg
     return buf, cfg, mgr
 
@@ -166,12 +166,9 @@ def set_stats(buf: MockBuffer, total_captured: int = 0, total_dropped: int = 0) 
 
 
 @pytest.fixture()
-def ring(monkeypatch):
-    """Yield (MockBuffer, RingBufferConfig, HookManager) with SESSION patched."""
-    buf, cfg, mgr = make_ring_buffer()
-    monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.read_bytes", buf.read_bytes)
-    monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.write_uint64", buf.write_uint64)
-    return buf, cfg, mgr
+def ring():
+    """Yield (MockBuffer, RingBufferConfig, HookManager) with the buffer injected as its session."""
+    return make_ring_buffer()
 
 
 # ---------- Tests ----------
@@ -384,7 +381,7 @@ class TestStats:
         assert stats["utilization_pct"] == 100.0
 
     def test_no_ring_buffer_raises(self):
-        mgr = HookManager()
+        mgr = HookManager(object())
         with pytest.raises(RuntimeError, match="No ring buffer"):
             mgr.ring_buffer_stats()
 
@@ -552,12 +549,12 @@ class TestRingBufferBoundsChecking:
 
 class TestNoRingBuffer:
     def test_read_without_buffer_raises(self):
-        mgr = HookManager()
+        mgr = HookManager(object())
         with pytest.raises(RuntimeError, match="No ring buffer"):
             mgr.read_ring_buffer()
 
     def test_stats_without_buffer_raises(self):
-        mgr = HookManager()
+        mgr = HookManager(object())
         with pytest.raises(RuntimeError, match="No ring buffer"):
             mgr.ring_buffer_stats()
 

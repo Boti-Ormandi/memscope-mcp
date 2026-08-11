@@ -41,6 +41,7 @@ Prefer `callSequence` for dependent native calls.
 """.strip()
 
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
+        self._session = ctx.session
         engine = ctx.engine
         log_err = engine._log_error
 
@@ -50,18 +51,34 @@ Prefer `callSequence` for dependent native calls.
 
         funcs = {
             "executeCode": lambda func, *args: execute_code_lua(
-                func, args, engine._output, log_err, engine._execution_guard
+                func,
+                args,
+                engine._output,
+                log_err,
+                engine._execution_guard,
+                session=self._session,
             ),
             "executeCodeEx": lambda flags, timeout, func, *args: execute_code_ex_lua(
-                flags, timeout, func, args, engine._output, log_err, engine._execution_guard
+                flags,
+                timeout,
+                func,
+                args,
+                engine._output,
+                log_err,
+                engine._execution_guard,
+                session=self._session,
             ),
-            "callSequence": lambda calls, timeout=5000: call_sequence_lua(calls, timeout, engine._output, log_err),
+            "callSequence": lambda calls, timeout=5000: call_sequence_lua(
+                calls, timeout, engine._output, log_err, session=self._session
+            ),
             "callSequenceResults": lambda calls, timeout=5000: call_sequence_results_lua(
-                calls, timeout, ctx.table_factory, engine._output, log_err
+                calls, timeout, ctx.table_factory, engine._output, log_err, session=self._session
             ),
             "allowUnsafeCodeExecution": _allow_unsafe,
-            "alloc": lambda size_or_str, wide=False: alloc_lua(size_or_str, wide, engine._output),
-            "freeMemory": lambda addr: free_memory_lua(addr, log_err),
+            "alloc": lambda size_or_str, wide=False: alloc_lua(
+                size_or_str, wide, engine._output, session=self._session
+            ),
+            "freeMemory": lambda addr: free_memory_lua(addr, log_err, session=self._session),
         }
 
         # Aliases for consistency

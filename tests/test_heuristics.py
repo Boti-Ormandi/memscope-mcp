@@ -1,6 +1,7 @@
 """Tests for type detection heuristics (pure helper functions)."""
 
 import struct
+from types import SimpleNamespace
 
 from memscope_mcp.utils.heuristics import (
     ValueType,
@@ -88,23 +89,26 @@ class TestLooksLikeInlineString:
         assert _looks_like_inline_string(b"A\x01\x02\x03\x04\x05\x06\x07") is False
 
 
+TEST_SESSION = SimpleNamespace(module_snapshot=None)
+
+
 class TestDetectValueType:
     def test_null(self):
         data = struct.pack("<Q", 0)
-        result = detect_value_type(data, 0x1000)
+        result = detect_value_type(data, 0x1000, session=TEST_SESSION)
         assert result.value_type == ValueType.NULL
         assert result.confidence == 1.0
 
     def test_small_int(self):
         data = struct.pack("<Q", 42)
-        result = detect_value_type(data, 0x1000)
+        result = detect_value_type(data, 0x1000, session=TEST_SESSION)
         assert result.value_type == ValueType.INT
         assert result.raw_value == 42
         assert "42" in result.annotation
 
     def test_small_int_boundary(self):
         data = struct.pack("<Q", 0xFFFF)
-        result = detect_value_type(data, 0x1000)
+        result = detect_value_type(data, 0x1000, session=TEST_SESSION)
         assert result.value_type == ValueType.INT
 
     def test_float_detection(self):
@@ -116,13 +120,13 @@ class TestDetectValueType:
         float_bytes = struct.pack("<f", 3.14)
         # Upper bytes make value > 0x7FFFFFFFFFFF so it's not a valid pointer
         data = float_bytes + b"\x00\x80\x00\x00"
-        result = detect_value_type(data, 0x1000)
+        result = detect_value_type(data, 0x1000, session=TEST_SESSION)
         assert result.value_type == ValueType.FLOAT
         assert "3.14" in result.annotation
 
     def test_inline_string(self):
         data = b"TestStr\x00"
-        result = detect_value_type(data, 0x1000)
+        result = detect_value_type(data, 0x1000, session=TEST_SESSION)
         # Value as uint64 will be large (not a valid pointer, not small int)
         # Float interpretation of "Test" bytes may or may not be reasonable
         # But if it reaches inline string check, it should detect it
@@ -132,13 +136,13 @@ class TestDetectValueType:
     def test_short_data_padded(self):
         # Less than 8 bytes should be padded with nulls
         data = b"\x05\x00"
-        result = detect_value_type(data, 0x1000)
+        result = detect_value_type(data, 0x1000, session=TEST_SESSION)
         assert result.value_type == ValueType.INT
         assert result.raw_value == 5
 
     def test_unknown_large_value(self):
         # Value that's not a valid pointer, not small, not a reasonable float, not a string
         data = b"\x01\x80\x01\x80\x01\x80\x01\x80"
-        result = detect_value_type(data, 0x1000)
+        result = detect_value_type(data, 0x1000, session=TEST_SESSION)
         # This may land on FLOAT or UNKNOWN depending on the float interpretation
         assert result.value_type in (ValueType.FLOAT, ValueType.UNKNOWN)

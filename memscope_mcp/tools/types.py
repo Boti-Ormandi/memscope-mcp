@@ -88,7 +88,7 @@ COMPOSITE_TYPES = {
 }
 
 
-def read_typed(address: str, type_name: str, count: int = 1) -> dict[str, Any]:
+def read_typed(address: str, type_name: str, count: int = 1, *, session=None) -> dict[str, Any]:
     """Read typed data from memory.
 
     Args:
@@ -120,11 +120,12 @@ def read_typed(address: str, type_name: str, count: int = 1) -> dict[str, Any]:
             "size": int (bytes read)
         }
     """
-    if not SESSION.ensure_attached():
+    session = SESSION if session is None else session
+    if not session.ensure_attached():
         return {"success": False, "error": "NOT_ATTACHED"}
 
     try:
-        addr = parse_address(address)
+        addr = parse_address(address, session=session)
     except ValueError as e:
         return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
@@ -133,15 +134,15 @@ def read_typed(address: str, type_name: str, count: int = 1) -> dict[str, Any]:
     try:
         # Handle primitives
         if type_lower in PRIMITIVES:
-            return _read_primitive(addr, type_lower, count)
+            return _read_primitive(addr, type_lower, count, session=session)
 
         # Handle composite types
         if type_lower in COMPOSITE_TYPES:
-            return _read_composite_type(addr, type_lower, count)
+            return _read_composite_type(addr, type_lower, count, session=session)
 
         # Handle null-terminated C string
         if type_lower == "cstring":
-            return _read_cstring(addr)
+            return _read_cstring(addr, session=session)
 
         # Handle raw bytes
         if type_lower == "bytes" or type_lower.startswith("bytes["):
@@ -151,7 +152,7 @@ def read_typed(address: str, type_name: str, count: int = 1) -> dict[str, Any]:
                 return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name, "detail": str(e)}
 
             size = count if fixed_size is None else fixed_size
-            data = SESSION.read_bytes(addr, size)
+            data = session.read_bytes(addr, size)
             return {
                 "success": True,
                 "address": format_address(addr),
@@ -166,12 +167,12 @@ def read_typed(address: str, type_name: str, count: int = 1) -> dict[str, Any]:
         return {"success": False, "error": "READ_ERROR", "address": format_address(addr), "detail": str(e)}
 
 
-def _read_primitive(addr: int, type_name: str, count: int) -> dict:
+def _read_primitive(addr: int, type_name: str, count: int, *, session) -> dict:
     """Read primitive type(s)."""
     size, fmt, signed = PRIMITIVES[type_name]
     total_size = size * count
 
-    data = SESSION.read_bytes(addr, total_size)
+    data = session.read_bytes(addr, total_size)
 
     if count == 1:
         value = struct.unpack(fmt, data)[0]
@@ -197,12 +198,12 @@ def _read_primitive(addr: int, type_name: str, count: int) -> dict:
     return {"success": True, "address": format_address(addr), "type": type_name, "value": value, "size": total_size}
 
 
-def _read_composite_type(addr: int, type_name: str, count: int) -> dict:
+def _read_composite_type(addr: int, type_name: str, count: int, *, session) -> dict:
     """Read composite type(s)."""
     size, num_components, fmt = COMPOSITE_TYPES[type_name]
     total_size = size * count
 
-    data = SESSION.read_bytes(addr, total_size)
+    data = session.read_bytes(addr, total_size)
 
     def parse_one(chunk: bytes) -> Any:
         components = struct.unpack(fmt, chunk)
@@ -259,10 +260,10 @@ def _read_composite_type(addr: int, type_name: str, count: int) -> dict:
     return {"success": True, "address": format_address(addr), "type": type_name, "value": value, "size": total_size}
 
 
-def _read_cstring(addr: int, max_length: int = 256) -> dict:
+def _read_cstring(addr: int, max_length: int = 256, *, session) -> dict:
     """Read null-terminated C string."""
     # Read raw bytes and find null terminator manually
-    raw = SESSION.read_bytes(addr, max_length)
+    raw = session.read_bytes(addr, max_length)
 
     # Find null terminator
     null_pos = raw.find(b"\x00")
@@ -433,21 +434,21 @@ def get_type_info(type_name: str) -> dict[str, Any]:
     return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
 
 
-def _coerce_primitive_value(type_name: str, value: Any) -> int | float:
+def _coerce_primitive_value(type_name: str, value: Any, *, session) -> int | float:
     if type_name in ("bool", "boolean"):
         return 1 if value else 0
     if type_name in ("float", "single", "double"):
         return float(value)
     if type_name in ("ptr", "pointer", "intptr"):
         if isinstance(value, str):
-            return parse_address(value)
+            return parse_address(value, session=session)
         return int(value)
     return int(value)
 
 
-def _pack_primitive_value(type_name: str, value: Any) -> dict[str, Any]:
+def _pack_primitive_value(type_name: str, value: Any, *, session) -> dict[str, Any]:
     size, fmt, _signed = PRIMITIVES[type_name]
-    val = _coerce_primitive_value(type_name, value)
+    val = _coerce_primitive_value(type_name, value, session=session)
 
     if type_name in ("byte", "uint8"):
         byte_value = int(val)
@@ -550,28 +551,28 @@ def _pack_bytes_value(type_name: str, value: Any) -> dict[str, Any]:
     return {"success": True, "data": data, "new_value": _format_bytes_value(data), "size": len(data)}
 
 
-def _pack_write_value(type_name: str, value: Any) -> dict[str, Any]:
+def _pack_write_value(type_name: str, value: Any, *, session) -> dict[str, Any]:
     if type_name == "bytes" or type_name.startswith("bytes["):
         return _pack_bytes_value(type_name, value)
     if type_name in PRIMITIVES:
-        return _pack_primitive_value(type_name, value)
+        return _pack_primitive_value(type_name, value, session=session)
     if type_name in COMPOSITE_TYPES:
         return _pack_composite_value(type_name, value)
     return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
 
 
-def _restore_prewrite_bytes(addr: int, old_data: bytes) -> dict[str, Any]:
+def _restore_prewrite_bytes(addr: int, old_data: bytes, *, session) -> dict[str, Any]:
     rollback = {"attempted": True, "success": True, "value": format_bytes(old_data)}
     try:
-        SESSION.write_bytes(addr, old_data)
+        session.write_bytes(addr, old_data)
     except Exception as e:
         rollback["success"] = False
         rollback["error"] = str(e)
     return rollback
 
 
-def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
-    packed = _pack_write_value(type_name, value)
+def _write_verified(addr: int, type_name: str, value: Any, *, session) -> dict[str, Any]:
+    packed = _pack_write_value(type_name, value, session=session)
     if not packed.get("success"):
         return packed
 
@@ -581,7 +582,7 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
     address = format_address(addr)
 
     try:
-        writable = SESSION.is_memory_range_writable(addr, size)
+        writable = session.is_memory_range_writable(addr, size)
     except Exception:
         writable = False
     if not writable:
@@ -595,7 +596,7 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
         }
 
     try:
-        old_data = SESSION.read_bytes(addr, size)
+        old_data = session.read_bytes(addr, size)
     except Exception as e:
         return {
             "success": False,
@@ -607,12 +608,12 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
         }
 
     try:
-        SESSION.write_bytes(addr, data)
+        session.write_bytes(addr, data)
     except Exception as e:
         return {"success": False, "error": "WRITE_ERROR", "address": address, "type": type_name, "detail": str(e)}
 
     try:
-        actual_data = SESSION.read_bytes(addr, size)
+        actual_data = session.read_bytes(addr, size)
     except Exception as e:
         return {
             "success": False,
@@ -623,7 +624,7 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
             "new_value": new_value,
             "size": size,
             "detail": f"Cannot read target range after write: {e}",
-            "rollback": _restore_prewrite_bytes(addr, old_data),
+            "rollback": _restore_prewrite_bytes(addr, old_data, session=session),
         }
 
     if actual_data != data:
@@ -640,7 +641,7 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
             "actual_value": actual_value,
             "size": size,
             "detail": "Readback did not match requested bytes",
-            "rollback": _restore_prewrite_bytes(addr, old_data),
+            "rollback": _restore_prewrite_bytes(addr, old_data, session=session),
         }
 
     return {
@@ -654,7 +655,7 @@ def _write_verified(addr: int, type_name: str, value: Any) -> dict[str, Any]:
     }
 
 
-def write_typed(address: str, value: Any, type_name: str, validate: bool = False) -> dict[str, Any]:
+def write_typed(address: str, value: Any, type_name: str, validate: bool = False, *, session=None) -> dict[str, Any]:
     """Write typed data to memory.
 
     Args:
@@ -691,11 +692,12 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
             "rollback": <pre-image restore result> (post-write verification failures only)
         }
     """
-    if not SESSION.ensure_attached():
+    session = SESSION if session is None else session
+    if not session.ensure_attached():
         return {"success": False, "error": "NOT_ATTACHED"}
 
     try:
-        addr = parse_address(address)
+        addr = parse_address(address, session=session)
     except ValueError as e:
         return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
@@ -703,19 +705,19 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
 
     try:
         if validate:
-            return _write_verified(addr, type_lower, value)
+            return _write_verified(addr, type_lower, value, session=session)
 
         # Handle raw bytes
         if type_lower == "bytes" or type_lower.startswith("bytes["):
-            return _write_bytes(addr, type_lower, value)
+            return _write_bytes(addr, type_lower, value, session=session)
 
         # Handle primitives
         if type_lower in PRIMITIVES:
-            return _write_primitive(addr, type_lower, value)
+            return _write_primitive(addr, type_lower, value, session=session)
 
         # Handle composite types
         if type_lower in COMPOSITE_TYPES:
-            return _write_composite_type(addr, type_lower, value)
+            return _write_composite_type(addr, type_lower, value, session=session)
 
         return {"success": False, "error": "UNKNOWN_TYPE", "type": type_name}
 
@@ -723,12 +725,12 @@ def write_typed(address: str, value: Any, type_name: str, validate: bool = False
         return {"success": False, "error": "WRITE_ERROR", "address": format_address(addr), "detail": str(e)}
 
 
-def _write_bytes(addr: int, type_name: str, value: Any) -> dict[str, Any]:
+def _write_bytes(addr: int, type_name: str, value: Any, *, session) -> dict[str, Any]:
     packed = _pack_bytes_value(type_name, value)
     if not packed.get("success"):
         return packed
 
-    SESSION.write_bytes(addr, packed["data"])
+    session.write_bytes(addr, packed["data"])
     return {
         "success": True,
         "address": format_address(addr),
@@ -738,32 +740,32 @@ def _write_bytes(addr: int, type_name: str, value: Any) -> dict[str, Any]:
     }
 
 
-def _write_primitive(addr: int, type_name: str, value: Any) -> dict:
+def _write_primitive(addr: int, type_name: str, value: Any, *, session) -> dict:
     """Write primitive type."""
     size, fmt, _signed = PRIMITIVES[type_name]
 
     try:
-        val = _coerce_primitive_value(type_name, value)
+        val = _coerce_primitive_value(type_name, value, session=session)
 
-        # Write using SESSION methods for common types (faster)
+        # Write using session methods for common types (faster)
         if type_name in ("int32", "int"):
-            SESSION.write_int32(addr, val)
+            session.write_int32(addr, val)
         elif type_name in ("uint32", "uint"):
-            SESSION.write_uint32(addr, val)
+            session.write_uint32(addr, val)
         elif type_name in ("int64", "long"):
-            SESSION.write_int64(addr, val)
+            session.write_int64(addr, val)
         elif type_name in ("uint64", "ulong", "ptr", "pointer", "intptr"):
-            SESSION.write_uint64(addr, val)
+            session.write_uint64(addr, val)
         elif type_name in ("float", "single"):
-            SESSION.write_float(addr, val)
+            session.write_float(addr, val)
         elif type_name in ("double",):
-            SESSION.write_double(addr, val)
+            session.write_double(addr, val)
         elif type_name in ("byte", "uint8", "bool", "boolean"):
-            SESSION.write_byte(addr, val)
+            session.write_byte(addr, val)
         else:
             # Use struct packing for other types
             data = struct.pack(fmt, val)
-            SESSION.write_bytes(addr, data)
+            session.write_bytes(addr, data)
 
         return {"success": True, "address": format_address(addr), "type": type_name, "new_value": value, "size": size}
 
@@ -771,13 +773,13 @@ def _write_primitive(addr: int, type_name: str, value: Any) -> dict:
         return {"success": False, "error": "VALUE_OUT_OF_RANGE", "type": type_name, "value": value, "detail": str(e)}
 
 
-def _write_composite_type(addr: int, type_name: str, value: Any) -> dict:
+def _write_composite_type(addr: int, type_name: str, value: Any, *, session) -> dict:
     """Write composite type."""
     packed = _pack_composite_value(type_name, value)
     if not packed.get("success"):
         return packed
 
-    SESSION.write_bytes(addr, packed["data"])
+    session.write_bytes(addr, packed["data"])
     return {
         "success": True,
         "address": format_address(addr),

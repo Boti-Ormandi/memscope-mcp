@@ -16,7 +16,7 @@ def parse_offset(offset: Union[int, str]) -> int:
     return int(offset)
 
 
-def parse_address(address: Union[str, int]) -> int:
+def parse_address(address: Union[str, int], *, session=None) -> int:
     """Parse address from string or int format.
 
     Supports:
@@ -46,7 +46,8 @@ def parse_address(address: Union[str, int]) -> int:
             base = int(base_str, 16)
         else:
             # Module name: module.dll+0x1A208D8
-            base = SESSION.get_module_base(base_str)
+            lookup_session = SESSION if session is None else session
+            base = lookup_session.get_module_base(base_str)
             if base is None:
                 raise ValueError(f"Module not found: {base_str}")
 
@@ -56,7 +57,15 @@ def parse_address(address: Union[str, int]) -> int:
     if address.lower().startswith("0x"):
         return int(address, 16)
 
-    return int(address)
+    try:
+        return int(address)
+    except ValueError:
+        if session is None:
+            raise
+        base = session.get_module_base(address)
+        if base is None:
+            raise
+        return base
 
 
 def format_address(address: int) -> str:
@@ -69,7 +78,7 @@ def format_bytes(data: bytes) -> str:
     return " ".join(f"{b:02X}" for b in data)
 
 
-def read_with_format(address: int, size: int, fmt: str) -> Any:
+def read_with_format(address: int, size: int, fmt: str, *, session) -> Any:
     """Read memory and convert to specified format.
 
     Args:
@@ -80,33 +89,33 @@ def read_with_format(address: int, size: int, fmt: str) -> Any:
     Returns:
         Converted value
     """
-    if SESSION.pm is None:
+    if session.pm is None:
         raise RuntimeError("Not attached to process")
 
     fmt = fmt.lower()
 
     if fmt == "int" or fmt == "int32":
-        return SESSION.read_int32(address)
+        return session.read_int32(address)
     elif fmt == "uint" or fmt == "uint32":
-        return SESSION.read_uint32(address)
+        return session.read_uint32(address)
     elif fmt == "int64":
-        return struct.unpack("<q", SESSION.read_bytes(address, 8))[0]
+        return struct.unpack("<q", session.read_bytes(address, 8))[0]
     elif fmt == "uint64" or fmt == "pointer":
-        return SESSION.read_ptr(address)
+        return session.read_ptr(address)
     elif fmt == "float":
-        return SESSION.read_float(address)
+        return session.read_float(address)
     elif fmt == "double":
-        return SESSION.read_double(address)
+        return session.read_double(address)
     elif fmt == "cstring":
-        return SESSION.read_string(address, 256)
+        return session.read_string(address, 256)
     elif fmt == "bytes" or fmt == "raw":
-        return SESSION.read_bytes(address, size)
+        return session.read_bytes(address, size)
     elif fmt == "hex":
-        data = SESSION.read_bytes(address, size)
+        data = session.read_bytes(address, size)
         return format_bytes(data)
     else:
         # Default to raw bytes
-        return SESSION.read_bytes(address, size)
+        return session.read_bytes(address, size)
 
 
 def is_valid_pointer(value: int) -> bool:
@@ -114,13 +123,16 @@ def is_valid_pointer(value: int) -> bool:
     return 0x10000 <= value <= 0x7FFFFFFFFFFF
 
 
-def get_module_for_address(address: int) -> Optional[tuple[str, int]]:
+def get_module_for_address(address: int, *, session) -> Optional[tuple[str, int]]:
     """Find which module contains an address.
 
     Returns:
         Tuple of (module_name, offset) or None if not in any module
     """
-    for name, info in SESSION.modules.items():
+    snapshot = session.module_snapshot
+    if snapshot is None:
+        return None
+    for name, info in snapshot.to_legacy_dict().items():
         base = info["base"]
         size = info["size"]
         if base <= address < base + size:
@@ -128,34 +140,34 @@ def get_module_for_address(address: int) -> Optional[tuple[str, int]]:
     return None
 
 
-def format_pointer_annotation(ptr: int) -> str:
+def format_pointer_annotation(ptr: int, *, session) -> str:
     """Create annotation string for a pointer value."""
-    mod_info = get_module_for_address(ptr)
+    mod_info = get_module_for_address(ptr, session=session)
     if mod_info:
         name, offset = mod_info
         return f"-> {name}+0x{offset:X}"
     return f"-> 0x{ptr:X}"
 
 
-def safe_read_ptr(address: int) -> Optional[int]:
+def safe_read_ptr(address: int, *, session) -> Optional[int]:
     """Safely read a pointer, returning None on error."""
     try:
-        return SESSION.read_ptr(address)
+        return session.read_ptr(address)
     except Exception:
         return None
 
 
-def safe_read_bytes(address: int, size: int) -> Optional[bytes]:
+def safe_read_bytes(address: int, size: int, *, session) -> Optional[bytes]:
     """Safely read bytes, returning None on error."""
     try:
-        return SESSION.read_bytes(address, size)
+        return session.read_bytes(address, size)
     except Exception:
         return None
 
 
-def safe_read_string(address: int, max_len: int = 256) -> Optional[str]:
+def safe_read_string(address: int, max_len: int = 256, *, session) -> Optional[str]:
     """Safely read C string, returning None on error."""
     try:
-        return SESSION.read_string(address, max_len)
+        return session.read_string(address, max_len)
     except Exception:
         return None

@@ -7,11 +7,20 @@ on the MCP modules tool.
 
 from typing import Callable, Optional
 
-from ...session import SESSION
 from ...utils.memory_utils import is_valid_pointer
 
 
-def get_modules(lua_table_fn: Callable, filter_str: Optional[str] = None):
+def _legacy_modules(*, session) -> dict[str, dict[str, int | str]]:
+    snapshot = session.module_snapshot
+    return snapshot.to_legacy_dict() if snapshot is not None else {}
+
+
+def get_modules(
+    lua_table_fn: Callable,
+    filter_str: Optional[str] = None,
+    *,
+    session,
+):
     """List loaded modules with optional substring filter.
 
     Args:
@@ -29,7 +38,7 @@ def get_modules(lua_table_fn: Callable, filter_str: Optional[str] = None):
     """
     t = lua_table_fn()
     idx = 1
-    for name, info in SESSION.modules.items():
+    for name, info in _legacy_modules(session=session).items():
         if filter_str and filter_str.lower() not in name.lower():
             continue
         entry = lua_table_fn()
@@ -42,7 +51,13 @@ def get_modules(lua_table_fn: Callable, filter_str: Optional[str] = None):
     return t
 
 
-def get_module_from_address(lua_table_fn: Callable, address, log_error: Callable):
+def get_module_from_address(
+    lua_table_fn: Callable,
+    address,
+    log_error: Callable,
+    *,
+    session,
+):
     """Find which module contains a given address.
 
     Args:
@@ -64,7 +79,7 @@ def get_module_from_address(lua_table_fn: Callable, address, log_error: Callable
         if not is_valid_pointer(addr):
             return None
 
-        for name, info in SESSION.modules.items():
+        for name, info in _legacy_modules(session=session).items():
             base = info["base"]
             size = info["size"]
             if base <= addr < base + size:
@@ -79,7 +94,13 @@ def get_module_from_address(lua_table_fn: Callable, address, log_error: Callable
         return None
 
 
-def resolve_export_lua(module_name, function_name, log_error: Callable) -> Optional[int]:
+def resolve_export_lua(
+    module_name,
+    function_name,
+    log_error: Callable,
+    *,
+    session,
+) -> Optional[int]:
     """Resolve a DLL export name to its absolute address in the target.
 
     Args:
@@ -94,13 +115,18 @@ def resolve_export_lua(module_name, function_name, log_error: Callable) -> Optio
     try:
         from ...utils.pe import resolve_export
 
-        return resolve_export(str(module_name), str(function_name))
+        return resolve_export(str(module_name), str(function_name), session=session)
     except Exception as e:
         log_error("resolveExport", e)
         return None
 
 
-def format_address(address, log_error: Callable) -> str:
+def format_address(
+    address,
+    log_error: Callable,
+    *,
+    session,
+) -> str:
     """Format an address as module+offset if possible, raw hex otherwise.
 
     Args:
@@ -119,7 +145,7 @@ def format_address(address, log_error: Callable) -> str:
         return "nil"
     try:
         addr = int(address)
-        for name, info in SESSION.modules.items():
+        for name, info in _legacy_modules(session=session).items():
             base = info["base"]
             size = info["size"]
             if base <= addr < base + size:

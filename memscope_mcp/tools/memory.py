@@ -13,7 +13,7 @@ from ..utils.memory_utils import (
 )
 
 
-def read_memory(address: str, size: int = 8, format: str = "hex") -> dict[str, Any]:
+def read_memory(address: str, size: int = 8, format: str = "hex", *, session=None) -> dict[str, Any]:
     """Read memory at address with automatic type conversion.
 
     Args:
@@ -30,20 +30,21 @@ def read_memory(address: str, size: int = 8, format: str = "hex") -> dict[str, A
             "format": str
         }
     """
-    if not SESSION.ensure_attached():
+    active_session = SESSION if session is None else session
+    if not active_session.ensure_attached():
         return {"success": False, "error": "PROCESS_NOT_ATTACHED", "detail": "Call attach_process first"}
 
     try:
-        addr = parse_address(address)
+        addr = parse_address(address, session=active_session)
     except ValueError as e:
         return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
     try:
         # Read raw bytes for display
-        raw_bytes = SESSION.read_bytes(addr, size)
+        raw_bytes = active_session.read_bytes(addr, size)
 
         # Get formatted value
-        value = read_with_format(addr, size, format)
+        value = read_with_format(addr, size, format, session=active_session)
 
         # Convert bytes to displayable format if needed
         if isinstance(value, bytes):
@@ -86,6 +87,8 @@ def smart_dump(
     non_null_only: bool = False,
     max_entries: int = 100,
     annotation_level: str = "normal",
+    *,
+    session=None,
 ) -> dict[str, Any]:
     """Dump memory with automatic type detection and pointer resolution.
 
@@ -107,7 +110,8 @@ def smart_dump(
             "_pagination": {...}
         }
     """
-    if not SESSION.ensure_attached():
+    active_session = SESSION if session is None else session
+    if not active_session.ensure_attached():
         return {"success": False, "error": "PROCESS_NOT_ATTACHED", "detail": "Call attach_process first"}
 
     if not _is_int_param(start_offset) or not 0 <= start_offset < _DUMP_WINDOW_SIZE:
@@ -126,14 +130,14 @@ def smart_dump(
     effective_size = min(size, _DUMP_WINDOW_SIZE - start_offset)
 
     try:
-        base_addr = parse_address(address)
+        base_addr = parse_address(address, session=active_session)
     except ValueError as e:
         return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
     actual_addr = base_addr + start_offset
 
     try:
-        data = SESSION.read_bytes(actual_addr, effective_size)
+        data = active_session.read_bytes(actual_addr, effective_size)
     except Exception as e:
         return {
             "success": False,
@@ -147,6 +151,7 @@ def smart_dump(
         data,
         entry_size=_DUMP_ENTRY_SIZE,
         include_confidence=annotation_level == "full",
+        session=active_session,
     )
 
     filtered_entries = []

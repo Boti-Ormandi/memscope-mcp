@@ -261,7 +261,9 @@ def test_lua_outer_timeout_aborts_direct_scan(monkeypatch):
 
 
 def test_removed_lua_module_scan_global_is_absent():
-    assert LUA_ENGINE.lua.globals()["AOBScanModule"] is None
+    result = LUA_ENGINE.execute("return AOBScanModule == nil")
+    assert result["success"] is True
+    assert result["results"]["return"] is True
 
 
 def test_lua_aob_scan_many_returns_ordered_keyed_items_and_shared_metadata(monkeypatch):

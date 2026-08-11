@@ -177,8 +177,8 @@ def test_lua_wrapper_logs_timeout(monkeypatch):
 def test_scripts_wrapper_logs_empty_args_and_timeout(monkeypatch):
     seen = {}
 
-    def fake_run_script(name, process, args, timeout=None):
-        seen["run"] = (name, process, args, timeout)
+    def fake_run_script(name, process, args, timeout=None, *, engine):
+        seen["run"] = (name, process, args, timeout, engine)
         return {"success": True, "script_name": name}
 
     def fake_log(tool, args, result, duration_ms):
@@ -190,7 +190,7 @@ def test_scripts_wrapper_logs_empty_args_and_timeout(monkeypatch):
     result = server.scripts("run", name="probe", process="Target.exe", args={}, timeout=1.5)
 
     assert result == {"success": True, "script_name": "probe"}
-    assert seen["run"] == ("probe", "Target.exe", {}, 1.5)
+    assert seen["run"] == ("probe", "Target.exe", {}, 1.5, server.LUA_ENGINE)
     assert seen["log"][0] == "scripts"
     assert seen["log"][1] == {
         "action": "run",

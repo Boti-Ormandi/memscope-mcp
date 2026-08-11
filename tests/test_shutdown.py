@@ -1,95 +1,101 @@
-"""Tests for server shutdown cleanup.
-
-Verifies _shutdown() is idempotent and cleans up resources properly.
-"""
+"""Tests for server shutdown cleanup and composition-owned HookManager ordering."""
 
 from unittest.mock import MagicMock, patch
 
 import memscope_mcp.server as server_mod
 
 
-class TestShutdownIdempotency:
-    """_shutdown() must be safe to call multiple times."""
-
-    def setup_method(self):
-        # Reset the sentinel before each test
-        server_mod._shutdown_done = False
-
-    def test_shutdown_sets_done_flag(self):
-        with patch.object(server_mod, "SESSION") as mock_session:
-            mock_session.pm = None
-            server_mod._shutdown()
-            assert server_mod._shutdown_done is True
-
-    def test_shutdown_second_call_is_noop(self):
-        """Second call doesn't attempt cleanup again."""
-        call_count = 0
-
-        def counting_detach():
-            nonlocal call_count
-            call_count += 1
-
-        with patch.object(server_mod, "SESSION") as mock_session:
-            mock_session.pm = None
-            mock_session.detach = counting_detach
-            server_mod._shutdown()
-            server_mod._shutdown()
-            # detach only called if pm is not None, but the point is
-            # _shutdown body only executes once
-            assert server_mod._shutdown_done is True
-
-    def test_shutdown_no_process_attached(self):
-        """Shutdown with no attached process doesn't raise."""
-        with patch.object(server_mod, "SESSION") as mock_session:
-            mock_session.pm = None
-            server_mod._shutdown()  # Should not raise
-
-
-class TestShutdownCleansUp:
-    """_shutdown() cleans up hooks and session."""
-
+class TestShutdown:
     def setup_method(self):
         server_mod._shutdown_done = False
 
-    def test_shutdown_calls_detach_when_attached(self):
-        with patch.object(server_mod, "SESSION") as mock_session:
-            mock_session.pm = MagicMock()
-            mock_session._is_process_alive.return_value = True
-            server_mod._shutdown()
-            mock_session.detach.assert_called_once()
-
-    def test_shutdown_calls_hook_cleanup(self):
-        mock_hm = MagicMock()
-        mock_hm.hooks = {"0x1000": "hook_obj"}
-        mock_hm.ring_buffer = MagicMock()
-
+    def test_shutdown_no_process_still_cleans_manager(self):
         with (
-            patch.object(server_mod, "SESSION") as mock_session,
-            patch.dict("sys.modules", {}),
-            patch("memscope_mcp.server.HOOK_MANAGER", mock_hm, create=True),
+            patch.object(server_mod, "SESSION") as session,
+            patch.object(server_mod, "_hook_manager") as manager,
         ):
-            # Patch the lazy import inside _shutdown
-            with patch("memscope_mcp.tools.hooking.HOOK_MANAGER", mock_hm):
-                mock_session.pm = MagicMock()
-                mock_session._is_process_alive.return_value = True
-                server_mod._shutdown()
-                mock_hm.cleanup.assert_called_once_with(process_alive=True)
-
-    def test_shutdown_survives_hook_import_failure(self):
-        """If hooking module can't be imported, shutdown still detaches."""
-        with (
-            patch.object(server_mod, "SESSION") as mock_session,
-            patch("builtins.__import__", side_effect=ImportError("no module")),
-        ):
-            mock_session.pm = MagicMock()
-            # Should not raise despite import failure
+            session.pm = None
             server_mod._shutdown()
 
-    def test_shutdown_survives_detach_failure(self):
-        """If SESSION.detach() raises, shutdown doesn't propagate."""
-        with patch.object(server_mod, "SESSION") as mock_session:
-            mock_session.pm = MagicMock()
-            mock_session._is_process_alive.return_value = False
-            mock_session.detach.side_effect = OSError("handle closed")
-            server_mod._shutdown()  # Should not raise
-            assert server_mod._shutdown_done is True
+        manager.cleanup.assert_called_once_with(process_alive=False)
+        session.detach.assert_not_called()
+        assert server_mod._shutdown_done is True
+
+    def test_shutdown_is_idempotent(self):
+        with (
+            patch.object(server_mod, "SESSION") as session,
+            patch.object(server_mod, "_hook_manager") as manager,
+        ):
+            session.pm = None
+            server_mod._shutdown()
+            server_mod._shutdown()
+
+        manager.cleanup.assert_called_once_with(process_alive=False)
+        assert server_mod._shutdown_done is True
+
+    def test_application_manager_cleanup_precedes_detach(self):
+        events = []
+        with (
+            patch.object(server_mod, "SESSION") as session,
+            patch.object(server_mod, "_hook_manager") as manager,
+        ):
+            session.pm = MagicMock()
+            session._is_process_alive.return_value = True
+            manager.cleanup.side_effect = lambda **_kwargs: events.append("cleanup")
+            session.detach.side_effect = lambda: events.append("detach")
+            server_mod._shutdown()
+
+        assert events == ["cleanup", "detach"]
+        manager.cleanup.assert_called_once_with(process_alive=True)
+
+    def test_deferred_trampoline_only_state_still_causes_cleanup(self):
+        with (
+            patch.object(server_mod, "SESSION") as session,
+            patch.object(server_mod, "_hook_manager") as manager,
+        ):
+            session.pm = MagicMock()
+            session._is_process_alive.return_value = True
+            manager.hooks = {}
+            manager.ring_buffer = None
+            manager._deferred_trampolines = [(0x5000, 4096)]
+            server_mod._shutdown()
+
+        manager.cleanup.assert_called_once_with(process_alive=True)
+
+    def test_dead_target_passes_false_before_detach(self):
+        with (
+            patch.object(server_mod, "SESSION") as session,
+            patch.object(server_mod, "_hook_manager") as manager,
+        ):
+            session.pm = MagicMock()
+            session._is_process_alive.return_value = False
+            server_mod._shutdown()
+
+        manager.cleanup.assert_called_once_with(process_alive=False)
+        session.detach.assert_called_once_with()
+
+    def test_detach_failure_does_not_undo_manager_cleanup(self):
+        with (
+            patch.object(server_mod, "SESSION") as session,
+            patch.object(server_mod, "_hook_manager") as manager,
+        ):
+            session.pm = MagicMock()
+            session._is_process_alive.return_value = True
+            session.detach.side_effect = OSError("handle closed")
+            server_mod._shutdown()
+
+        manager.cleanup.assert_called_once_with(process_alive=True)
+        assert server_mod._shutdown_done is True
+
+    def test_cleanup_baseexception_does_not_skip_detach(self):
+        with (
+            patch.object(server_mod, "SESSION") as session,
+            patch.object(server_mod, "_hook_manager") as manager,
+        ):
+            session.pm = MagicMock()
+            session._is_process_alive.return_value = True
+            manager.cleanup.side_effect = KeyboardInterrupt()
+            server_mod._shutdown()
+
+        session.detach.assert_called_once_with()
+        assert server_mod._shutdown_done is True

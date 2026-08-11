@@ -2,7 +2,9 @@
 
 import memscope_mcp.server as server
 from memscope_mcp.attachment import ModuleRecord, ModuleSnapshot, normalize_module_name
+from memscope_mcp.extensions.core.module_scan import ModuleScanExtension
 from memscope_mcp.tools.lua.engine import LUA_ENGINE
+from memscope_mcp.utils.memory_utils import get_module_for_address
 
 
 def _module_snapshot(*entries: tuple[str, int, int, str]) -> ModuleSnapshot:
@@ -19,6 +21,25 @@ def _module_snapshot(*entries: tuple[str, int, int, str]) -> ModuleSnapshot:
         ),
         generation=1,
     )
+
+
+def test_module_scan_instructions_teach_named_scan_options_contract():
+    instructions = " ".join(ModuleScanExtension.instructions.split())
+
+    for signature in (
+        "AOBScan(pattern, options?)",
+        "AOBScanMany(patterns, options?)",
+        "scanString(text, options?)",
+        "scanPointer(target, options?)",
+    ):
+        assert signature in instructions
+
+    assert (
+        "Scan options use named fields only: `scope`, `mode`, `max_matches`, "
+        "`timeout_ms`, and `diagnostics`; `scanString` also accepts `encoding`, "
+        "and `scanPointer` accepts `alignment`."
+    ) in instructions
+    assert "Expected failures return `nil, error_table`;" in instructions
 
 
 def test_list_lua_functions_reports_names_and_owner_filter():
@@ -168,3 +189,44 @@ def test_get_capabilities_includes_attached_process_info(monkeypatch):
         "module_count": 2,
         "process_module_count": 2,
     }
+
+
+def test_legacy_module_readers_preserve_duplicate_address_semantics(monkeypatch):
+    snapshot = _module_snapshot(
+        ("dup.dll", 0x100000, 0x100, r"C:\\First\\dup.dll"),
+        ("DUP.dll", 0x200000, 0x200, r"C:\\Case\\DUP.dll"),
+        ("dup.dll", 0x300000, 0x300, r"C:\\Last\\dup.dll"),
+    )
+    monkeypatch.setattr(server.SESSION, "_module_snapshot", snapshot)
+
+    result = LUA_ENGINE.execute(
+        """
+        local mods = getModules()
+        local collapsed = getModuleFromAddress(0x100010)
+        local case_variant = getModuleFromAddress(0x200010)
+        addResult("count", #mods)
+        addResult("first_name", mods[1].name)
+        addResult("first_base", mods[1].base)
+        addResult("second_name", mods[2].name)
+        addResult("second_base", mods[2].base)
+        addResult("collapsed_found", collapsed ~= nil)
+        addResult("case_name", case_variant.name)
+        addResult("case_offset", case_variant.offset)
+        addResult("formatted", formatAddress(0x200010))
+        """
+    )
+
+    assert result["success"] is True
+    assert result["results"] == {
+        "count": 2,
+        "first_name": "dup.dll",
+        "first_base": 0x300000,
+        "second_name": "DUP.dll",
+        "second_base": 0x200000,
+        "collapsed_found": False,
+        "case_name": "DUP.dll",
+        "case_offset": 0x10,
+        "formatted": "DUP.dll+0x10",
+    }
+    assert get_module_for_address(0x100010, session=server.SESSION) is None
+    assert get_module_for_address(0x200010, session=server.SESSION) == ("DUP.dll", 0x10)

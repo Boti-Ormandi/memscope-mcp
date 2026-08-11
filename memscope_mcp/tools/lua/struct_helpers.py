@@ -7,33 +7,32 @@ Domain-specific helpers live in plugins.
 import struct
 from typing import Any, Callable
 
-from ...session import SESSION
 from ...utils.memory_utils import is_valid_pointer
 
 
-def read_vector3(address, table_factory: Callable[..., Any]):
+def read_vector3(address, table_factory: Callable[..., Any], *, session):
     """Read Vector3 (12 bytes). Returns Lua table {x, y, z}."""
     try:
         addr = int(address)
-        data = SESSION.read_bytes(addr, 12)
+        data = session.read_bytes(addr, 12)
         x, y, z = struct.unpack("<fff", data)
         return table_factory(x=x, y=y, z=z)
     except:
         return None
 
 
-def read_vector4(address, table_factory: Callable[..., Any]):
+def read_vector4(address, table_factory: Callable[..., Any], *, session):
     """Read Vector4/Quaternion (16 bytes). Returns Lua table {x, y, z, w}."""
     try:
         addr = int(address)
-        data = SESSION.read_bytes(addr, 16)
+        data = session.read_bytes(addr, 16)
         x, y, z, w = struct.unpack("<ffff", data)
         return table_factory(x=x, y=y, z=z, w=w)
     except:
         return None
 
 
-def read_matrix4x4(address, table_factory: Callable[..., Any]):
+def read_matrix4x4(address, table_factory: Callable[..., Any], *, session):
     """Read 4x4 matrix (64 bytes). Returns Lua table with position field.
 
     Matrix layout varies by engine. This assumes column-major (common in 3D engines).
@@ -41,7 +40,7 @@ def read_matrix4x4(address, table_factory: Callable[..., Any]):
     """
     try:
         addr = int(address)
-        data = SESSION.read_bytes(addr, 64)
+        data = session.read_bytes(addr, 64)
         floats = struct.unpack("<16f", data)
 
         # Column-major: position in 4th column (indices 12, 13, 14)
@@ -81,6 +80,8 @@ def read_struct(
     read_vector4_fn: Callable,
     log_error: Callable[[str, Exception], None],
     output: list[str],
+    *,
+    session,
 ):
     """Read multiple fields from a struct in one call.
 
@@ -120,19 +121,19 @@ def read_struct(
 
         # Type readers map
         readers = {
-            "byte": lambda a: SESSION.read_bytes(a, 1)[0],
-            "bool": lambda a: SESSION.read_bytes(a, 1)[0] != 0,
-            "int16": lambda a: struct.unpack("<h", SESSION.read_bytes(a, 2))[0],
-            "uint16": lambda a: struct.unpack("<H", SESSION.read_bytes(a, 2))[0],
-            "int32": lambda a: SESSION.read_int32(a),
-            "uint32": lambda a: struct.unpack("<I", SESSION.read_bytes(a, 4))[0],
-            "int64": lambda a: struct.unpack("<q", SESSION.read_bytes(a, 8))[0],
-            "uint64": lambda a: struct.unpack("<Q", SESSION.read_bytes(a, 8))[0],
-            "float": lambda a: SESSION.read_float(a),
-            "double": lambda a: SESSION.read_double(a),
-            "ptr": lambda a: SESSION.read_ptr(a),
-            "pointer": lambda a: SESSION.read_ptr(a),
-            "cstring": lambda a: SESSION.read_string(a, 256),
+            "byte": lambda a: session.read_bytes(a, 1)[0],
+            "bool": lambda a: session.read_bytes(a, 1)[0] != 0,
+            "int16": lambda a: struct.unpack("<h", session.read_bytes(a, 2))[0],
+            "uint16": lambda a: struct.unpack("<H", session.read_bytes(a, 2))[0],
+            "int32": lambda a: session.read_int32(a),
+            "uint32": lambda a: struct.unpack("<I", session.read_bytes(a, 4))[0],
+            "int64": lambda a: struct.unpack("<q", session.read_bytes(a, 8))[0],
+            "uint64": lambda a: struct.unpack("<Q", session.read_bytes(a, 8))[0],
+            "float": lambda a: session.read_float(a),
+            "double": lambda a: session.read_double(a),
+            "ptr": lambda a: session.read_ptr(a),
+            "pointer": lambda a: session.read_ptr(a),
+            "cstring": lambda a: session.read_string(a, 256),
             "vector3": lambda a: read_vector3_fn(a),
             "vector4": lambda a: read_vector4_fn(a),
         }

@@ -1,27 +1,26 @@
 """Memory reading functions for Lua engine.
 
-All functions depend on SESSION for memory access.
+All memory access is performed through an explicitly supplied session.
 Includes single-value reads and bulk array reads.
 """
 
 import struct
 from typing import Any, Callable, Optional
 
-from ...session import SESSION
 from ...utils.memory_utils import is_valid_pointer
 from .comparisons import to_lua_int64
 
 
-def read_byte(address) -> Optional[int]:
+def read_byte(address, *, session) -> Optional[int]:
     """Read single byte from memory."""
     try:
         addr = int(address)
-        return SESSION.read_bytes(addr, 1)[0]
+        return session.read_bytes(addr, 1)[0]
     except:
         return None
 
 
-def read_bytes(address, count, table_factory: Callable[..., Any]):
+def read_bytes(address, count, table_factory: Callable[..., Any], *, session):
     """Read bytes from memory. Returns Lua table (empty on failure).
 
     Returns a Lua table so that indexing empty results returns nil instead
@@ -32,13 +31,13 @@ def read_bytes(address, count, table_factory: Callable[..., Any]):
     """
     try:
         addr = int(address)
-        data = SESSION.read_bytes(addr, int(count))
+        data = session.read_bytes(addr, int(count))
         return table_factory(*list(data))
     except:
         return table_factory()
 
 
-def read_bytes_hex(address, count) -> Optional[str]:
+def read_bytes_hex(address, count, *, session) -> Optional[str]:
     """Read bytes and return as hex string for easy printing.
 
     Example:
@@ -47,32 +46,32 @@ def read_bytes_hex(address, count) -> Optional[str]:
     """
     try:
         addr = int(address)
-        data = SESSION.read_bytes(addr, int(count))
+        data = session.read_bytes(addr, int(count))
         return " ".join(f"{b:02X}" for b in data)
     except:
         return None
 
 
-def read_int16(address) -> Optional[int]:
+def read_int16(address, *, session) -> Optional[int]:
     """Read signed 16-bit integer."""
     try:
         addr = int(address)
-        data = SESSION.read_bytes(addr, 2)
+        data = session.read_bytes(addr, 2)
         return struct.unpack("<h", data)[0]
     except:
         return None
 
 
-def read_int32(address) -> Optional[int]:
+def read_int32(address, *, session) -> Optional[int]:
     """Read signed 32-bit integer."""
     try:
         addr = int(address)
-        return SESSION.read_int32(addr)
+        return session.read_int32(addr)
     except:
         return None
 
 
-def read_int32_safe(address, max_val: int = 0x7FFFFFFF) -> Optional[int]:
+def read_int32_safe(address, max_val: int = 0x7FFFFFFF, *, session) -> Optional[int]:
     """Read 32-bit integer with validation - returns nil for garbage values.
 
     Use this when reading values that SHOULD be small positive integers
@@ -90,7 +89,7 @@ def read_int32_safe(address, max_val: int = 0x7FFFFFFF) -> Optional[int]:
     """
     try:
         addr = int(address)
-        val = SESSION.read_int32(addr)
+        val = session.read_int32(addr)
         if val < 0 or val > int(max_val):
             return None
         return val
@@ -98,50 +97,50 @@ def read_int32_safe(address, max_val: int = 0x7FFFFFFF) -> Optional[int]:
         return None
 
 
-def read_int64(address) -> Optional[int]:
+def read_int64(address, *, session) -> Optional[int]:
     """Read signed 64-bit integer."""
     try:
         addr = int(address)
-        data = SESSION.read_bytes(addr, 8)
+        data = session.read_bytes(addr, 8)
         return struct.unpack("<q", data)[0]
     except:
         return None
 
 
-def read_uint16(address, log_error: Callable[[str, Exception], None]) -> Optional[int]:
+def read_uint16(address, log_error: Callable[[str, Exception], None], *, session) -> Optional[int]:
     """Read unsigned 16-bit integer."""
     try:
         addr = int(address)
-        data = SESSION.read_bytes(addr, 2)
+        data = session.read_bytes(addr, 2)
         return struct.unpack("<H", data)[0]
     except Exception as e:
         log_error("readUInt16", e)
         return None
 
 
-def read_uint32(address, log_error: Callable[[str, Exception], None]) -> Optional[int]:
+def read_uint32(address, log_error: Callable[[str, Exception], None], *, session) -> Optional[int]:
     """Read unsigned 32-bit integer."""
     try:
         addr = int(address)
-        data = SESSION.read_bytes(addr, 4)
+        data = session.read_bytes(addr, 4)
         return struct.unpack("<I", data)[0]
     except Exception as e:
         log_error("readUInt32", e)
         return None
 
 
-def read_uint64(address, log_error: Callable[[str, Exception], None]) -> Optional[int]:
+def read_uint64(address, log_error: Callable[[str, Exception], None], *, session) -> Optional[int]:
     """Read unsigned 64-bit integer (returned as signed for Lua compatibility)."""
     try:
         addr = int(address)
-        data = SESSION.read_bytes(addr, 8)
+        data = session.read_bytes(addr, 8)
         return to_lua_int64(struct.unpack("<Q", data)[0])
     except Exception as e:
         log_error("readUInt64", e)
         return None
 
 
-def read_pointer(address, validate: bool = True) -> Optional[int]:
+def read_pointer(address, validate: bool = True, *, session) -> Optional[int]:
     """Read a 64-bit pointer from memory.
 
     By default, validates the result and returns nil if it doesn't look
@@ -157,7 +156,7 @@ def read_pointer(address, validate: bool = True) -> Optional[int]:
     """
     try:
         addr = int(address)
-        ptr = SESSION.read_ptr(addr)
+        ptr = session.read_ptr(addr)
         if validate and not is_valid_pointer(ptr):
             return None
         return ptr
@@ -165,7 +164,7 @@ def read_pointer(address, validate: bool = True) -> Optional[int]:
         return None
 
 
-def read_pointer_raw(address) -> Optional[int]:
+def read_pointer_raw(address, *, session) -> Optional[int]:
     """Read a 64-bit pointer without validation.
 
     Returns raw value as signed int64 for Lua compatibility.
@@ -173,57 +172,57 @@ def read_pointer_raw(address) -> Optional[int]:
     """
     try:
         addr = int(address)
-        return to_lua_int64(SESSION.read_ptr(addr))
+        return to_lua_int64(session.read_ptr(addr))
     except:
         return None
 
 
-def read_float(address) -> Optional[float]:
+def read_float(address, *, session) -> Optional[float]:
     """Read 32-bit float."""
     try:
         addr = int(address)
-        return SESSION.read_float(addr)
+        return session.read_float(addr)
     except:
         return None
 
 
-def read_double(address) -> Optional[float]:
+def read_double(address, *, session) -> Optional[float]:
     """Read 64-bit double."""
     try:
         addr = int(address)
-        return SESSION.read_double(addr)
+        return session.read_double(addr)
     except:
         return None
 
 
-def read_string(address, maxlen, log_error: Callable[[str, Exception], None]) -> Optional[str]:
+def read_string(address, maxlen, log_error: Callable[[str, Exception], None], *, session) -> Optional[str]:
     """Read null-terminated C string."""
     try:
         addr = int(address)
-        return SESSION.read_string(addr, int(maxlen))
+        return session.read_string(addr, int(maxlen))
     except Exception as e:
         log_error("readString", e)
         return None
 
 
-def read_bool(address, log_error: Callable[[str, Exception], None]) -> Optional[bool]:
+def read_bool(address, log_error: Callable[[str, Exception], None], *, session) -> Optional[bool]:
     """Read a boolean (1 byte, 0=false, non-zero=true)."""
     try:
         addr = int(address)
-        val = SESSION.read_bytes(addr, 1)[0]
+        val = session.read_bytes(addr, 1)[0]
         return val != 0
     except Exception as e:
         log_error("readBool", e)
         return None
 
 
-def read_wide_string(address, maxlen, log_error: Callable[[str, Exception], None]) -> Optional[str]:
+def read_wide_string(address, maxlen, log_error: Callable[[str, Exception], None], *, session) -> Optional[str]:
     """Read null-terminated UTF-16LE (wide) string."""
     try:
         addr = int(address)
         max_chars = int(maxlen)
         # Read up to maxlen * 2 bytes (UTF-16 = 2 bytes per char)
-        data = SESSION.read_bytes(addr, max_chars * 2)
+        data = session.read_bytes(addr, max_chars * 2)
         # Decode as UTF-16LE, stop at null terminator
         result = []
         for i in range(0, len(data) - 1, 2):
@@ -240,7 +239,7 @@ def read_wide_string(address, maxlen, log_error: Callable[[str, Exception], None
 # ========== Bulk Array Reads ==========
 
 
-def read_pointer_array(address, count, table_factory: Callable, log_error: Callable):
+def read_pointer_array(address, count, table_factory: Callable, log_error: Callable, *, session):
     """Read an array of consecutive 64-bit pointers.
 
     Reads count * 8 bytes in a single call, then unpacks into pointers.
@@ -268,7 +267,7 @@ def read_pointer_array(address, count, table_factory: Callable, log_error: Calla
     try:
         addr = int(address)
         n = int(count)
-        data = SESSION.read_bytes(addr, n * 8)
+        data = session.read_bytes(addr, n * 8)
         t = table_factory()
         for i in range(n):
             ptr = struct.unpack_from("<Q", data, i * 8)[0]
@@ -282,7 +281,7 @@ def read_pointer_array(address, count, table_factory: Callable, log_error: Calla
         return table_factory()
 
 
-def read_int_array(address, count, table_factory: Callable, log_error: Callable):
+def read_int_array(address, count, table_factory: Callable, log_error: Callable, *, session):
     """Read an array of consecutive 32-bit signed integers.
 
     Reads count * 4 bytes in a single call, then unpacks.
@@ -304,7 +303,7 @@ def read_int_array(address, count, table_factory: Callable, log_error: Callable)
     try:
         addr = int(address)
         n = int(count)
-        data = SESSION.read_bytes(addr, n * 4)
+        data = session.read_bytes(addr, n * 4)
         values = struct.unpack_from(f"<{n}i", data)
         return table_factory(*values)
     except Exception as e:
@@ -312,7 +311,7 @@ def read_int_array(address, count, table_factory: Callable, log_error: Callable)
         return table_factory()
 
 
-def read_float_array(address, count, table_factory: Callable, log_error: Callable):
+def read_float_array(address, count, table_factory: Callable, log_error: Callable, *, session):
     """Read an array of consecutive 32-bit floats.
 
     Reads count * 4 bytes in a single call, then unpacks.
@@ -337,7 +336,7 @@ def read_float_array(address, count, table_factory: Callable, log_error: Callabl
     try:
         addr = int(address)
         n = int(count)
-        data = SESSION.read_bytes(addr, n * 4)
+        data = session.read_bytes(addr, n * 4)
         values = struct.unpack_from(f"<{n}f", data)
         return table_factory(*values)
     except Exception as e:

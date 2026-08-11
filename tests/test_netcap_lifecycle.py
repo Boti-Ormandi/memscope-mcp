@@ -1,6 +1,6 @@
 """Tests for accept/bind connection tracking in the netcap plugin.
 
-All tests use mocks for HOOK_MANAGER. No process attachment required.
+All tests use mocks for the injected hook manager. No process attachment required.
 """
 
 import struct
@@ -29,12 +29,21 @@ class MockContext:
     lua: Any = None
     table_factory: Any = None
     log_error: Any = None
+    hook_manager: Any = None
 
 
 def make_plugin() -> NetcapPlugin:
     """Create a NetcapPlugin and register it with a mock context."""
+    session = MagicMock()
+    hook_manager = MagicMock()
+    hook_manager.session = session
     plugin = NetcapPlugin()
-    ctx = MockContext(table_factory=make_table, log_error=lambda *a: None)
+    ctx = MockContext(
+        session=session,
+        table_factory=make_table,
+        log_error=lambda *a: None,
+        hook_manager=hook_manager,
+    )
     plugin.register(ctx)
     return plugin
 
@@ -61,7 +70,7 @@ def make_entry(
     sequence=1,
     timestamp=12345,
 ):
-    """Build a ring buffer entry dict as returned by HOOK_MANAGER.read_ring_buffer()."""
+    """Build a ring buffer entry dict as returned by the injected hook manager.read_ring_buffer()."""
     captured = len(data) if data else 0
     entry = {
         "sequence": sequence,
@@ -97,14 +106,13 @@ class TestAcceptProcessing:
         self.plugin._header_only = False
         self.plugin._max_packet_size = 4096
 
-    def test_accept_tracks_connection(self, monkeypatch):
+    def test_accept_tracks_connection(self):
         """Accept entry tracks new socket in _connections with type='server'."""
         sockaddr = make_sockaddr_in(54321, (10, 0, 0, 5))
         entry = make_entry(hook_id=1, hook_name="accept", arg0=0x100, result=0x2B8, data=sockaddr)
 
-        mock_hm = MagicMock()
+        mock_hm = self.plugin._hook_manager
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         self.plugin._read_packets(100)
 
@@ -114,15 +122,14 @@ class TestAcceptProcessing:
         assert conn["remote_port"] == 54321
         assert conn["type"] == "server"
 
-    def test_accept_invalid_socket(self, monkeypatch):
+    def test_accept_invalid_socket(self):
         """Accept with INVALID_SOCKET (0xFFFFFFFF) adds no connection, emits no packet."""
         sockaddr = make_sockaddr_in(54321, (10, 0, 0, 5))
         # result as signed int32 = -1 -> & 0xFFFFFFFF = INVALID_SOCKET
         entry = make_entry(hook_id=1, hook_name="accept", arg0=0x100, result=0xFFFFFFFF, data=sockaddr)
 
-        mock_hm = MagicMock()
+        mock_hm = self.plugin._hook_manager
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         packets = self.plugin._read_packets(100)
 
@@ -130,14 +137,13 @@ class TestAcceptProcessing:
         # No packet emitted (INVALID_SOCKET triggers continue)
         assert 1 not in packets
 
-    def test_accept_packet_uses_new_socket(self, monkeypatch):
+    def test_accept_packet_uses_new_socket(self):
         """Accept packet uses the new socket (result) not the listening socket (arg0)."""
         sockaddr = make_sockaddr_in(54321, (10, 0, 0, 5))
         entry = make_entry(hook_id=1, hook_name="accept", arg0=0x100, result=0x2B8, data=sockaddr)
 
-        mock_hm = MagicMock()
+        mock_hm = self.plugin._hook_manager
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
@@ -160,14 +166,13 @@ class TestBindProcessing:
         self.plugin._header_only = False
         self.plugin._max_packet_size = 4096
 
-    def test_bind_tracks_local(self, monkeypatch):
+    def test_bind_tracks_local(self):
         """Bind entry tracks local address on the socket."""
         sockaddr = make_sockaddr_in(8080, (0, 0, 0, 0))
         entry = make_entry(hook_id=2, hook_name="bind", arg0=0x1A4, data=sockaddr)
 
-        mock_hm = MagicMock()
+        mock_hm = self.plugin._hook_manager
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         self.plugin._read_packets(100)
 
@@ -176,7 +181,7 @@ class TestBindProcessing:
         assert conn["local_ip"] == "0.0.0.0"
         assert conn["local_port"] == 8080
 
-    def test_bind_adds_to_existing(self, monkeypatch):
+    def test_bind_adds_to_existing(self):
         """Bind adds local fields to an existing connection entry (e.g., from connect)."""
         # Pre-populate connection from a prior connect
         self.plugin._connections[0x1A4] = {
@@ -189,9 +194,8 @@ class TestBindProcessing:
         sockaddr = make_sockaddr_in(12345, (192, 168, 1, 100))
         entry = make_entry(hook_id=2, hook_name="bind", arg0=0x1A4, data=sockaddr)
 
-        mock_hm = MagicMock()
+        mock_hm = self.plugin._hook_manager
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         self.plugin._read_packets(100)
 
@@ -239,3 +243,31 @@ class TestGetConnections:
         # _get_connections normalizes them to remote_ip/remote_port
         assert udp["remote_ip"] == "8.8.8.8"
         assert udp["remote_port"] == 53
+
+
+class TestDeadTargetLocalCleanup:
+    def test_recording_only_state_is_cleared_without_remote_manager_calls(self):
+        plugin = make_plugin()
+        recording = MagicMock()
+        plugin._recording_file = recording
+        plugin._recording_path = "capture.jsonl"
+        plugin._recording_count = 12
+        plugin._hook_ids = {"send": 10}
+        plugin._connections = {0x1A4: {"type": "tcp"}}
+        plugin._pending_io = {0xDEAD: {"socket": 0x1A4}}
+        plugin._streams = {0x1A4: {"send": bytearray(b"x")}}
+        plugin._capture_active = False
+        manager = plugin._hook_manager
+        manager.reset_mock()
+
+        plugin.on_process_detaching(plugin._session, process_alive=False)
+
+        recording.close.assert_called_once_with()
+        assert manager.remove_hook.call_count == 0
+        assert manager.destroy_ring_buffer.call_count == 0
+        assert plugin._recording_file is None
+        assert plugin._hook_ids == {}
+        assert plugin._connections == {}
+        assert plugin._pending_io == {}
+        assert plugin._streams == {}
+        assert plugin._capture_active is False

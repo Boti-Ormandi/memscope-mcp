@@ -66,7 +66,7 @@ Lua functions live inside extensions. Pick the right extension first.
 3. Add the Lua-name -> Python-callable mapping to the dict returned by the extension's `register(ctx)`.
 4. Update the extension's `instructions` string with a one-line AI-facing description (token-priced, terse).
 5. Document the function in [`docs/lua-reference.md`](docs/lua-reference.md) under the matching category and in [`memscope_mcp/instructions/base.py`](memscope_mcp/instructions/base.py) if a shared-guidance bullet is appropriate.
-6. Conventions: return `nil` on failure (don't raise), accept addresses as int or hex string (use `parse_address`), and use `ctx.table_factory(...)` inside extensions or `engine.lua.table()` outside extensions to build Lua-side return tables.
+6. Conventions: return `nil` on failure (don't raise), accept addresses as int or hex string (use `parse_address`), and use `ctx.table_factory(...)` only while registering an extension or from an engine-owned execution callback. The raw Lua runtime is intentionally not exposed; return ordinary scalars or tables built through the guarded factory.
 
 ## Adding an extension
 

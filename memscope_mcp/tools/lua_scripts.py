@@ -8,24 +8,27 @@ This module provides list and run functionality only.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from ..paths import SCRIPTS_DIR
-from ..session import SESSION
+from ..session import DebugSession
+
+if TYPE_CHECKING:
+    from .lua.engine import MemscopeLuaEngine
 
 
-def _get_attached_process_name() -> Optional[str]:
+def _get_attached_process_name(*, session) -> Optional[str]:
     """Get the process name only when the session has an open process handle."""
-    if SESSION.pm is None or not SESSION.target_process:
+    if session.pm is None or not session.target_process:
         return None
-    return SESSION.target_process
+    return session.target_process
 
 
-def _get_attached_pid() -> Optional[int]:
+def _get_attached_pid(*, session) -> Optional[int]:
     """Get the process ID only when the session has an open process handle."""
-    if SESSION.pm is None:
+    if session.pm is None:
         return None
-    return SESSION.pid or None
+    return session.pid or None
 
 
 def _run_metadata(
@@ -54,12 +57,13 @@ def _extract_description(filepath: Path) -> str:
     return ""
 
 
-def list_scripts(process: Optional[str] = None) -> dict:
+def list_scripts(process: Optional[str] = None, *, session: DebugSession) -> dict:
     """List all available Lua scripts.
 
     Args:
         process: Optional process name filter. If None, uses current attached process.
                  Pass "*" to list all processes.
+        session: Session used to resolve the current attachment.
 
     Returns:
         {
@@ -86,7 +90,7 @@ def list_scripts(process: Optional[str] = None) -> dict:
             process_dirs = []
     else:
         # Single process
-        process_name = process or _get_attached_process_name()
+        process_name = process or _get_attached_process_name(session=session)
         if not process_name:
             return {
                 "scripts": [],
@@ -119,6 +123,8 @@ def run_script(
     process: Optional[str] = None,
     args: Optional[dict] = None,
     timeout: Optional[float] = None,
+    *,
+    engine: "MemscopeLuaEngine",
 ) -> dict:
     """Run a saved Lua script by name.
 
@@ -127,15 +133,16 @@ def run_script(
         process: Optional saved-script namespace. If None, uses current attached process.
         args: Optional dict of arguments passed to script as 'args' global
         timeout: Optional max execution time in seconds.
+        engine: Bootstrapped engine that owns both execution and session metadata.
 
     Returns:
         Lua execution result with script metadata added.
     """
-    from .lua_engine import execute_lua
+    session = engine._require_ready_session()
 
     explicit_process = process or None
-    attached_process = _get_attached_process_name()
-    attached_pid = _get_attached_pid()
+    attached_process = _get_attached_process_name(session=session)
+    attached_pid = _get_attached_pid(session=session)
     process_name = explicit_process or attached_process
     detached_execution = attached_process is None and explicit_process is not None
     metadata = _run_metadata(explicit_process, attached_process, attached_pid, detached_execution)
@@ -188,7 +195,7 @@ def run_script(
         return {"success": False, "error": "READ_FAILED", "detail": str(e), **metadata}
 
     # Execute with args
-    result = execute_lua(script_content, args, timeout=timeout)
+    result = engine.execute(script_content, args, timeout=timeout)
 
     # Add metadata
     result.update(metadata)
@@ -199,9 +206,9 @@ def run_script(
     return result
 
 
-def get_script_count() -> int:
+def get_script_count(*, session: DebugSession) -> int:
     """Get count of scripts for current process (for status display)."""
-    process_name = _get_attached_process_name()
+    process_name = _get_attached_process_name(session=session)
     if not process_name:
         return 0
     process_dir = SCRIPTS_DIR / process_name

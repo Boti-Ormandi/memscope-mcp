@@ -5,12 +5,16 @@ and integrate with the canonical switch_process path.
 """
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
 import memscope_mcp.session as session_module
 from memscope_mcp.attachment import ModuleSnapshot, build_module_records
+from memscope_mcp.extensions.base import ExtensionContext
+from memscope_mcp.extensions.core.hooking import HookingExtension
 from memscope_mcp.session import DebugSession
+from memscope_mcp.tools.hooking import HookManager, RingBufferConfig
 
 
 def _module_snapshot(name: str = "test.dll", base: int = 0x1000, size: int = 0x100) -> ModuleSnapshot:
@@ -317,3 +321,95 @@ class TestSwitchProcess:
         session.switch_process("nonexistent.exe")
         # With no pm, detach doesn't fire callbacks
         assert calls == []
+
+
+class TestHookManagerProcessTransitions:
+    """Hook manager process state is retired before a replacement attachment is published."""
+
+    @staticmethod
+    def _register_hooking(session: DebugSession, manager: HookManager) -> HookingExtension:
+        extension = HookingExtension()
+        extension.register(
+            ExtensionContext(
+                engine=SimpleNamespace(_output=[]),
+                session=session,
+                table_factory=dict,
+                log_error=lambda *_args: None,
+                hook_manager=manager,
+            )
+        )
+        session.register_on_detach("hooking", extension.on_process_detaching)
+        return extension
+
+    def test_switch_cleans_old_target_before_new_target_opens(self, monkeypatch):
+        session = DebugSession()
+        session.target_process = "A.exe"
+        session.pid = 111
+        old_pm = SimpleNamespace(close_process=MagicMock())
+        session.pm = old_pm
+        manager = HookManager(session)
+        manager._deferred_trampolines = [(0xA000, 4096)]
+        manager.next_hook_id = 8
+        self._register_hooking(session, manager)
+
+        remote_frees = []
+        monkeypatch.setattr(session, "_begin_retirement_locked", lambda: None)
+        monkeypatch.setattr(session, "_is_process_alive", lambda: True)
+        monkeypatch.setattr(session, "free", lambda addr: remote_frees.append((session.target_process, addr)) or True)
+
+        def open_b():
+            assert session.target_process == "B.exe"
+            assert manager.hooks == {}
+            assert manager._hooks_by_id == {}
+            assert manager._deferred_trampolines == []
+            assert manager.ring_buffer is None
+            assert manager.next_hook_id == 1
+            session.pm = SimpleNamespace(close_process=MagicMock())
+            return True
+
+        monkeypatch.setattr(session, "_open_process_locked", open_b)
+
+        assert session.switch_process("B.exe", 222) is True
+        assert remote_frees == [("A.exe", 0xA000)]
+        old_pm.close_process.assert_called_once_with()
+        assert session.target_process == "B.exe"
+        assert session.pid == 222
+
+    def test_restart_clears_dead_target_state_without_remote_calls(self, monkeypatch):
+        session = DebugSession()
+        session.target_process = "A.exe"
+        session.pid = 111
+        session.pm = SimpleNamespace(close_process=MagicMock())
+        session._attachment_state = session_module.AttachmentState.ATTACHED
+        manager = HookManager(session)
+        manager.hooks[0x1000] = object()
+        manager._hooks_by_id[4] = object()
+        manager._deferred_trampolines = [(0xA000, 4096)]
+        manager.ring_buffer = RingBufferConfig(
+            address=0xB000,
+            entry_count=16,
+            max_data_size=256,
+            entry_total_size=0x150,
+            total_size=0x1600,
+        )
+        manager.next_hook_id = 9
+        self._register_hooking(session, manager)
+
+        monkeypatch.setattr(session, "_begin_retirement_locked", lambda: None)
+        monkeypatch.setattr(session, "_is_process_alive", lambda: False)
+        monkeypatch.setattr(session, "free", MagicMock(side_effect=AssertionError("dead target remote call")))
+
+        def reopen_a():
+            assert manager.hooks == {}
+            assert manager._hooks_by_id == {}
+            assert manager._deferred_trampolines == []
+            assert manager.ring_buffer is None
+            assert manager.next_hook_id == 1
+            session.pm = SimpleNamespace(close_process=MagicMock())
+            session._attachment_state = session_module.AttachmentState.ATTACHED
+            return True
+
+        monkeypatch.setattr(session, "_open_process_locked", reopen_a)
+
+        assert session.ensure_attached() is True
+        session.free.assert_not_called()

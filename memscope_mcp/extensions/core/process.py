@@ -64,13 +64,15 @@ getRegionInfo(addr)              -- Region at address
             "getAttachedProcess": lambda: self._get_attached_process(),
             # Process introspection
             "getProcessList": lambda filt=None, limit=500: get_process_list(self._table, filt, limit),
-            "getProcessInfo": lambda pid=None: get_process_info(self._table, pid),
-            "isBeingDebugged": lambda pid=None: is_being_debugged(pid),
-            "getEnvironment": lambda pid=None: get_environment(self._table, pid),
-            "getModulesRemote": lambda pid=None: get_modules_remote(self._table, pid),
-            "getMemoryRegions": lambda filt=None, limit=1000: get_memory_regions(self._table, filt, limit),
-            "getRegionInfo": lambda addr: get_region_info(self._table, addr),
-            "getThreads": lambda pid=None: get_threads(self._table, pid),
+            "getProcessInfo": lambda pid=None: get_process_info(self._table, pid, session=self._session),
+            "isBeingDebugged": lambda pid=None: is_being_debugged(pid, session=self._session),
+            "getEnvironment": lambda pid=None: get_environment(self._table, pid, session=self._session),
+            "getModulesRemote": lambda pid=None: get_modules_remote(self._table, pid, session=self._session),
+            "getMemoryRegions": lambda filt=None, limit=1000: get_memory_regions(
+                self._table, filt, limit, session=self._session
+            ),
+            "getRegionInfo": lambda addr: get_region_info(self._table, addr, session=self._session),
+            "getThreads": lambda pid=None: get_threads(self._table, pid, session=self._session),
             "getServices": lambda pid=None: get_services(self._table, pid),
             # Legacy
             "openProcess": lambda pid: self._attach(int(pid)),

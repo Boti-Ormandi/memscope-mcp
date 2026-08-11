@@ -18,8 +18,6 @@ from typing import Any, Callable
 
 from memscope_mcp.extensions.base import ExtensionContext
 from memscope_mcp.plugins import PluginBase
-from memscope_mcp.session import SESSION
-from memscope_mcp.tools.hooking import HOOK_MANAGER
 from memscope_mcp.utils.pe import resolve_export
 
 # ==================== Hook Specifications ====================
@@ -566,8 +564,16 @@ for known function prologues.
         self._recording_base_name: str | None = None  # filename stem for rotation
         self._recording_part: int = 1
         self._recording_dir: Path | None = None
+        self._session: Any | None = None
+        self._hook_manager: Any | None = None
 
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
+        self._session = ctx.session
+        self._hook_manager = ctx.hook_manager
+        if self._hook_manager is None:
+            raise RuntimeError("NetcapPlugin requires a HookManager")
+        if self._hook_manager.session is not self._session:
+            raise ValueError("HookManager/session ownership mismatch")
         self._table = ctx.table_factory
         return {
             # Capture control
@@ -619,9 +625,8 @@ for known function prologues.
         }
 
     def on_process_detaching(self, session: Any, process_alive: bool) -> None:
-        """Clean up capture state before detach."""
-        if self._capture_active:
-            self._cleanup(process_alive)
+        """Clean up capture and recording state before detach."""
+        self._cleanup(process_alive)
 
     # ==================== Capture Control ====================
 
@@ -676,7 +681,7 @@ for known function prologues.
         self._header_only = header_only
 
         # Create ring buffer if needed
-        if HOOK_MANAGER.ring_buffer is None:
+        if self._hook_manager.ring_buffer is None:
             entry_total_size = 0x50 + max_packet_size  # header + data
             entry_count = (buffer_size - 0x100) // entry_total_size
             if entry_count < 4:
@@ -688,7 +693,7 @@ for known function prologues.
             entry_count = 1 << (entry_count.bit_length() - 1)
             entry_count = max(entry_count, 4)
 
-            HOOK_MANAGER.create_ring_buffer(
+            self._hook_manager.create_ring_buffer(
                 entry_count=entry_count,
                 max_data_size=max_packet_size,
             )
@@ -721,12 +726,12 @@ for known function prologues.
             # Rollback: remove any hooks we installed
             for hid in installed.values():
                 try:
-                    HOOK_MANAGER.remove_hook(hid)
+                    self._hook_manager.remove_hook(hid)
                 except Exception:
                     pass
-            if self._created_ring_buffer and not HOOK_MANAGER.hooks:
+            if self._created_ring_buffer and not self._hook_manager.hooks:
                 try:
-                    HOOK_MANAGER.destroy_ring_buffer()
+                    self._hook_manager.destroy_ring_buffer()
                 except Exception:
                     pass
                 self._created_ring_buffer = False
@@ -739,15 +744,15 @@ for known function prologues.
 
         return self._table(
             hooks_installed=len(installed),
-            ring_buffer=hex(HOOK_MANAGER.ring_buffer.address),
-            entries=HOOK_MANAGER.ring_buffer.entry_count,
+            ring_buffer=hex(self._hook_manager.ring_buffer.address),
+            entries=self._hook_manager.ring_buffer.entry_count,
         )
 
     def _install_data_hook(
         self, hook_name: str, spec: dict, max_packet_size: int, header_only: bool, installed: dict
     ) -> None:
         """Resolve and install a data hook (send/recv/WSA/UDP)."""
-        addr = resolve_export(spec["module"], spec["export"])
+        addr = resolve_export(spec["module"], spec["export"], session=self._session)
         if addr is None:
             raise RuntimeError(
                 f"Cannot resolve {spec['module']}!{spec['export']}. Is {spec['module']} loaded in the target process?"
@@ -771,14 +776,14 @@ for known function prologues.
             hook_kwargs["length_arg"] = -1
             hook_kwargs.pop("max_capture", None)
 
-        result = HOOK_MANAGER.install_hook(**hook_kwargs)
+        result = self._hook_manager.install_hook(**hook_kwargs)
         installed[hook_name] = result["hook_id"]
 
     def _install_infra_hook(
         self, hook_name: str, spec: dict, max_packet_size: int, installed: dict, required: bool = False
     ) -> None:
         """Resolve and install an infrastructure hook (connect/lifecycle/IOCP)."""
-        addr = resolve_export(spec["module"], spec["export"])
+        addr = resolve_export(spec["module"], spec["export"], session=self._session)
         if addr is None:
             if required:
                 raise RuntimeError(
@@ -801,7 +806,7 @@ for known function prologues.
             hook_kwargs["deref_args"] = spec["deref_args"]
 
         try:
-            result = HOOK_MANAGER.install_hook(**hook_kwargs)
+            result = self._hook_manager.install_hook(**hook_kwargs)
             installed[hook_name] = result["hook_id"]
         except Exception:
             if required:
@@ -821,13 +826,13 @@ for known function prologues.
         if process_alive:
             for hook_id in self._hook_ids.values():
                 try:
-                    HOOK_MANAGER.remove_hook(hook_id)
+                    self._hook_manager.remove_hook(hook_id)
                 except Exception:
                     pass
 
-            if self._created_ring_buffer and not HOOK_MANAGER.hooks:
+            if self._created_ring_buffer and not self._hook_manager.hooks:
                 try:
-                    HOOK_MANAGER.destroy_ring_buffer()
+                    self._hook_manager.destroy_ring_buffer()
                 except Exception:
                     pass
 
@@ -862,7 +867,7 @@ for known function prologues.
         if not self._capture_active:
             raise RuntimeError("No capture active. Call startCapture() first.")
 
-        entries = HOOK_MANAGER.read_ring_buffer(int(limit or 100))
+        entries = self._hook_manager.read_ring_buffer(int(limit or 100))
 
         # Evict stale IOCP correlation entries
         if self._pending_io:
@@ -1003,7 +1008,7 @@ for known function prologues.
             return None
         read_len = min(length, max_capture)
         try:
-            return SESSION.read_bytes(buf_ptr, read_len)
+            return self._session.read_bytes(buf_ptr, read_len)
         except Exception:
             return None
 
@@ -1095,7 +1100,7 @@ for known function prologues.
         if not sockaddr_ptr:
             return None
         try:
-            data = SESSION.read_bytes(sockaddr_ptr, 28)
+            data = self._session.read_bytes(sockaddr_ptr, 28)
             return self._parse_sockaddr(data)
         except Exception:
             return None
@@ -1274,7 +1279,7 @@ for known function prologues.
         if not self._capture_active:
             raise RuntimeError("No capture active.")
 
-        rb_stats = HOOK_MANAGER.ring_buffer_stats()
+        rb_stats = self._hook_manager.ring_buffer_stats()
 
         return self._table(
             total=rb_stats["total_captured"],
@@ -1844,7 +1849,7 @@ for known function prologues.
             if size_val is not None:
                 max_size_mb = float(size_val)
 
-        process_name = SESSION.target_process or "unknown"
+        process_name = self._session.target_process or "unknown"
         rec_dir = Path("scripts") / process_name / "recordings"
         rec_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1996,7 +2001,7 @@ for known function prologues.
             opts: optional table with offset (skip first N entries, default 0)
                   and limit (max entries to return, default all)
         """
-        process_name = SESSION.target_process or "unknown"
+        process_name = self._session.target_process or "unknown"
         filepath = self._resolve_recording_path(filename, process_name)
         if not filepath.exists():
             raise RuntimeError(f"Recording not found: {filepath}")
@@ -2077,7 +2082,7 @@ for known function prologues.
                     recordings.extend(self._scan_recording_dir(rec_dir, proc_dir.name))
             return self._table(*recordings)
 
-        process_name = str(process) if process else (SESSION.target_process or "unknown")
+        process_name = str(process) if process else (self._session.target_process or "unknown")
         rec_dir = Path("scripts") / process_name / "recordings"
         if not rec_dir.exists():
             return self._table()

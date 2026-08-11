@@ -1,6 +1,6 @@
 """Tests for sendto/recvfrom UDP processing in the netcap plugin.
 
-All tests use mocks for HOOK_MANAGER and SESSION. No process attachment required.
+All tests use mocks for the injected hook manager and the injected session. No process attachment required.
 """
 
 import struct
@@ -29,12 +29,21 @@ class MockContext:
     lua: Any = None
     table_factory: Any = None
     log_error: Any = None
+    hook_manager: Any = None
 
 
 def make_plugin() -> NetcapPlugin:
     """Create a NetcapPlugin and register it with a mock context."""
+    session = MagicMock()
+    hook_manager = MagicMock()
+    hook_manager.session = session
     plugin = NetcapPlugin()
-    ctx = MockContext(table_factory=make_table, log_error=lambda *a: None)
+    ctx = MockContext(
+        session=session,
+        table_factory=make_table,
+        log_error=lambda *a: None,
+        hook_manager=hook_manager,
+    )
     plugin.register(ctx)
     return plugin
 
@@ -61,7 +70,7 @@ def make_entry(
     sequence=1,
     timestamp=12345,
 ):
-    """Build a ring buffer entry dict as returned by HOOK_MANAGER.read_ring_buffer()."""
+    """Build a ring buffer entry dict as returned by the injected hook manager.read_ring_buffer()."""
     captured = len(data) if data else 0
     entry = {
         "sequence": sequence,
@@ -97,7 +106,7 @@ class TestSendtoProcessing:
         self.plugin._header_only = False
         self.plugin._max_packet_size = 4096
 
-    def test_sendto_packet(self, monkeypatch):
+    def test_sendto_packet(self):
         """Sendto entry emits send packet and tracks UDP connection with peer address."""
         sockaddr = make_sockaddr_in(53, (8, 8, 8, 8))
         entry = make_entry(
@@ -109,18 +118,17 @@ class TestSendtoProcessing:
             extra_args={"arg4": 0x5000, "arg5": 16},
         )
 
-        mock_hm = MagicMock()
+        mock_hm = self.plugin._hook_manager
         mock_hm.read_ring_buffer.return_value = [entry]
 
-        mock_session = MagicMock()
+        mock_session = self.plugin._session
         mock_session.read_bytes.return_value = sockaddr
-
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION", mock_session)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
 
+        assert self.plugin._hook_manager.session is mock_session
+        mock_session.read_bytes.assert_called_once_with(0x5000, 28)
         assert p["direction"] == "send"
         assert p["socket"] == 0x1A4
         assert p["result"] == 5
@@ -146,7 +154,7 @@ class TestRecvfromProcessing:
         self.plugin._header_only = False
         self.plugin._max_packet_size = 4096
 
-    def test_recvfrom_packet(self, monkeypatch):
+    def test_recvfrom_packet(self):
         """Recvfrom entry emits recv packet with peer address from sockaddr."""
         sockaddr = make_sockaddr_in(53, (8, 8, 4, 4))
         entry = make_entry(
@@ -158,14 +166,11 @@ class TestRecvfromProcessing:
             extra_args={"arg4": 0x6000, "arg5": 16},
         )
 
-        mock_hm = MagicMock()
+        mock_hm = self.plugin._hook_manager
         mock_hm.read_ring_buffer.return_value = [entry]
 
-        mock_session = MagicMock()
+        mock_session = self.plugin._session
         mock_session.read_bytes.return_value = sockaddr
-
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION", mock_session)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
@@ -192,7 +197,7 @@ class TestUdpSockaddrFailure:
         self.plugin._header_only = False
         self.plugin._max_packet_size = 4096
 
-    def test_sockaddr_read_fails(self, monkeypatch):
+    def test_sockaddr_read_fails(self):
         """Packet still emitted when SESSION.read_bytes raises for sockaddr pointer."""
         entry = make_entry(
             hook_id=1,
@@ -203,14 +208,11 @@ class TestUdpSockaddrFailure:
             extra_args={"arg4": 0x5000, "arg5": 16},
         )
 
-        mock_hm = MagicMock()
+        mock_hm = self.plugin._hook_manager
         mock_hm.read_ring_buffer.return_value = [entry]
 
-        mock_session = MagicMock()
+        mock_session = self.plugin._session
         mock_session.read_bytes.side_effect = Exception("memory read failed")
-
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION", mock_session)
 
         packets = self.plugin._read_packets(100)
 

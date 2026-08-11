@@ -3,7 +3,7 @@
 Verifies generated trampoline bytes structurally WITHOUT executing them.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -159,8 +159,8 @@ class TestDerefArgsShellcode:
 # ============================================================
 
 
-def make_hook_manager():
-    hm = HookManager()
+def make_hook_manager(session=None):
+    hm = HookManager(session if session is not None else MagicMock())
     hm.ring_buffer = RingBufferConfig(
         address=0x1000,
         entry_count=128,
@@ -174,53 +174,53 @@ def make_hook_manager():
 class TestDerefArgsValidation:
     def test_deref_args_pre_hook_raises(self):
         """install_hook with hook_type='pre' and deref_args raises ValueError."""
-        hm = make_hook_manager()
-        with patch("memscope_mcp.tools.hooking.SESSION") as mock_session:
-            mock_session.read_bytes.return_value = b"\x90" * 32
-            with pytest.raises(ValueError, match="deref_args only valid with type='post'"):
-                hm.install_hook(
-                    target_addr=0x7FF600000000,
-                    name="test",
-                    hook_type="pre",
-                    deref_args={1: 4},
-                )
+        mock_session = MagicMock()
+        mock_session.read_bytes.return_value = b"\x90" * 32
+        hm = make_hook_manager(mock_session)
+        with pytest.raises(ValueError, match="deref_args only valid with type='post'"):
+            hm.install_hook(
+                target_addr=0x7FF600000000,
+                name="test",
+                hook_type="pre",
+                deref_args={1: 4},
+            )
 
     def test_deref_args_invalid_key(self):
         """deref_args key outside 1-4 raises ValueError."""
-        hm = make_hook_manager()
-        with patch("memscope_mcp.tools.hooking.SESSION") as mock_session:
-            mock_session.read_bytes.return_value = b"\x90" * 32
-            with pytest.raises(ValueError, match="deref_args key must be 1-4"):
-                hm.install_hook(
-                    target_addr=0x7FF600000000,
-                    name="test",
-                    hook_type="post",
-                    deref_args={0: 4},
-                )
-            with pytest.raises(ValueError, match="deref_args key must be 1-4"):
-                hm.install_hook(
-                    target_addr=0x7FF600000000,
-                    name="test",
-                    hook_type="post",
-                    deref_args={5: 4},
-                )
+        mock_session = MagicMock()
+        mock_session.read_bytes.return_value = b"\x90" * 32
+        hm = make_hook_manager(mock_session)
+        with pytest.raises(ValueError, match="deref_args key must be 1-4"):
+            hm.install_hook(
+                target_addr=0x7FF600000000,
+                name="test",
+                hook_type="post",
+                deref_args={0: 4},
+            )
+        with pytest.raises(ValueError, match="deref_args key must be 1-4"):
+            hm.install_hook(
+                target_addr=0x7FF600000000,
+                name="test",
+                hook_type="post",
+                deref_args={5: 4},
+            )
 
     def test_deref_args_invalid_size(self):
         """deref_args value not 4 or 8 raises ValueError."""
-        hm = make_hook_manager()
-        with patch("memscope_mcp.tools.hooking.SESSION") as mock_session:
-            mock_session.read_bytes.return_value = b"\x90" * 32
-            with pytest.raises(ValueError, match="deref_args read_size must be 4 or 8"):
-                hm.install_hook(
-                    target_addr=0x7FF600000000,
-                    name="test",
-                    hook_type="post",
-                    deref_args={1: 2},
-                )
-            with pytest.raises(ValueError, match="deref_args read_size must be 4 or 8"):
-                hm.install_hook(
-                    target_addr=0x7FF600000000,
-                    name="test",
-                    hook_type="post",
-                    deref_args={1: 16},
-                )
+        mock_session = MagicMock()
+        mock_session.read_bytes.return_value = b"\x90" * 32
+        hm = make_hook_manager(mock_session)
+        with pytest.raises(ValueError, match="deref_args read_size must be 4 or 8"):
+            hm.install_hook(
+                target_addr=0x7FF600000000,
+                name="test",
+                hook_type="post",
+                deref_args={1: 2},
+            )
+        with pytest.raises(ValueError, match="deref_args read_size must be 4 or 8"):
+            hm.install_hook(
+                target_addr=0x7FF600000000,
+                name="test",
+                hook_type="post",
+                deref_args={1: 16},
+            )

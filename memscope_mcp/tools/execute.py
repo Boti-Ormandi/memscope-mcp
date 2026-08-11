@@ -9,7 +9,6 @@ import re
 import struct
 from typing import Any, Union
 
-from ..session import SESSION
 from ..utils.memory_utils import format_address, parse_address
 from ..utils.shellcode import build_call_x64, build_multi_call_x64
 
@@ -56,7 +55,8 @@ def parse_numeric_string(s: str) -> int:
 class CallContext:
     """Tracks allocations for automatic cleanup."""
 
-    def __init__(self):
+    def __init__(self, *, session):
+        self._session = session
         self.allocations: list[int] = []
         self.shellcode_addr: int = 0
         self.result_addr: int = 0
@@ -73,8 +73,8 @@ class CallContext:
             Address of allocated string
         """
         data = s.encode("utf-8") + b"\x00"
-        addr = SESSION.allocate(len(data), executable=False)
-        SESSION.write_bytes(addr, data)
+        addr = self._session.allocate(len(data), executable=False)
+        self._session.write_bytes(addr, data)
         self.allocations.append(addr)
         return addr
 
@@ -88,8 +88,8 @@ class CallContext:
             Address of allocated string
         """
         data = s.encode("utf-16-le") + b"\x00\x00"
-        addr = SESSION.allocate(len(data), executable=False)
-        SESSION.write_bytes(addr, data)
+        addr = self._session.allocate(len(data), executable=False)
+        self._session.write_bytes(addr, data)
         self.allocations.append(addr)
         return addr
 
@@ -97,35 +97,35 @@ class CallContext:
         """Free all tracked allocations. Always safe to call."""
         for addr in self.allocations:
             try:
-                SESSION.free(addr)
+                self._session.free(addr)
             except Exception:
                 pass
         self.allocations.clear()
 
         if self.shellcode_addr:
             try:
-                SESSION.free(self.shellcode_addr)
+                self._session.free(self.shellcode_addr)
             except Exception:
                 pass
             self.shellcode_addr = 0
 
         if self.result_addr:
             try:
-                SESSION.free(self.result_addr)
+                self._session.free(self.result_addr)
             except Exception:
                 pass
             self.result_addr = 0
 
         if self.output_buffer_addr:
             try:
-                SESSION.free(self.output_buffer_addr)
+                self._session.free(self.output_buffer_addr)
             except Exception:
                 pass
             self.output_buffer_addr = 0
 
         if self.thread_handle:
             try:
-                SESSION.close_handle(self.thread_handle)
+                self._session.close_handle(self.thread_handle)
             except Exception:
                 pass
             self.thread_handle = 0
@@ -141,6 +141,8 @@ def execute_code(
     result_copy_size: int = 0,
     output_arg: int = -1,
     output_size: int = 0,
+    *,
+    session,
 ) -> dict:
     """Execute function in target process with smart argument handling.
 
@@ -177,20 +179,20 @@ def execute_code(
         For functions expecting single-precision floats, the caller must
         handle the bit conversion appropriately.
     """
-    if SESSION.pm is None:
+    if session.pm is None:
         return {"success": False, "error": "NOT_ATTACHED", "detail": "Call attach first"}
 
     # Parse function address
     try:
         if isinstance(func_addr, str):
-            func_addr = parse_address(func_addr)
+            func_addr = parse_address(func_addr, session=session)
         else:
             func_addr = int(func_addr)
     except ValueError as e:
         return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
     # Validate function address is in executable memory
-    if not SESSION.is_valid_pointer(func_addr):
+    if not session.is_valid_pointer(func_addr):
         return {
             "success": False,
             "error": "INVALID_ADDRESS",
@@ -214,7 +216,7 @@ def execute_code(
 
     args = args or []
     float_args = float_args or []
-    ctx = CallContext()
+    ctx = CallContext(session=session)
 
     try:
         # Process arguments - smart detection of numeric strings vs text strings
@@ -264,12 +266,12 @@ def execute_code(
             result_size = 16 + result_copy_size  # RAX + XMM0 slot + boxed data
 
         # Allocate result storage
-        ctx.result_addr = SESSION.allocate(result_size, executable=False)
-        SESSION.write_bytes(ctx.result_addr, b"\x00" * result_size)
+        ctx.result_addr = session.allocate(result_size, executable=False)
+        session.write_bytes(ctx.result_addr, b"\x00" * result_size)
 
         # Allocate output buffer if needed (tracked in ctx for cleanup)
         if output_arg >= 0 and output_size > 0:
-            ctx.output_buffer_addr = SESSION.allocate(output_size, executable=False)
+            ctx.output_buffer_addr = session.allocate(output_size, executable=False)
 
         # Build shellcode
         shellcode = build_call_x64(
@@ -286,14 +288,14 @@ def execute_code(
         )
 
         # Allocate and write shellcode
-        ctx.shellcode_addr = SESSION.allocate(len(shellcode), executable=True)
-        SESSION.write_bytes(ctx.shellcode_addr, shellcode)
+        ctx.shellcode_addr = session.allocate(len(shellcode), executable=True)
+        session.write_bytes(ctx.shellcode_addr, shellcode)
 
         # Create and run thread
-        ctx.thread_handle = SESSION.create_remote_thread(ctx.shellcode_addr)
+        ctx.thread_handle = session.create_remote_thread(ctx.shellcode_addr)
 
         # Wait for completion
-        completed = SESSION.wait_for_thread(ctx.thread_handle, timeout_ms)
+        completed = session.wait_for_thread(ctx.thread_handle, timeout_ms)
 
         if not completed:
             return {
@@ -304,7 +306,7 @@ def execute_code(
             }
 
         # Read results
-        result_data = SESSION.read_bytes(ctx.result_addr, result_size)
+        result_data = session.read_bytes(ctx.result_addr, result_size)
         rax_value = struct.unpack("<Q", result_data[0:8])[0]
 
         response = {"success": True, "result": format_address(rax_value)}
@@ -320,7 +322,7 @@ def execute_code(
 
         # Extract output pointer data if requested
         if ctx.output_buffer_addr and output_size > 0:
-            output_data = SESSION.read_bytes(ctx.output_buffer_addr, output_size)
+            output_data = session.read_bytes(ctx.output_buffer_addr, output_size)
             response["output_data"] = output_data.hex()
 
         # Include string allocation info if any strings were passed
@@ -340,7 +342,7 @@ def execute_code(
         ctx.cleanup()
 
 
-def execute_code_ex(flags: int, timeout_ms: int, func_addr: Union[str, int], *args) -> dict:
+def execute_code_ex(flags: int, timeout_ms: int, func_addr: Union[str, int], *args, session) -> dict:
     """Execute function with extended options (CE-compatible signature).
 
     Flags:
@@ -366,10 +368,10 @@ def execute_code_ex(flags: int, timeout_ms: int, func_addr: Union[str, int], *ar
         }
 
     timeout = timeout_ms if timeout_ms is not None else 5000
-    return execute_code(func_addr, list(args), timeout)
+    return execute_code(func_addr, list(args), timeout, session=session)
 
 
-def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
+def call_sequence(calls: list[dict], timeout_ms: int = 5000, *, session) -> dict:
     """Execute multiple function calls in a SINGLE thread.
 
     Critical for thread-local state: some APIs (e.g., thread_attach) only affect
@@ -392,13 +394,13 @@ def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
         ])
         # Both calls run in SAME thread - attachment persists for second call
     """
-    if SESSION.pm is None:
+    if session.pm is None:
         return {"success": False, "error": "NOT_ATTACHED", "detail": "Call attach first"}
 
     if not calls:
         return {"success": False, "error": "NO_CALLS", "detail": "calls list is empty"}
 
-    ctx = CallContext()
+    ctx = CallContext(session=session)
 
     try:
         # Process each call spec into (func_addr, processed_args)
@@ -422,13 +424,13 @@ def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
             # Parse function address
             try:
                 if isinstance(addr_raw, str):
-                    func_addr = parse_address(addr_raw)
+                    func_addr = parse_address(addr_raw, session=session)
                 else:
                     func_addr = int(addr_raw)
             except ValueError as e:
                 return {"success": False, "error": "INVALID_ADDRESS", "detail": f"Call {idx}: {e}"}
 
-            if not SESSION.is_valid_pointer(func_addr):
+            if not session.is_valid_pointer(func_addr):
                 return {
                     "success": False,
                     "error": "INVALID_ADDRESS",
@@ -470,27 +472,27 @@ def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
 
         # Allocate result storage: one uint64 slot per call.
         result_size = len(processed_calls) * 8
-        ctx.result_addr = SESSION.allocate(result_size, executable=False)
-        SESSION.write_bytes(ctx.result_addr, b"\x00" * result_size)
+        ctx.result_addr = session.allocate(result_size, executable=False)
+        session.write_bytes(ctx.result_addr, b"\x00" * result_size)
 
         # Build multi-call shellcode
         shellcode = build_multi_call_x64(processed_calls, ctx.result_addr)
 
         # Allocate and write shellcode
-        ctx.shellcode_addr = SESSION.allocate(len(shellcode), executable=True)
-        SESSION.write_bytes(ctx.shellcode_addr, shellcode)
+        ctx.shellcode_addr = session.allocate(len(shellcode), executable=True)
+        session.write_bytes(ctx.shellcode_addr, shellcode)
 
         # Create and run thread
-        ctx.thread_handle = SESSION.create_remote_thread(ctx.shellcode_addr)
+        ctx.thread_handle = session.create_remote_thread(ctx.shellcode_addr)
 
         # Wait for completion
-        completed = SESSION.wait_for_thread(ctx.thread_handle, timeout_ms)
+        completed = session.wait_for_thread(ctx.thread_handle, timeout_ms)
 
         if not completed:
             return {"success": False, "error": "TIMEOUT", "detail": f"Sequence did not complete within {timeout_ms}ms"}
 
         # Read per-call results (each call's RAX stored in its own slot).
-        result_data = SESSION.read_bytes(ctx.result_addr, result_size)
+        result_data = session.read_bytes(ctx.result_addr, result_size)
         call_results = [struct.unpack("<Q", result_data[i * 8 : i * 8 + 8])[0] for i in range(len(processed_calls))]
         result = call_results[-1]
 
@@ -516,7 +518,7 @@ def call_sequence(calls: list[dict], timeout_ms: int = 5000) -> dict:
         ctx.cleanup()
 
 
-def alloc_string(s: str, wide: bool = False) -> dict:
+def alloc_string(s: str, wide: bool = False, *, session) -> dict:
     """Manually allocate a string in target process.
 
     Use this when you need to keep a string allocated across multiple calls.
@@ -529,7 +531,7 @@ def alloc_string(s: str, wide: bool = False) -> dict:
     Returns:
         {"success": True, "address": "0x..." (hex string), "size": int}
     """
-    if SESSION.pm is None:
+    if session.pm is None:
         return {"success": False, "error": "NOT_ATTACHED", "detail": "Call attach first"}
 
     try:
@@ -538,15 +540,15 @@ def alloc_string(s: str, wide: bool = False) -> dict:
         else:
             data = s.encode("utf-8") + b"\x00"
 
-        addr = SESSION.allocate(len(data), executable=False)
-        SESSION.write_bytes(addr, data)
+        addr = session.allocate(len(data), executable=False)
+        session.write_bytes(addr, data)
 
         return {"success": True, "address": format_address(addr), "size": len(data)}
     except Exception as e:
         return {"success": False, "error": "ALLOCATION_FAILED", "detail": str(e)}
 
 
-def free_alloc(address: Union[str, int]) -> dict:
+def free_alloc(address: Union[str, int], *, session) -> dict:
     """Free manually allocated memory.
 
     Args:
@@ -555,13 +557,13 @@ def free_alloc(address: Union[str, int]) -> dict:
     Returns:
         {"success": True} or {"success": False, "error": ..., "detail": ...}
     """
-    if SESSION.pm is None:
+    if session.pm is None:
         return {"success": False, "error": "NOT_ATTACHED", "detail": "Call attach first"}
 
     try:
         if isinstance(address, str):
-            address = parse_address(address)
-        if SESSION.free(address):
+            address = parse_address(address, session=session)
+        if session.free(address):
             return {"success": True}
         else:
             return {"success": False, "error": "FREE_FAILED", "detail": "VirtualFreeEx returned false"}

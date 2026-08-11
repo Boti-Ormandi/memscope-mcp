@@ -5,17 +5,25 @@ Bridges between Lua-callable signatures and HookManager methods.
 
 from typing import Any, Callable
 
-from ...tools.hooking import HOOK_MANAGER
 from ...utils.memory_utils import parse_address
 
 
-def build_hooking_functions(table_factory: Callable, log_error: Callable, output: list[str]) -> dict[str, Callable]:
+def build_hooking_functions(
+    table_factory: Callable,
+    log_error: Callable,
+    output: list[str],
+    *,
+    session,
+    hook_manager,
+) -> dict[str, Callable]:
     """Build Lua-callable hooking functions.
 
     Args:
-        table_factory: Callable that creates Lua tables (engine.lua.table).
+        table_factory: Guarded Lua-table factory from ``engine.table_factory`` or ``ExtensionContext``.
         log_error: Error logging function (engine._log_error).
         output: Output list for print statements (engine._output).
+        session: DebugSession used for address parsing in this bootstrap domain.
+        hook_manager: HookManager owned by this bootstrap domain.
 
     Returns:
         Dict mapping Lua function names to Python callables.
@@ -57,7 +65,7 @@ def build_hooking_functions(table_factory: Callable, log_error: Callable, output
                 mds = opts["max_data_size"]
                 if mds is not None:
                     max_data_size = int(mds)
-            result = HOOK_MANAGER.create_ring_buffer(entry_count, max_data_size)
+            result = hook_manager.create_ring_buffer(entry_count, max_data_size)
             return _to_lua(result)
         except Exception as e:
             log_error("createRingBuffer", e)
@@ -66,7 +74,7 @@ def build_hooking_functions(table_factory: Callable, log_error: Callable, output
     def hook_function(address, opts=None):
         """Lua: hookFunction(address, {name, type, buffer_arg, length_arg, max_capture, stack_args})"""
         try:
-            addr = parse_address(address)
+            addr = parse_address(address, session=session)
             name = "hook"
             hook_type = "pre"
             buffer_arg = -1
@@ -111,7 +119,7 @@ def build_hooking_functions(table_factory: Callable, log_error: Callable, output
                     if ld_size is not None:
                         length_deref["size"] = int(ld_size)
 
-            result = HOOK_MANAGER.install_hook(
+            result = hook_manager.install_hook(
                 addr,
                 name,
                 hook_type,
@@ -131,8 +139,8 @@ def build_hooking_functions(table_factory: Callable, log_error: Callable, output
     def unhook_function(addr_or_id):
         """Lua: unhookFunction(address_or_hook_id)"""
         try:
-            val = parse_address(addr_or_id)
-            return HOOK_MANAGER.remove_hook(val)
+            val = parse_address(addr_or_id, session=session)
+            return hook_manager.remove_hook(val)
         except Exception as e:
             log_error("unhookFunction", e)
             return False
@@ -140,7 +148,7 @@ def build_hooking_functions(table_factory: Callable, log_error: Callable, output
     def list_hooks():
         """Lua: listHooks()"""
         try:
-            hooks = HOOK_MANAGER.list_hooks()
+            hooks = hook_manager.list_hooks()
             return _to_lua(hooks)
         except Exception as e:
             log_error("listHooks", e)
@@ -155,7 +163,7 @@ def build_hooking_functions(table_factory: Callable, log_error: Callable, output
                 mr = opts["min_result"]
                 if mr is not None:
                     min_result = int(mr)
-            entries = HOOK_MANAGER.read_ring_buffer(lim, min_result=min_result)
+            entries = hook_manager.read_ring_buffer(lim, min_result=min_result)
             return _to_lua(entries)
         except Exception as e:
             log_error("readRingBuffer", e)
@@ -164,7 +172,7 @@ def build_hooking_functions(table_factory: Callable, log_error: Callable, output
     def ring_buffer_stats():
         """Lua: ringBufferStats()"""
         try:
-            stats = HOOK_MANAGER.ring_buffer_stats()
+            stats = hook_manager.ring_buffer_stats()
             return _to_lua(stats)
         except Exception as e:
             log_error("ringBufferStats", e)
@@ -173,7 +181,7 @@ def build_hooking_functions(table_factory: Callable, log_error: Callable, output
     def ring_buffer_marker(label):
         """Lua: ringBufferMarker(label)"""
         try:
-            return HOOK_MANAGER.ring_buffer_marker(str(label))
+            return hook_manager.ring_buffer_marker(str(label))
         except Exception as e:
             log_error("ringBufferMarker", e)
             return False
@@ -181,7 +189,7 @@ def build_hooking_functions(table_factory: Callable, log_error: Callable, output
     def destroy_ring_buffer():
         """Lua: destroyRingBuffer()"""
         try:
-            HOOK_MANAGER.destroy_ring_buffer()
+            hook_manager.destroy_ring_buffer()
             return True
         except Exception as e:
             log_error("destroyRingBuffer", e)

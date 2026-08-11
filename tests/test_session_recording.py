@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -45,12 +45,21 @@ class MockContext:
     lua: Any = None
     table_factory: Any = None
     log_error: Any = None
+    hook_manager: Any = None
 
 
 def make_plugin() -> NetcapPlugin:
     """Create a NetcapPlugin and register it with a mock context."""
+    session = MagicMock()
+    hook_manager = MagicMock()
+    hook_manager.session = session
     plugin = NetcapPlugin()
-    ctx = MockContext(table_factory=make_table, log_error=lambda *a: None)
+    ctx = MockContext(
+        session=session,
+        table_factory=make_table,
+        log_error=lambda *a: None,
+        hook_manager=hook_manager,
+    )
     plugin.register(ctx)
     return plugin
 
@@ -81,7 +90,7 @@ class TestStartRecording:
     def test_creates_file_in_correct_directory(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("test_session")
 
@@ -93,7 +102,7 @@ class TestStartRecording:
     def test_returns_filename_and_path(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._start_recording("my_session")
 
@@ -104,7 +113,7 @@ class TestStartRecording:
     def test_second_call_while_active_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("first")
             with pytest.raises(RuntimeError, match="Recording already active"):
@@ -114,7 +123,7 @@ class TestStartRecording:
     def test_auto_generates_timestamp_filename_when_none(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._start_recording(None)
 
@@ -129,7 +138,7 @@ class TestStartRecording:
     def test_appends_jsonl_extension_if_missing(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._start_recording("no_ext")
 
@@ -139,7 +148,7 @@ class TestStartRecording:
     def test_does_not_duplicate_jsonl_extension(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._start_recording("already.jsonl")
 
@@ -155,7 +164,7 @@ class TestRecordPackets:
     def test_packets_written_as_valid_jsonl(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("capture")
 
@@ -173,7 +182,7 @@ class TestRecordPackets:
     def test_recording_count_increments(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("counter")
 
@@ -184,7 +193,7 @@ class TestRecordPackets:
     def test_full_data_stored_not_truncated(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("bigdata")
 
@@ -262,7 +271,7 @@ class TestStopRecording:
     def test_returns_path_entries_duration(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("stop_test")
 
@@ -277,7 +286,7 @@ class TestStopRecording:
     def test_recording_file_is_closed_after_stop(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("closed_test")
 
@@ -289,7 +298,7 @@ class TestStopRecording:
     def test_state_reset_after_stop(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("reset_test")
 
@@ -307,7 +316,7 @@ class TestStopRecording:
     def test_file_on_disk_survives_stop(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("survive")
 
@@ -341,7 +350,7 @@ class TestLoadRecording:
         self._write_session(tmp_path, "TestGame.exe", "load_test.jsonl", pkts)
 
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._load_recording("load_test")
 
@@ -356,7 +365,7 @@ class TestLoadRecording:
         self._write_session(tmp_path, "TestGame.exe", "bytes_test.jsonl", [make_packet(data=original_data)])
 
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._load_recording("bytes_test")
 
@@ -370,7 +379,7 @@ class TestLoadRecording:
         self._write_session(tmp_path, "TestGame.exe", "preview_test.jsonl", [make_packet(data=b"ABC")])
 
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._load_recording("preview_test")
 
@@ -384,7 +393,7 @@ class TestLoadRecording:
         self._write_session(tmp_path, "TestGame.exe", "fields_test.jsonl", [pkt])
 
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._load_recording("fields_test")
 
@@ -397,7 +406,7 @@ class TestLoadRecording:
     def test_missing_file_raises_runtime_error(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             with pytest.raises(RuntimeError, match="Recording not found"):
                 plugin._load_recording("nonexistent")
@@ -412,7 +421,7 @@ class TestLoadRecording:
         self._write_session(tmp_path, "TestGame.exe", "feed_test.jsonl", pkts)
 
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             loaded = plugin._load_recording("feed_test")
 
@@ -430,7 +439,7 @@ class TestLoadRecording:
         self._write_session(tmp_path, "TestGame.exe", "search_test.jsonl", pkts)
 
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             loaded = plugin._load_recording("search_test")
 
@@ -467,12 +476,12 @@ class TestPaginatedLoadRecording:
     def test_load_full_recording(self, tmp_path, monkeypatch):
         """Loading without offset/limit returns all entries."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 20)
 
         plugin = make_plugin()
+        monkeypatch.setattr(plugin._session, "target_process", "test.exe")
         result = plugin._load_recording("session1")
 
         count = 0
@@ -485,12 +494,12 @@ class TestPaginatedLoadRecording:
     def test_load_with_limit(self, tmp_path, monkeypatch):
         """Loading with limit=5 returns only 5 entries."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 20)
 
         plugin = make_plugin()
+        monkeypatch.setattr(plugin._session, "target_process", "test.exe")
         opts = make_table(offset=None, limit=5)
         result = plugin._load_recording("session1", opts)
 
@@ -504,12 +513,12 @@ class TestPaginatedLoadRecording:
     def test_load_with_offset(self, tmp_path, monkeypatch):
         """Loading with offset=15 skips first 15 and returns remaining 5."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 20)
 
         plugin = make_plugin()
+        monkeypatch.setattr(plugin._session, "target_process", "test.exe")
         opts = make_table(offset=15, limit=None)
         result = plugin._load_recording("session1", opts)
 
@@ -523,12 +532,12 @@ class TestPaginatedLoadRecording:
     def test_load_with_offset_and_limit(self, tmp_path, monkeypatch):
         """Loading with offset=5, limit=3 returns entries 6-8."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 20)
 
         plugin = make_plugin()
+        monkeypatch.setattr(plugin._session, "target_process", "test.exe")
         opts = make_table(offset=5, limit=3)
         result = plugin._load_recording("session1", opts)
 
@@ -543,12 +552,12 @@ class TestPaginatedLoadRecording:
     def test_offset_beyond_file(self, tmp_path, monkeypatch):
         """Offset past end of file returns empty result."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 5)
 
         plugin = make_plugin()
+        monkeypatch.setattr(plugin._session, "target_process", "test.exe")
         opts = make_table(offset=100, limit=None)
         result = plugin._load_recording("session1", opts)
 
@@ -557,12 +566,12 @@ class TestPaginatedLoadRecording:
     def test_limit_zero(self, tmp_path, monkeypatch):
         """Limit of 0 returns no entries."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 20)
 
         plugin = make_plugin()
+        monkeypatch.setattr(plugin._session, "target_process", "test.exe")
         opts = make_table(offset=None, limit=0)
         result = plugin._load_recording("session1", opts)
         assert result[1] is None
@@ -570,12 +579,12 @@ class TestPaginatedLoadRecording:
     def test_no_opts_backward_compatible(self, tmp_path, monkeypatch):
         """Calling without opts still works."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.SESSION.target_process", "test.exe")
 
         filepath = tmp_path / "scripts" / "test.exe" / "recordings" / "session1.jsonl"
         self._write_recording(filepath, 3)
 
         plugin = make_plugin()
+        monkeypatch.setattr(plugin._session, "target_process", "test.exe")
         result = plugin._load_recording("session1")
 
         count = 0
@@ -605,7 +614,7 @@ class TestListRecordings:
         self._create_recording(tmp_path, "TestGame.exe", "session_b.jsonl", lines=2)
 
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._list_recordings()
 
@@ -617,7 +626,7 @@ class TestListRecordings:
         self._create_recording(tmp_path, "TestGame.exe", "counted.jsonl", lines=7)
 
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._list_recordings()
 
@@ -628,7 +637,7 @@ class TestListRecordings:
         self._create_recording(tmp_path, "TestGame.exe", "meta.jsonl", lines=1)
 
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._list_recordings()
 
@@ -645,7 +654,7 @@ class TestListRecordings:
         self._create_recording(tmp_path, "Game2.exe", "g2.jsonl")
 
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "Game1.exe"
             result = plugin._list_recordings("*")
 
@@ -657,7 +666,7 @@ class TestListRecordings:
         monkeypatch.chdir(tmp_path)
         # No files created -- recordings dir doesn't even exist
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._list_recordings()
 
@@ -666,7 +675,7 @@ class TestListRecordings:
     def test_star_with_no_scripts_dir_returns_empty(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._list_recordings("*")
 
@@ -680,7 +689,7 @@ class TestCleanup:
     def test_cleanup_closes_recording_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("cleanup_test")
 
@@ -691,7 +700,7 @@ class TestCleanup:
     def test_cleanup_recording_file_survives_on_disk(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("cleanup_survive")
 
@@ -705,7 +714,7 @@ class TestCleanup:
     def test_cleanup_resets_recording_state(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("state_reset")
 
@@ -737,14 +746,14 @@ class TestRoundTrip:
             make_packet("send", 0x200, b"hello world", sequence=3),
         ]
 
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("roundtrip")
             plugin._record_packets(packets)
             plugin._stop_recording()
 
         plugin2 = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin2, "_session", plugin2._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             loaded = plugin2._load_recording("roundtrip")
 
@@ -764,7 +773,7 @@ class TestRoundTrip:
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
 
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("first_run")
             plugin._record_packets([make_packet(data=b"a")])
@@ -782,7 +791,7 @@ class TestCompression:
     def test_stop_with_compress_creates_gz_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("comp", make_table(compress=True))
 
@@ -800,7 +809,7 @@ class TestCompression:
     def test_compressed_file_contains_valid_gzip_data(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("valid_gz", make_table(compress=True))
 
@@ -817,14 +826,14 @@ class TestCompression:
     def test_load_recording_reads_gz_files(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("load_gz", make_table(compress=True))
             plugin._record_packets([make_packet(data=b"\xde\xad"), make_packet(data=b"\xbe\xef")])
             plugin._stop_recording()
 
         plugin2 = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin2, "_session", plugin2._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             loaded = plugin2._load_recording("load_gz")
 
@@ -835,7 +844,7 @@ class TestCompression:
     def test_stop_without_compress_returns_jsonl(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("no_comp")
 
@@ -849,7 +858,7 @@ class TestCompression:
     def test_list_recordings_shows_compressed_flag(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             # Create one compressed, one uncompressed
             plugin._start_recording("plain")
@@ -859,7 +868,7 @@ class TestCompression:
             plugin._record_packets([make_packet(data=b"b")])
             plugin._stop_recording()
 
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             result = plugin._list_recordings()
 
@@ -890,7 +899,7 @@ class TestRotation:
     def test_rotation_creates_new_part_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             # Very small max_size to trigger rotation quickly
             plugin._start_recording("rot", make_table(max_size_mb=0.0001))  # ~100 bytes
@@ -910,7 +919,7 @@ class TestRotation:
     def test_rotation_part_counter_increments(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("multi", make_table(max_size_mb=0.00005))
 
@@ -923,7 +932,7 @@ class TestRotation:
     def test_rotation_with_compression(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("rotcomp", make_table(compress=True, max_size_mb=0.0001))
 
@@ -943,7 +952,7 @@ class TestRotation:
     def test_no_rotation_without_max_size(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("norot")
 
@@ -959,7 +968,7 @@ class TestRotation:
     def test_stop_returns_total_entries_across_parts(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("count", make_table(max_size_mb=0.0001))
 
@@ -974,7 +983,7 @@ class TestRotation:
     def test_load_rotated_parts_individually(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("parts", make_table(max_size_mb=0.0001))
 
@@ -985,13 +994,13 @@ class TestRotation:
 
         # Load first part
         plugin2 = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin2, "_session", plugin2._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             loaded1 = plugin2._load_recording("parts")
         assert loaded1[1] is not None  # has at least one packet
 
         # Load second part
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             loaded2 = plugin2._load_recording("parts_part002")
         assert loaded2[1] is not None
@@ -1004,7 +1013,7 @@ class TestCleanupNewState:
     def test_cleanup_resets_compression_state(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         plugin = make_plugin()
-        with patch("memscope_mcp._contrib.plugins.netcap.SESSION") as mock_sess:
+        with patch.object(plugin, "_session", plugin._session) as mock_sess:
             mock_sess.target_process = "TestGame.exe"
             plugin._start_recording("clean", make_table(compress=True, max_size_mb=50))
 

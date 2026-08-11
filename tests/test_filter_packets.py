@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import MagicMock
 
 from memscope_mcp._contrib.plugins.netcap import NetcapPlugin
 
@@ -31,12 +32,21 @@ class MockContext:
     lua: Any = None
     table_factory: Any = None
     log_error: Any = None
+    hook_manager: Any = None
 
 
 def make_plugin() -> NetcapPlugin:
     """Create a NetcapPlugin and register it with a mock context."""
+    session = MagicMock()
+    hook_manager = MagicMock()
+    hook_manager.session = session
     plugin = NetcapPlugin()
-    ctx = MockContext(table_factory=make_table, log_error=lambda *a: None)
+    ctx = MockContext(
+        session=session,
+        table_factory=make_table,
+        log_error=lambda *a: None,
+        hook_manager=hook_manager,
+    )
     plugin.register(ctx)
     return plugin
 

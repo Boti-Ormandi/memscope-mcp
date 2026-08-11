@@ -164,6 +164,22 @@ class SuspendedThread:
     handle: int
 
 
+class _GuardedCompositionCallback:
+    """Keep provisional or failed composition callbacks logically inert."""
+
+    __slots__ = ("_engine", "_session", "_callback")
+
+    def __init__(self, engine: object, session: "DebugSession", callback: Callable) -> None:
+        self._engine = engine
+        self._session = session
+        self._callback = callback
+
+    def __call__(self, *args, **kwargs):
+        if self._engine._composition_callback_is_active(self._session):
+            return self._callback(*args, **kwargs)
+        return None
+
+
 @dataclass
 class DebugSession:
     """Persistent state across MCP calls."""
@@ -176,6 +192,13 @@ class DebugSession:
     # Lifecycle callbacks: {name: callback}
     _on_attach_callbacks: dict[str, Callable] = field(default_factory=dict)
     _on_detach_callbacks: dict[str, Callable] = field(default_factory=dict)
+
+    # Private one-engine composition claim, retained even after bootstrap failure.
+    # The same lock closes callback registration races at the claim boundary.
+    _lua_composition_engine: object | None = field(default=None, init=False, repr=False)
+    _lua_composition_claim_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _lua_attach_callback_names: set[str] = field(default_factory=set, init=False, repr=False)
+    _lua_detach_callback_names: set[str] = field(default_factory=set, init=False, repr=False)
 
     # Track remote allocations for cleanup on detach
     _tracked_allocations: set[int] = field(default_factory=set)
@@ -194,48 +217,125 @@ class DebugSession:
 
     # ========== Lifecycle Callback Registration ==========
 
-    def register_on_attach(self, name: str, callback: Callable[["DebugSession"], None]) -> None:
-        """Register a callback invoked after successful process attach.
+    def _claim_lua_composition_engine(self, engine: object) -> None:
+        """Claim this session for exactly one Lua engine by object identity."""
 
-        Args:
-            name: Unique identifier (used for logging and deregistration).
-            callback: Called with (session) after attach succeeds.
-        """
-        self._on_attach_callbacks[name] = callback
+        with self._lua_composition_claim_lock:
+            if self._lua_composition_engine is None:
+                self._lua_composition_engine = engine
+            elif self._lua_composition_engine is not engine:
+                raise ValueError("DebugSession composition is already claimed by a different MemscopeLuaEngine")
+
+    def _lua_composition_engine_identity(self) -> object | None:
+        """Return the claimed composition engine by identity."""
+
+        with self._lua_composition_claim_lock:
+            return self._lua_composition_engine
+
+    def _lua_composition_callback_names_snapshot(self, engine: object) -> tuple[frozenset[str], frozenset[str]]:
+        """Return stable pre-claim callback names for bootstrap preflight."""
+
+        with self._lua_composition_claim_lock:
+            if self._lua_composition_engine is not engine:
+                raise ValueError("DebugSession composition is not claimed by this MemscopeLuaEngine")
+            return frozenset(self._on_attach_callbacks), frozenset(self._on_detach_callbacks)
+
+    def _publish_lua_composition_callbacks(
+        self,
+        engine: object,
+        attach_callbacks: dict[str, Callable],
+        detach_callbacks: dict[str, Callable],
+    ) -> None:
+        """Copy-on-write publish one guarded callback batch."""
+
+        with self._lua_composition_claim_lock:
+            if self._lua_composition_engine is not engine:
+                raise ValueError("DebugSession composition is not claimed by this MemscopeLuaEngine")
+
+            attach_collisions = set(attach_callbacks).intersection(self._on_attach_callbacks)
+            detach_collisions = set(detach_callbacks).intersection(self._on_detach_callbacks)
+            if attach_collisions:
+                name = min(attach_collisions)
+                raise ValueError(f"Attach lifecycle callback '{name}' is already registered")
+            if detach_collisions:
+                name = min(detach_collisions)
+                raise ValueError(f"Detach lifecycle callback '{name}' is already registered")
+
+            attach_candidate = dict(self._on_attach_callbacks)
+            detach_candidate = dict(self._on_detach_callbacks)
+            attach_candidate.update(
+                {
+                    name: _GuardedCompositionCallback(engine, self, callback)
+                    for name, callback in attach_callbacks.items()
+                }
+            )
+            detach_candidate.update(
+                {
+                    name: _GuardedCompositionCallback(engine, self, callback)
+                    for name, callback in detach_callbacks.items()
+                }
+            )
+            self._commit_lua_composition_callback_batch(attach_candidate, detach_candidate)
+            self._lua_attach_callback_names.update(attach_callbacks)
+            self._lua_detach_callback_names.update(detach_callbacks)
+
+    def _commit_lua_composition_callback_batch(
+        self,
+        attach_candidate: dict[str, Callable],
+        detach_candidate: dict[str, Callable],
+    ) -> None:
+        """Install both copy-on-write callback candidates as one private batch."""
+
+        self._on_attach_callbacks = attach_candidate
+        self._on_detach_callbacks = detach_candidate
+
+    def register_on_attach(self, name: str, callback: Callable[["DebugSession"], None]) -> None:
+        """Register a callback invoked after successful process attach."""
+
+        with self._lua_composition_claim_lock:
+            owner = self._lua_composition_engine
+            if owner is not None and not owner._allows_session_callback_registration(self):
+                raise RuntimeError("Lifecycle callback registration is closed during failed or provisional composition")
+            if name in self._lua_attach_callback_names:
+                raise RuntimeError(f"Composition attach callback '{name}' cannot be replaced")
+            candidate = dict(self._on_attach_callbacks)
+            candidate[name] = callback
+            self._on_attach_callbacks = candidate
 
     def register_on_detach(self, name: str, callback: Callable[["DebugSession", bool], None]) -> None:
-        """Register a callback invoked before process handle is closed.
+        """Register a callback invoked before process handle is closed."""
 
-        Args:
-            name: Unique identifier.
-            callback: Called with (session, process_alive) before teardown.
-        """
-        self._on_detach_callbacks[name] = callback
+        with self._lua_composition_claim_lock:
+            owner = self._lua_composition_engine
+            if owner is not None and not owner._allows_session_callback_registration(self):
+                raise RuntimeError("Lifecycle callback registration is closed during failed or provisional composition")
+            if name in self._lua_detach_callback_names:
+                raise RuntimeError(f"Composition detach callback '{name}' cannot be replaced")
+            candidate = dict(self._on_detach_callbacks)
+            candidate[name] = callback
+            self._on_detach_callbacks = candidate
 
     def _fire_attach(self) -> None:
-        """Fire all attach callbacks. Failures are logged and isolated.
+        """Fire a stable attach-callback snapshot with failures isolated."""
 
-        Catches BaseException (not just Exception) so that KeyboardInterrupt
-        during one callback doesn't skip remaining callbacks.
-        """
-        for name, cb in self._on_attach_callbacks.items():
+        with self._lua_composition_claim_lock:
+            callbacks = tuple(self._on_attach_callbacks.items())
+        for name, callback in callbacks:
             try:
-                cb(self)
-            except BaseException as e:
-                logger.warning(f"Attach callback '{name}' failed: {type(e).__name__}: {e}")
+                callback(self)
+            except BaseException as exc:
+                logger.warning("Attach callback '%s' failed: %s: %s", name, type(exc).__name__, exc)
 
     def _fire_detach(self, process_alive: bool) -> None:
-        """Fire all detach callbacks. Failures are logged and isolated.
+        """Fire a stable detach-callback snapshot with failures isolated."""
 
-        Catches BaseException (not just Exception) so that KeyboardInterrupt
-        during one callback doesn't skip remaining callbacks. This is critical
-        for cleanup: all callbacks must run to restore hooks and free memory.
-        """
-        for name, cb in self._on_detach_callbacks.items():
+        with self._lua_composition_claim_lock:
+            callbacks = tuple(self._on_detach_callbacks.items())
+        for name, callback in callbacks:
             try:
-                cb(self, process_alive)
-            except BaseException as e:
-                logger.warning(f"Detach callback '{name}' failed: {type(e).__name__}: {e}")
+                callback(self, process_alive)
+            except BaseException as exc:
+                logger.warning("Detach callback '%s' failed: %s: %s", name, type(exc).__name__, exc)
 
     # ========== Process Switching ==========
 

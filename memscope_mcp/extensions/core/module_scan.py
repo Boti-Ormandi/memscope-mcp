@@ -65,16 +65,34 @@ Standard reverse-engineering semantics: add offset, dereference, repeat.
             "getAddress": self._get_address,
             "getModuleBase": self._get_module_base,
             "getModuleSize": self._get_module_size,
-            "getModules": lambda filt=None: get_modules(self._table, filt),
-            "getModuleFromAddress": lambda addr: get_module_from_address(self._table, addr, self._log_error),
-            "formatAddress": lambda addr: lua_format_address(addr, self._log_error),
+            "getModules": lambda filt=None: get_modules(
+                self._table,
+                filt,
+                session=self._session,
+            ),
+            "getModuleFromAddress": lambda addr: get_module_from_address(
+                self._table,
+                addr,
+                self._log_error,
+                session=self._session,
+            ),
+            "formatAddress": lambda addr: lua_format_address(
+                addr,
+                self._log_error,
+                session=self._session,
+            ),
             # Scanning
             "AOBScan": self._scan_adapter.aob_scan,
             "AOBScanMany": self._scan_adapter.aob_scan_many,
             "scanString": self._scan_adapter.string_scan,
             "scanPointer": self._scan_adapter.pointer_scan,
             # PE export resolution
-            "resolveExport": lambda mod, fn: resolve_export_lua(mod, fn, self._log_error),
+            "resolveExport": lambda mod, fn: resolve_export_lua(
+                mod,
+                fn,
+                self._log_error,
+                session=self._session,
+            ),
             # Pointer chain
             "readPointerChain": self._read_pointer_chain,
         }
@@ -82,7 +100,7 @@ Standard reverse-engineering semantics: add offset, dereference, repeat.
     def _get_address(self, expr: str) -> Optional[int]:
         """Parse address expression like 'module.dll+0x1A208D8'."""
         try:
-            return parse_address(expr)
+            return parse_address(expr, session=self._session)
         except Exception:
             return None
 
@@ -103,7 +121,7 @@ Standard reverse-engineering semantics: add offset, dereference, repeat.
     def _read_pointer_chain(self, base, *offsets):
         """Follow pointer chain: [[base + off1] + off2] + off3..."""
         try:
-            current = parse_address(base) if isinstance(base, str) else int(base)
+            current = parse_address(base, session=self._session) if isinstance(base, str) else int(base)
             for offset in offsets:
                 read_addr = current + parse_offset(offset)
                 ptr = self._session.read_ptr(read_addr)

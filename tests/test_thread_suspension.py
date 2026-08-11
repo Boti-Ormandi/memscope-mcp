@@ -4,6 +4,8 @@ Covers _safe_patch() logic, install/remove routing (14-byte vs 5-byte),
 HookInfo fields, and backward compatibility of shellcode builder return type.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from memscope_mcp.session import SuspendedThread
@@ -32,11 +34,12 @@ def make_thread(tid: int, handle: int) -> SuspendedThread:
 
 
 class TestSafePatch:
-    """Test HookManager._safe_patch() logic with mocked SESSION methods."""
+    """Test HookManager._safe_patch() logic with an injected fake session."""
 
     @pytest.fixture(autouse=True)
-    def setup(self, monkeypatch):
-        self.mgr = HookManager()
+    def setup(self):
+        self.session = MagicMock()
+        self.mgr = HookManager(self.session)
         self.suspended_threads: list[SuspendedThread] = []
         self.rip_map: dict[int, int] = {}  # handle -> rip
         self.set_rip_calls: list[tuple[int, int]] = []
@@ -64,12 +67,12 @@ class TestSafePatch:
             self.protect_calls.append((addr, size, prot))
             return OLD_PROT
 
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.suspend_process_threads", mock_suspend)
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.resume_process_threads", mock_resume)
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.get_thread_rip", mock_get_rip)
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.set_thread_rip", mock_set_rip)
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.write_bytes", mock_write)
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.virtual_protect", mock_protect)
+        self.session.suspend_process_threads.side_effect = mock_suspend
+        self.session.resume_process_threads.side_effect = mock_resume
+        self.session.get_thread_rip.side_effect = mock_get_rip
+        self.session.set_thread_rip.side_effect = mock_set_rip
+        self.session.write_bytes.side_effect = mock_write
+        self.session.virtual_protect.side_effect = mock_protect
 
     def test_no_threads_in_zone(self):
         """Threads outside danger zone are not adjusted."""
@@ -127,16 +130,9 @@ class TestSafePatch:
         def failing_write(addr, data):
             raise OSError("WriteProcessMemory failed")
 
-        # Override write_bytes to fail
-        import memscope_mcp.tools.hooking as hooking_mod
-
-        original_write = hooking_mod.SESSION.write_bytes
-        hooking_mod.SESSION.write_bytes = failing_write
-        try:
-            with pytest.raises(OSError, match="WriteProcessMemory"):
-                self.mgr._safe_patch(TARGET_ADDR, b"\x90" * 15, 15, STUB_ADDR)
-        finally:
-            hooking_mod.SESSION.write_bytes = original_write
+        self.session.write_bytes.side_effect = failing_write
+        with pytest.raises(OSError, match="WriteProcessMemory"):
+            self.mgr._safe_patch(TARGET_ADDR, b"\x90" * 15, 15, STUB_ADDR)
 
         # Threads were resumed despite the error
         assert hasattr(self, "resumed_threads")
@@ -225,7 +221,8 @@ class TestInstallRemoveRouting:
 
     @pytest.fixture(autouse=True)
     def setup(self, monkeypatch):
-        self.mgr = HookManager()
+        self.session = MagicMock()
+        self.mgr = HookManager(self.session)
         self.safe_patch_calls: list[tuple] = []
         self.direct_write_calls: list[tuple] = []
         self.direct_protect_calls: list[tuple] = []
@@ -237,7 +234,7 @@ class TestInstallRemoveRouting:
 
         monkeypatch.setattr(HookManager, "_safe_patch", tracking_safe_patch)
 
-        # Mock SESSION methods
+        # Configure injected session methods
         self.memory = bytearray(65536)
 
         def mock_read_bytes(addr, size):
@@ -258,11 +255,11 @@ class TestInstallRemoveRouting:
         def mock_allocate(size, executable=False):
             return 0x50000000
 
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.read_bytes", mock_read_bytes)
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.write_bytes", mock_write_bytes)
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.virtual_protect", mock_virtual_protect)
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate", mock_allocate)
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.free", lambda addr: True)
+        self.session.read_bytes.side_effect = mock_read_bytes
+        self.session.write_bytes.side_effect = mock_write_bytes
+        self.session.virtual_protect.side_effect = mock_virtual_protect
+        self.session.allocate.side_effect = mock_allocate
+        self.session.free.side_effect = lambda addr: True
 
         # Set up ring buffer
         from memscope_mcp.tools.hooking import RingBufferConfig
@@ -275,18 +272,18 @@ class TestInstallRemoveRouting:
             total_size=0x100 + 16 * (256 + 0x50),
         )
 
-    def test_install_14byte_uses_safe_patch(self, monkeypatch):
+    def test_install_14byte_uses_safe_patch(self):
         """When near alloc fails (jmp_size=14), _safe_patch is used."""
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
+        self.session.allocate_near.side_effect = lambda *a, **kw: None
 
         result = self.mgr.install_hook(TARGET_ADDR, "test_hook")
         assert result["jmp_size"] == 14
         assert len(self.safe_patch_calls) == 1
         assert self.safe_patch_calls[0][0] == TARGET_ADDR  # target_addr
 
-    def test_install_5byte_uses_direct_write(self, monkeypatch):
+    def test_install_5byte_uses_direct_write(self):
         """When near alloc succeeds (jmp_size=5), direct write is used."""
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
+        self.session.allocate_near.side_effect = lambda *a, **kw: 0x7FF600010000
 
         result = self.mgr.install_hook(TARGET_ADDR, "test_hook")
         assert result["jmp_size"] == 5
@@ -294,9 +291,9 @@ class TestInstallRemoveRouting:
         # Direct write should have happened (trampoline write + jmp patch)
         assert len(self.direct_write_calls) >= 2  # trampoline + jmp
 
-    def test_remove_14byte_uses_safe_patch(self, monkeypatch):
+    def test_remove_14byte_uses_safe_patch(self):
         """Hook installed with jmp_size=14: remove_hook uses _safe_patch."""
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
+        self.session.allocate_near.side_effect = lambda *a, **kw: None
 
         self.mgr.install_hook(TARGET_ADDR, "test_hook")
         self.safe_patch_calls.clear()
@@ -305,9 +302,9 @@ class TestInstallRemoveRouting:
         assert len(self.safe_patch_calls) == 1
         assert self.safe_patch_calls[0][0] == TARGET_ADDR
 
-    def test_remove_5byte_uses_direct_write(self, monkeypatch):
+    def test_remove_5byte_uses_direct_write(self):
         """Hook installed with jmp_size=5: remove_hook uses direct write."""
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
+        self.session.allocate_near.side_effect = lambda *a, **kw: 0x7FF600010000
 
         self.mgr.install_hook(TARGET_ADDR, "test_hook")
         self.safe_patch_calls.clear()
@@ -319,25 +316,25 @@ class TestInstallRemoveRouting:
         # Direct write: protect + write + protect
         assert any(prot == PAGE_EXECUTE_READWRITE for _, _, prot in self.direct_protect_calls)
 
-    def test_hook_info_stores_jmp_size_14(self, monkeypatch):
+    def test_hook_info_stores_jmp_size_14(self):
         """HookInfo.jmp_size is 14 when near allocation fails."""
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: None)
+        self.session.allocate_near.side_effect = lambda *a, **kw: None
 
         self.mgr.install_hook(TARGET_ADDR, "test_hook")
         hook = self.mgr.hooks[TARGET_ADDR]
         assert hook.jmp_size == 14
 
-    def test_hook_info_stores_jmp_size_5(self, monkeypatch):
+    def test_hook_info_stores_jmp_size_5(self):
         """HookInfo.jmp_size is 5 when near allocation succeeds."""
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
+        self.session.allocate_near.side_effect = lambda *a, **kw: 0x7FF600010000
 
         self.mgr.install_hook(TARGET_ADDR, "test_hook")
         hook = self.mgr.hooks[TARGET_ADDR]
         assert hook.jmp_size == 5
 
-    def test_hook_info_stores_stub_offset(self, monkeypatch):
+    def test_hook_info_stores_stub_offset(self):
         """HookInfo.stub_offset > 0 and matches shellcode builder output."""
-        monkeypatch.setattr("memscope_mcp.tools.hooking.SESSION.allocate_near", lambda *a, **kw: 0x7FF600010000)
+        self.session.allocate_near.side_effect = lambda *a, **kw: 0x7FF600010000
 
         self.mgr.install_hook(TARGET_ADDR, "test_hook")
         hook = self.mgr.hooks[TARGET_ADDR]

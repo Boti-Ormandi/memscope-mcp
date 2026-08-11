@@ -12,7 +12,6 @@ from typing import Callable, Optional
 
 from memscope_mcp.extensions.base import ExtensionContext
 from memscope_mcp.plugins import PluginBase
-from memscope_mcp.session import SESSION
 from memscope_mcp.utils.memory_utils import is_valid_pointer
 
 
@@ -103,6 +102,7 @@ as they change between Unity/IL2CPP versions.
 
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
         self.table = ctx.table_factory
+        self._session = ctx.session
         return {
             "readUnityString": self._read_string,
             "readIL2CppString": self._read_string,
@@ -124,10 +124,10 @@ as they change between Unity/IL2CPP versions.
         """Read IL2CPP string (UTF-16 at addr+0x14, length at +0x10)."""
         try:
             addr = int(address)
-            length = SESSION.read_int32(addr + 0x10)
+            length = self._session.read_int32(addr + 0x10)
             if length <= 0 or length > 4096:
                 return ""
-            raw = SESSION.read_bytes(addr + 0x14, length * 2)
+            raw = self._session.read_bytes(addr + 0x14, length * 2)
             return raw.decode("utf-16-le", errors="replace")
         except:
             return None
@@ -139,7 +139,7 @@ as they change between Unity/IL2CPP versions.
     def _read_list_count(self, address) -> Optional[int]:
         """Read IL2CPP List<T> count (at +0x18)."""
         try:
-            return SESSION.read_int32(int(address) + 0x18)
+            return self._session.read_int32(int(address) + 0x18)
         except:
             return None
 
@@ -147,11 +147,11 @@ as they change between Unity/IL2CPP versions.
         """Read pointer element from IL2CPP List<T>."""
         try:
             addr = int(address)
-            items_ptr = SESSION.read_ptr(addr + 0x10)
+            items_ptr = self._session.read_ptr(addr + 0x10)
             if not is_valid_pointer(items_ptr):
                 return None
             elem_addr = items_ptr + 0x20 + (int(index) * 8)
-            return SESSION.read_ptr(elem_addr)
+            return self._session.read_ptr(elem_addr)
         except:
             return None
 
@@ -159,8 +159,8 @@ as they change between Unity/IL2CPP versions.
         """Read IL2CPP List<T>. Layout: +0x10 = items ptr, +0x18 = count."""
         try:
             addr = int(address)
-            items_ptr = SESSION.read_ptr(addr + 0x10)
-            count = SESSION.read_int32(addr + 0x18)
+            items_ptr = self._session.read_ptr(addr + 0x10)
+            count = self._session.read_int32(addr + 0x18)
 
             if not is_valid_pointer(items_ptr) or count is None or count < 0:
                 return None
@@ -170,7 +170,7 @@ as they change between Unity/IL2CPP versions.
             read_count = min(count, limit)
 
             for i in range(read_count):
-                val = SESSION.read_ptr(data_start + (i * 8))
+                val = self._session.read_ptr(data_start + (i * 8))
                 items.append(val)
 
             result = self.table()
@@ -188,7 +188,7 @@ as they change between Unity/IL2CPP versions.
         """Read IL2CPP array. Layout: +0x18 = length (int32), +0x20 = data start."""
         try:
             addr = int(address)
-            length = SESSION.read_int32(addr + 0x18)
+            length = self._session.read_int32(addr + 0x18)
             if length is None or length < 0:
                 return None
 
@@ -205,16 +205,16 @@ as they change between Unity/IL2CPP versions.
             for i in range(count):
                 elem_addr = data_start + (i * elem_size)
                 if element_type in ("ptr", "pointer"):
-                    val = SESSION.read_ptr(elem_addr)
+                    val = self._session.read_ptr(elem_addr)
                 elif element_type == "int32":
-                    val = SESSION.read_int32(elem_addr)
+                    val = self._session.read_int32(elem_addr)
                 elif element_type == "float":
-                    val = SESSION.read_float(elem_addr)
+                    val = self._session.read_float(elem_addr)
                 elif element_type == "byte":
-                    data = SESSION.read_bytes(elem_addr, 1)
+                    data = self._session.read_bytes(elem_addr, 1)
                     val = data[0] if data else None
                 else:
-                    val = SESSION.read_ptr(elem_addr)
+                    val = self._session.read_ptr(elem_addr)
                 elements.append(val)
 
             result = self.table()
@@ -231,7 +231,7 @@ as they change between Unity/IL2CPP versions.
     def _read_dict_count(self, address) -> Optional[int]:
         """Read IL2CPP Dictionary count (at +0x20)."""
         try:
-            return SESSION.read_int32(int(address) + 0x20)
+            return self._session.read_int32(int(address) + 0x20)
         except:
             return None
 
@@ -239,8 +239,8 @@ as they change between Unity/IL2CPP versions.
         """Read IL2CPP Dictionary. Layout: +0x18 = entries, +0x20 = count."""
         try:
             addr = int(address)
-            entries_ptr = SESSION.read_ptr(addr + 0x18)
-            count = SESSION.read_int32(addr + 0x20)
+            entries_ptr = self._session.read_ptr(addr + 0x18)
+            count = self._session.read_int32(addr + 0x20)
 
             if not is_valid_pointer(entries_ptr) or count is None or count < 0:
                 return None
@@ -256,7 +256,7 @@ as they change between Unity/IL2CPP versions.
                     break
 
                 entry_addr = data_start + (i * entry_size)
-                hash_code = SESSION.read_int32(entry_addr)
+                hash_code = self._session.read_int32(entry_addr)
 
                 if hash_code is None or hash_code < 0:
                     continue
@@ -283,11 +283,11 @@ as they change between Unity/IL2CPP versions.
     def _read_typed_value(self, addr: int, type_name: str):
         """Read a value based on type name."""
         if type_name == "int32":
-            return SESSION.read_int32(addr)
+            return self._session.read_int32(addr)
         elif type_name == "float":
-            return SESSION.read_float(addr)
+            return self._session.read_float(addr)
         elif type_name == "string":
-            ptr = SESSION.read_ptr(addr)
+            ptr = self._session.read_ptr(addr)
             return self._read_string(ptr) if is_valid_pointer(ptr) else None
         else:
-            return SESSION.read_ptr(addr)
+            return self._session.read_ptr(addr)

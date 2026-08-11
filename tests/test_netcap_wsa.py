@@ -8,7 +8,7 @@ import struct
 import time
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 from memscope_mcp._contrib.plugins.netcap import NetcapPlugin
 
@@ -31,12 +31,21 @@ class MockContext:
     lua: Any = None
     table_factory: Any = None
     log_error: Any = None
+    hook_manager: Any = None
 
 
 def make_plugin() -> NetcapPlugin:
     """Create a NetcapPlugin and register it with a mock context."""
+    session = MagicMock()
+    hook_manager = MagicMock()
+    hook_manager.session = session
     plugin = NetcapPlugin()
-    ctx = MockContext(table_factory=make_table, log_error=lambda *a: None)
+    ctx = MockContext(
+        session=session,
+        table_factory=make_table,
+        log_error=lambda *a: None,
+        hook_manager=hook_manager,
+    )
     plugin.register(ctx)
     return plugin
 
@@ -62,7 +71,7 @@ def make_entry(
     sequence=1,
     timestamp=12345,
 ):
-    """Build a ring buffer entry dict as returned by HOOK_MANAGER.read_ring_buffer()."""
+    """Build a ring buffer entry dict as returned by the injected hook manager.read_ring_buffer()."""
     captured = len(data) if data else 0
     entry = {
         "sequence": sequence,
@@ -134,10 +143,10 @@ class TestWsaSendSync:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
-    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
-    def test_sync_send(self, mock_hm, mock_session):
+    def test_sync_send(self):
         """Sync WSASend: result=0, reads buffer, produces send packet."""
+        mock_hm = self.plugin._hook_manager
+        mock_session = self.plugin._session
         entry = make_entry(
             hook_id=1,
             hook_name="WSASend",
@@ -152,6 +161,8 @@ class TestWsaSendSync:
 
         packets = self.plugin._read_packets(10)
 
+        assert self.plugin._hook_manager.session is mock_session
+        mock_session.read_bytes.assert_called_once_with(0xDEAD, 1024)
         assert len([k for k in packets if isinstance(k, int)]) == 1
         pkt = packets[1]
         assert pkt["direction"] == "send"
@@ -173,10 +184,10 @@ class TestWsaRecvSync:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
-    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
-    def test_sync_recv(self, mock_hm, mock_session):
+    def test_sync_recv(self):
         """Sync WSARecv: result=0, reads buffer, produces recv packet."""
+        mock_hm = self.plugin._hook_manager
+        mock_session = self.plugin._session
         entry = make_entry(
             hook_id=2,
             hook_name="WSARecv",
@@ -212,10 +223,10 @@ class TestWsaRecvAsync:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
-    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
-    def test_async_pending_then_complete(self, mock_hm, mock_session):
+    def test_async_pending_then_complete(self):
         """Async WSARecv: step 1 stores pending, step 2 GQCS completes it."""
+        mock_hm = self.plugin._hook_manager
+        mock_session = self.plugin._session
         # Step 1: WSARecv returns SOCKET_ERROR (-1) -> async pending
         wsabuf_data = make_wsabuf(4096, 0xCAFE)
         entry_recv = make_entry(
@@ -278,10 +289,9 @@ class TestGqcsUnmatched:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
-    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
-    def test_unmatched_gqcs(self, mock_hm, mock_session):
+    def test_unmatched_gqcs(self):
         """GQCS with no matching pending IO -> no packet emitted."""
+        mock_hm = self.plugin._hook_manager
         entry = make_entry(
             hook_id=3,
             hook_name="GetQueuedCompletionStatus",
@@ -312,10 +322,9 @@ class TestGqcsFailure:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
-    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
-    def test_failed_gqcs(self, mock_hm, mock_session):
+    def test_failed_gqcs(self):
         """GQCS with result=0 -> no packet emitted."""
+        mock_hm = self.plugin._hook_manager
         # Add a pending entry to verify it's NOT consumed
         self.plugin._pending_io[0xBEEF] = {
             "socket": 0x1A4,
@@ -357,10 +366,9 @@ class TestCorrelationTableEviction:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
-    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
-    def test_eviction(self, mock_hm, mock_session):
+    def test_eviction(self):
         """Fill _pending_io beyond _max_pending_io -> oldest entry evicted."""
+        mock_hm = self.plugin._hook_manager
         limit = self.plugin._max_pending_io
 
         # Pre-fill with entries 0..limit-1
@@ -433,10 +441,7 @@ class TestIOCPCorrelationTTL:
             "created_at": time.monotonic(),
         }
 
-        monkeypatch.setattr(
-            "memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
-            lambda limit: [],
-        )
+        monkeypatch.setattr(self.plugin._hook_manager, "read_ring_buffer", lambda limit: [])
 
         self.plugin._read_packets(10)
 
@@ -455,10 +460,7 @@ class TestIOCPCorrelationTTL:
             "created_at": time.monotonic(),
         }
 
-        monkeypatch.setattr(
-            "memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
-            lambda limit: [],
-        )
+        monkeypatch.setattr(self.plugin._hook_manager, "read_ring_buffer", lambda limit: [])
 
         self.plugin._read_packets(10)
         assert 0x1111 in self.plugin._pending_io
@@ -466,10 +468,7 @@ class TestIOCPCorrelationTTL:
     def test_empty_pending_io_no_error(self, monkeypatch):
         """Empty pending_io should not cause errors during eviction."""
         self.plugin._pending_io = {}
-        monkeypatch.setattr(
-            "memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER.read_ring_buffer",
-            lambda limit: [],
-        )
+        monkeypatch.setattr(self.plugin._hook_manager, "read_ring_buffer", lambda limit: [])
 
         self.plugin._read_packets(10)
 
@@ -487,10 +486,10 @@ class TestServerSideReadFailure:
         self.plugin._max_packet_size = 4096
         self.plugin._header_only = False
 
-    @patch("memscope_mcp._contrib.plugins.netcap.SESSION")
-    @patch("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER")
-    def test_read_failure(self, mock_hm, mock_session):
+    def test_read_failure(self):
         """SESSION.read_bytes raises -> packet emitted with captured=0, no data."""
+        mock_hm = self.plugin._hook_manager
+        mock_session = self.plugin._session
         entry = make_entry(
             hook_id=1,
             hook_name="WSASend",

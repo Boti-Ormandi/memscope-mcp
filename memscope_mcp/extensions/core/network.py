@@ -29,4 +29,10 @@ Calls getpeername/getsockname in the target process.
 """.strip()
 
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
-        return build_network_functions(ctx.table_factory, ctx.log_error, ctx.engine._output)
+        self._session = ctx.session
+        return build_network_functions(
+            ctx.table_factory,
+            ctx.log_error,
+            ctx.engine._output,
+            session=self._session,
+        )

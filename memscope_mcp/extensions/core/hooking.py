@@ -3,7 +3,6 @@
 from typing import Callable
 
 from ...extensions.base import ExtensionContext, LuaExtension
-from ...tools.hooking import HOOK_MANAGER
 from ...tools.lua.hooking import build_hooking_functions
 
 
@@ -109,7 +108,20 @@ destroyRingBuffer()                  -- free ring buffer (all hooks must be remo
 """.strip()
 
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
-        return build_hooking_functions(ctx.table_factory, ctx.log_error, ctx.engine._output)
+        self._session = ctx.session
+        self._hook_manager = ctx.hook_manager
+        if self._hook_manager is None:
+            raise RuntimeError("HookingExtension requires a HookManager")
+        if self._hook_manager.session is not self._session:
+            raise ValueError("HookManager/session ownership mismatch")
+
+        return build_hooking_functions(
+            ctx.table_factory,
+            ctx.log_error,
+            ctx.engine._output,
+            session=self._session,
+            hook_manager=self._hook_manager,
+        )
 
     def on_process_detaching(self, session, process_alive: bool) -> None:
-        HOOK_MANAGER.cleanup(process_alive=process_alive)
+        self._hook_manager.cleanup(process_alive=process_alive)

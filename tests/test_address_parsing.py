@@ -2,7 +2,22 @@
 
 import pytest
 
+from memscope_mcp.utils import memory_utils
 from memscope_mcp.utils.memory_utils import parse_address
+
+
+class _ModuleLookupSession:
+    def __init__(self, module_name: str, base: int):
+        self._module_name = module_name
+        self._base = base
+
+    def get_module_base(self, name: str) -> int | None:
+        return self._base if name == self._module_name else None
+
+
+class _UnexpectedModuleLookupSession:
+    def get_module_base(self, name: str) -> int | None:
+        raise AssertionError(f"global session unexpectedly consulted for {name}")
 
 
 class TestParseAddressInt:
@@ -60,6 +75,18 @@ class TestParseAddressModuleOffset:
         # With no process attached, module lookup should fail
         with pytest.raises(ValueError, match="Module not found"):
             parse_address("missing.dll+0x1000")
+
+    def test_explicit_session_wins_for_module_expression(self, monkeypatch):
+        injected = _ModuleLookupSession("custom.dll", 0x500000)
+        monkeypatch.setattr(memory_utils, "SESSION", _UnexpectedModuleLookupSession())
+
+        assert parse_address("custom.dll+0x20", session=injected) == 0x500020
+
+    def test_no_session_uses_global_compatibility_fallback(self, monkeypatch):
+        fallback = _ModuleLookupSession("legacy.dll", 0x600000)
+        monkeypatch.setattr(memory_utils, "SESSION", fallback)
+
+        assert parse_address("legacy.dll+0x20") == 0x600020
 
 
 class TestParseAddressErrors:

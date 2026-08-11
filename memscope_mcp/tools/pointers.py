@@ -12,7 +12,9 @@ from ..utils.memory_utils import (
 )
 
 
-def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str = "uint64") -> dict[str, Any]:
+def resolve_pointer_chain(
+    base: str, offsets: list[int | str], read_final: str = "uint64", *, session=None
+) -> dict[str, Any]:
     """Follow a pointer chain: [[base+off0]+off1]+off2...
 
     Standard RE semantics: add offset first, then dereference.
@@ -40,11 +42,12 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
     # Normalize offsets (accept hex strings like "0x148")
     offsets = [parse_offset(o) for o in offsets]
 
-    if not SESSION.ensure_attached():
+    active_session = SESSION if session is None else session
+    if not active_session.ensure_attached():
         return {"success": False, "error": "PROCESS_NOT_ATTACHED", "detail": "Call attach_process first"}
 
     try:
-        current_addr = parse_address(base)
+        current_addr = parse_address(base, session=active_session)
     except ValueError as e:
         return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
@@ -57,7 +60,7 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
         read_addr = current + offset  # Add offset FIRST
 
         try:
-            ptr_value = SESSION.read_ptr(read_addr)  # THEN read
+            ptr_value = active_session.read_ptr(read_addr)  # THEN read
         except Exception as e:
             chain.append(
                 {
@@ -69,7 +72,7 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
             )
             return {
                 "success": False,
-                "base": format_address(parse_address(base)),
+                "base": format_address(parse_address(base, session=active_session)),
                 "offsets": offsets,
                 "chain": chain,
                 "final_address": None,
@@ -95,7 +98,7 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
         if not is_last_step and not is_valid_pointer(ptr_value):
             return {
                 "success": False,
-                "base": format_address(parse_address(base)),
+                "base": format_address(parse_address(base, session=active_session)),
                 "offsets": offsets,
                 "chain": chain,
                 "final_address": None,
@@ -114,13 +117,13 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
             final_value = format_address(current)
         else:
             # Re-read with specified format
-            final_value = read_with_format(final_read_addr, 8, read_final)
+            final_value = read_with_format(final_read_addr, 8, read_final, session=active_session)
             if isinstance(final_value, bytes):
                 final_value = " ".join(f"{b:02X}" for b in final_value)
 
         return {
             "success": True,
-            "base": format_address(parse_address(base)),
+            "base": format_address(parse_address(base, session=active_session)),
             "offsets": offsets,
             "chain": chain,
             "final_address": format_address(final_read_addr),
@@ -132,7 +135,7 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
     except Exception as e:
         return {
             "success": False,
-            "base": format_address(parse_address(base)),
+            "base": format_address(parse_address(base, session=active_session)),
             "offsets": offsets,
             "chain": chain,
             "final_address": format_address(final_read_addr),
@@ -143,7 +146,7 @@ def resolve_pointer_chain(base: str, offsets: list[int | str], read_final: str =
         }
 
 
-def read_pointer(address: str) -> dict[str, Any]:
+def read_pointer(address: str, *, session=None) -> dict[str, Any]:
     """Read a single pointer and return info about what it points to.
 
     Args:
@@ -157,16 +160,17 @@ def read_pointer(address: str) -> dict[str, Any]:
             "target_info": {...}
         }
     """
-    if not SESSION.ensure_attached():
+    active_session = SESSION if session is None else session
+    if not active_session.ensure_attached():
         return {"success": False, "error": "PROCESS_NOT_ATTACHED", "detail": "Call attach_process first"}
 
     try:
-        addr = parse_address(address)
+        addr = parse_address(address, session=active_session)
     except ValueError as e:
         return {"success": False, "error": "INVALID_ADDRESS", "detail": str(e)}
 
     try:
-        ptr_value = SESSION.read_ptr(addr)
+        ptr_value = active_session.read_ptr(addr)
         is_valid = is_valid_pointer(ptr_value)
 
         result = {
@@ -180,7 +184,7 @@ def read_pointer(address: str) -> dict[str, Any]:
             # Try to get more info about target
             from .memory import smart_dump
 
-            target_info = smart_dump(format_address(ptr_value), size=0x40, max_entries=8)
+            target_info = smart_dump(format_address(ptr_value), size=0x40, max_entries=8, session=active_session)
             if target_info.get("success"):
                 result["target_preview"] = target_info.get("entries", [])[:4]
 

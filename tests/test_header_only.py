@@ -1,6 +1,6 @@
 """Tests for header-only mode in the netcap plugin.
 
-All tests use mocks for HOOK_MANAGER. No process attachment required.
+All tests use mocks for the injected hook manager. No process attachment required.
 """
 
 from dataclasses import dataclass
@@ -28,12 +28,21 @@ class MockContext:
     lua: Any = None
     table_factory: Any = None
     log_error: Any = None
+    hook_manager: Any = None
 
 
 def make_plugin() -> NetcapPlugin:
     """Create a NetcapPlugin and register it with a mock context."""
+    session = MagicMock()
+    hook_manager = MagicMock()
+    hook_manager.session = session
     plugin = NetcapPlugin()
-    ctx = MockContext(table_factory=make_table, log_error=lambda *a: None)
+    ctx = MockContext(
+        session=session,
+        table_factory=make_table,
+        log_error=lambda *a: None,
+        hook_manager=hook_manager,
+    )
     plugin.register(ctx)
     return plugin
 
@@ -51,7 +60,7 @@ def make_entry(
     sequence=1,
     timestamp=12345,
 ):
-    """Build a ring buffer entry dict as returned by HOOK_MANAGER.read_ring_buffer()."""
+    """Build a ring buffer entry dict as returned by the injected hook manager.read_ring_buffer()."""
     captured = len(data) if data else 0
     entry = {
         "sequence": sequence,
@@ -128,7 +137,7 @@ class TestHeaderOnlyPackets:
         self.plugin._header_only = True
         self.plugin._max_packet_size = 4096
 
-    def test_packets_have_no_data(self, monkeypatch):
+    def test_packets_have_no_data(self):
         """Header-only packets have no data, data_hex, or data_ascii keys."""
         entry = make_entry(
             hook_id=1,
@@ -142,9 +151,8 @@ class TestHeaderOnlyPackets:
         entry["data_length"] = 0
         entry["captured_length"] = 0
 
-        mock_hm = MagicMock()
+        mock_hm = self.plugin._hook_manager
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]
@@ -153,7 +161,7 @@ class TestHeaderOnlyPackets:
         assert "data_hex" not in p
         assert "data_ascii" not in p
 
-    def test_packets_have_inferred_size(self, monkeypatch):
+    def test_packets_have_inferred_size(self):
         """Header-only packets infer size from args. send length_arg=3 -> arg2."""
         entry = make_entry(
             hook_id=1,
@@ -166,9 +174,8 @@ class TestHeaderOnlyPackets:
         entry["data_length"] = 0
         entry["captured_length"] = 0
 
-        mock_hm = MagicMock()
+        mock_hm = self.plugin._hook_manager
         mock_hm.read_ring_buffer.return_value = [entry]
-        monkeypatch.setattr("memscope_mcp._contrib.plugins.netcap.HOOK_MANAGER", mock_hm)
 
         packets = self.plugin._read_packets(100)
         p = packets[1]

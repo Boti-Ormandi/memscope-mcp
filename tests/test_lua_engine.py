@@ -3,6 +3,8 @@
 import threading
 import time
 
+import pytest
+
 from memscope_mcp.tools.lua.code_execution import parse_lua_arg
 from memscope_mcp.tools.lua.engine import LUA_ENGINE, MemscopeLuaEngine
 
@@ -74,7 +76,7 @@ class TestLuaCodeExecution:
     def test_execute_code_guard_blocks_large_loop(self, monkeypatch):
         calls = []
 
-        def fake_execute_code(addr, args, timeout_ms=5000):
+        def fake_execute_code(addr, args, timeout_ms=5000, *, session):
             calls.append((addr, args, timeout_ms))
             return {"success": True, "result": "0x1"}
 
@@ -98,7 +100,7 @@ class TestLuaCodeExecution:
     def test_unsafe_execute_override_is_script_local(self, monkeypatch):
         calls = []
 
-        def fake_execute_code(addr, args, timeout_ms=5000):
+        def fake_execute_code(addr, args, timeout_ms=5000, *, session):
             calls.append((addr, args, timeout_ms))
             return {"success": True, "result": "0x1"}
 
@@ -126,7 +128,7 @@ class TestLuaCodeExecution:
         assert guarded["results"]["blocked"] == 1
 
     def test_call_sequence_results_returns_per_call_values(self, monkeypatch):
-        def fake_call_sequence(calls, timeout_ms=5000):
+        def fake_call_sequence(calls, timeout_ms=5000, *, session):
             assert timeout_ms == 1234
             assert calls == [
                 {"address": "0x1000", "args": []},
@@ -311,6 +313,17 @@ class TestLuaIsNilAndOrZero:
 
 
 class TestLuaExecutionOwnership:
+    def test_fresh_unbound_engine_supports_direct_registration_and_execution(self):
+        engine = MemscopeLuaEngine()
+
+        assert engine.bound_session is None
+        engine.register_functions("direct", {"directValue": lambda: 42})
+        result = engine.execute("return directValue()")
+
+        assert result["success"] is True
+        assert result["results"]["return"] == 42
+        assert engine.bound_session is None
+
     def test_mutable_runtime_is_serialized_across_threads(self):
         engine = MemscopeLuaEngine()
         first_entered = threading.Event()
@@ -368,3 +381,199 @@ class TestLuaExecutionOwnership:
         assert result[0]["error"] == "CANCELLED"
         assert engine.execution_interrupt is interrupt
         assert interrupt.deadline_ns is None
+
+    def test_same_thread_nested_execute_rejects_without_deadlock(self):
+        engine = MemscopeLuaEngine()
+        nested_errors = []
+        results = []
+
+        def nested_execute():
+            outer_token = engine._operation_token
+            try:
+                engine.execute("return 2")
+            except RuntimeError as exc:
+                nested_errors.append(str(exc))
+            assert engine._operation_token is outer_token
+            assert engine._operation_kind.name == "EXECUTE"
+            return 7
+
+        engine.register_functions("test", {"nestedExecute": nested_execute})
+        worker = threading.Thread(target=lambda: results.append(engine.execute("return nestedExecute()")))
+        worker.start()
+        worker.join(2)
+
+        assert not worker.is_alive()
+        assert nested_errors == ["Nested Lua engine execution is not allowed"]
+        assert results == [{"success": True, "results": {"return": 7}, "output": []}]
+        assert engine.execute("return 8")["results"]["return"] == 8
+        assert engine._operation_token is None
+        assert engine._operation_kind is None
+
+    def test_public_registration_rejects_during_blocked_execution(self):
+        engine = MemscopeLuaEngine()
+        entered = threading.Event()
+        release = threading.Event()
+        results = []
+
+        def block():
+            entered.set()
+            assert release.wait(3)
+
+        engine.register_functions("test", {"block": block})
+        worker = threading.Thread(target=lambda: results.append(engine.execute("block(); return 1")))
+        worker.start()
+        assert entered.wait(2)
+
+        with pytest.raises(RuntimeError, match="operation is active"):
+            engine.register_functions("foreign", {"foreignName": lambda: 2})
+
+        release.set()
+        worker.join(2)
+        assert not worker.is_alive()
+        assert results[0]["success"] is True
+        absence = engine.execute("return foreignName == nil")
+        assert absence["success"] is True
+        assert absence["results"]["return"] is True
+
+    def test_table_factory_rejects_foreign_thread_during_execution(self):
+        engine = MemscopeLuaEngine()
+        factory = engine.table_factory
+        entered = threading.Event()
+        release = threading.Event()
+        results = []
+
+        def block_and_make():
+            entered.set()
+            assert release.wait(3)
+            return factory(value=5)
+
+        engine.register_functions("test", {"blockAndMake": block_and_make})
+        worker = threading.Thread(target=lambda: results.append(engine.execute("return blockAndMake()")))
+        worker.start()
+        assert entered.wait(2)
+
+        with pytest.raises(RuntimeError, match="engine-owned operation"):
+            factory()
+
+        release.set()
+        worker.join(2)
+        assert not worker.is_alive()
+        assert results[0]["success"] is True
+        assert results[0]["results"]["return"] == {"value": 5}
+
+    @pytest.mark.parametrize(
+        "script",
+        [
+            "return function() return 1 end",
+            "return coroutine.create(function() return 1 end)",
+            "return io.stdout",
+            "return {nested = function() return 1 end}",
+        ],
+        ids=["function", "thread", "userdata", "nested-function"],
+    )
+    def test_executable_lua_handles_do_not_escape_results(self, script):
+        engine = MemscopeLuaEngine()
+
+        result = engine.execute(script)
+
+        assert result["success"] is False
+        assert result["error"] == "EXECUTION_ERROR"
+        assert "cannot leave the engine" in result["detail"]
+        assert not any(callable(value) for value in result.values())
+
+    def test_raw_lua_runtime_is_not_public(self):
+        engine = MemscopeLuaEngine()
+
+        assert not hasattr(engine, "lua")
+        with pytest.raises(RuntimeError, match="engine-owned operation"):
+            engine.table_factory()
+
+
+class TestPublicRegistrationFailureBoundaries:
+    def test_global_publication_failure_after_prior_name_quarantines(self):
+        engine = MemscopeLuaEngine()
+        runtime = engine._lua
+        lua_globals = runtime.globals()
+
+        class FailingGlobals:
+            def __setitem__(self, name, value):
+                if name == "secondIncoming":
+                    raise KeyboardInterrupt("global publication interrupted")
+                lua_globals[name] = value
+
+        class RuntimeProxy:
+            @staticmethod
+            def globals():
+                return FailingGlobals()
+
+        engine._lua = RuntimeProxy()
+
+        with pytest.raises(KeyboardInterrupt, match="global publication interrupted"):
+            engine.register_functions(
+                "partial",
+                {"firstIncoming": lambda: 1, "secondIncoming": lambda: 2},
+            )
+
+        assert lua_globals["firstIncoming"]() == 1
+        assert engine._operation_token is None
+        assert engine._operation_kind is None
+        with pytest.raises(RuntimeError, match="failed.*quarantined"):
+            engine.execute("return 1")
+        with pytest.raises(RuntimeError, match="failed.*quarantined"):
+            engine.register_functions("late", {"lateName": lambda: 3})
+
+    def test_registry_publication_failure_after_globals_quarantines(self):
+        engine = MemscopeLuaEngine()
+        lua_globals = engine._lua.globals()
+
+        class FailingRegistry(dict):
+            def __setitem__(self, name, owner):
+                if name == "secondIncoming":
+                    raise SystemExit("registry publication interrupted")
+                super().__setitem__(name, owner)
+
+        engine._function_registry = FailingRegistry()
+
+        with pytest.raises(SystemExit, match="registry publication interrupted"):
+            engine.register_functions(
+                "partial",
+                {"firstIncoming": lambda: 1, "secondIncoming": lambda: 2},
+            )
+
+        assert lua_globals["firstIncoming"]() == 1
+        assert lua_globals["secondIncoming"]() == 2
+        assert engine._function_registry == {"firstIncoming": "partial"}
+        assert engine._operation_token is None
+        assert engine._operation_kind is None
+        with pytest.raises(RuntimeError, match="failed.*quarantined"):
+            engine.execute("return 1")
+        with pytest.raises(RuntimeError, match="failed.*quarantined"):
+            engine.register_functions("late", {"lateName": lambda: 3})
+
+    def test_validation_failure_before_reservation_leaves_engine_usable(self):
+        engine = MemscopeLuaEngine()
+
+        with pytest.raises(TypeError, match="must be callable"):
+            engine.register_functions("invalid", {"badName": object()})
+
+        assert engine._operation_token is None
+        assert engine._operation_kind is None
+        engine.register_functions("valid", {"validName": lambda: 7})
+        assert engine.execute("return validName()")["results"]["return"] == 7
+
+    def test_interrupt_after_mapping_commit_does_not_quarantine(self, monkeypatch):
+        engine = MemscopeLuaEngine()
+        real_clear = engine._clear_operation_locked
+
+        def clear_then_interrupt():
+            real_clear()
+            raise KeyboardInterrupt("after mapping commit")
+
+        monkeypatch.setattr(engine, "_clear_operation_locked", clear_then_interrupt)
+        with pytest.raises(KeyboardInterrupt, match="after mapping commit"):
+            engine.register_functions("committed", {"committedName": lambda: 9})
+        monkeypatch.setattr(engine, "_clear_operation_locked", real_clear)
+
+        assert engine._operation_token is None
+        assert engine._function_registry == {"committedName": "committed"}
+        assert engine.execute("return committedName()")["results"]["return"] == 9

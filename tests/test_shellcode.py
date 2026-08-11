@@ -217,7 +217,7 @@ class TestBuildMultiCallX64:
 
 
 class TestCallSequence:
-    def test_returns_final_and_per_call_results(self, monkeypatch):
+    def test_returns_final_and_per_call_results(self):
         class FakeSession:
             def __init__(self):
                 self.pm = object()
@@ -254,13 +254,14 @@ class TestCallSequence:
             def close_handle(self, _handle):
                 return True
 
-        monkeypatch.setattr("memscope_mcp.tools.execute.SESSION", FakeSession())
+        fake_session = FakeSession()
 
         result = call_sequence(
             [
                 {"address": 0x1000, "args": []},
                 {"address": 0x2000, "args": [{"result": 1}]},
-            ]
+            ],
+            session=fake_session,
         )
 
         assert result["success"] is True

@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from lupa import LuaRuntime
@@ -26,11 +27,22 @@ class MockContext:
     lua: Any = None
     table_factory: Any = None
     log_error: Any = None
+    hook_manager: Any = None
 
 
 def make_plugin(table_factory=make_table) -> NetcapPlugin:
+    session = MagicMock()
+    hook_manager = MagicMock()
+    hook_manager.session = session
     plugin = NetcapPlugin()
-    plugin.register(MockContext(table_factory=table_factory, log_error=lambda *args: None))
+    plugin.register(
+        MockContext(
+            session=session,
+            table_factory=table_factory,
+            log_error=lambda *args: None,
+            hook_manager=hook_manager,
+        )
+    )
     return plugin
 
 
@@ -211,7 +223,18 @@ def test_deterministic_python_differential_parity():
 
 def register_real_lua_functions(lua: LuaRuntime) -> NetcapPlugin:
     plugin = NetcapPlugin()
-    functions = plugin.register(MockContext(lua=lua, table_factory=lua.table, log_error=lambda *args: None))
+    session = MagicMock()
+    hook_manager = MagicMock()
+    hook_manager.session = session
+    functions = plugin.register(
+        MockContext(
+            session=session,
+            lua=lua,
+            table_factory=lua.table,
+            log_error=lambda *args: None,
+            hook_manager=hook_manager,
+        )
+    )
     globals_table = lua.globals()
     for name in ("bufferFind", "bufferContains", "bufferFindAll"):
         globals_table[name] = functions[name]
