@@ -35,6 +35,7 @@ from .tools.lua_scripts import (
 from .tools.memory import smart_dump
 from .tools.pointers import resolve_pointer_chain
 from .tools.types import read_typed, write_typed
+from .utils import processes as process_utils
 from .utils.logger import LOGGER
 from .utils.memory_utils import format_address
 from .utils.peb import read_process_peb
@@ -93,116 +94,14 @@ def _log(tool: str, args: dict, result: dict, start_time: float):
 
 def _enumerate_services() -> dict[int, list[dict]]:
     """Build pid -> services map. Returns {pid: [{name, state}, ...]}."""
-    import ctypes
-    from ctypes import wintypes
-
     pid_services = {}
 
     try:
-        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-
-        SC_MANAGER_ENUMERATE_SERVICE = 0x0004
-        SERVICE_WIN32 = 0x30
-        SERVICE_STATE_ALL = 0x03
-
-        class SERVICE_STATUS_PROCESS(ctypes.Structure):
-            _fields_ = [
-                ("dwServiceType", wintypes.DWORD),
-                ("dwCurrentState", wintypes.DWORD),
-                ("dwControlsAccepted", wintypes.DWORD),
-                ("dwWin32ExitCode", wintypes.DWORD),
-                ("dwServiceSpecificExitCode", wintypes.DWORD),
-                ("dwCheckPoint", wintypes.DWORD),
-                ("dwWaitHint", wintypes.DWORD),
-                ("dwProcessId", wintypes.DWORD),
-                ("dwServiceFlags", wintypes.DWORD),
-            ]
-
-        class ENUM_SERVICE_STATUS_PROCESSW(ctypes.Structure):
-            _fields_ = [
-                ("lpServiceName", wintypes.LPWSTR),
-                ("lpDisplayName", wintypes.LPWSTR),
-                ("ServiceStatusProcess", SERVICE_STATUS_PROCESS),
-            ]
-
-        SERVICE_STATES = {
-            1: "STOPPED",
-            2: "START_PENDING",
-            3: "STOP_PENDING",
-            4: "RUNNING",
-            5: "CONTINUE_PENDING",
-            6: "PAUSE_PENDING",
-            7: "PAUSED",
-        }
-
-        # Set up function signatures
-        advapi32.OpenSCManagerW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
-        advapi32.OpenSCManagerW.restype = wintypes.HANDLE
-        advapi32.CloseServiceHandle.argtypes = [wintypes.HANDLE]
-        advapi32.CloseServiceHandle.restype = wintypes.BOOL
-        advapi32.EnumServicesStatusExW.argtypes = [
-            wintypes.HANDLE,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            ctypes.POINTER(ctypes.c_byte),
-            wintypes.DWORD,
-            ctypes.POINTER(wintypes.DWORD),
-            ctypes.POINTER(wintypes.DWORD),
-            ctypes.POINTER(wintypes.DWORD),
-            wintypes.LPCWSTR,
-        ]
-        advapi32.EnumServicesStatusExW.restype = wintypes.BOOL
-
-        scm = advapi32.OpenSCManagerW(None, None, SC_MANAGER_ENUMERATE_SERVICE)
-        if scm:
-            try:
-                bytes_needed = wintypes.DWORD()
-                services_returned = wintypes.DWORD()
-                resume_handle = wintypes.DWORD(0)
-
-                advapi32.EnumServicesStatusExW(
-                    scm,
-                    0,
-                    SERVICE_WIN32,
-                    SERVICE_STATE_ALL,
-                    None,
-                    0,
-                    ctypes.byref(bytes_needed),
-                    ctypes.byref(services_returned),
-                    ctypes.byref(resume_handle),
-                    None,
-                )
-
-                if bytes_needed.value > 0:
-                    buf = (ctypes.c_byte * bytes_needed.value)()
-                    resume_handle = wintypes.DWORD(0)
-
-                    if advapi32.EnumServicesStatusExW(
-                        scm,
-                        0,
-                        SERVICE_WIN32,
-                        SERVICE_STATE_ALL,
-                        buf,
-                        bytes_needed.value,
-                        ctypes.byref(bytes_needed),
-                        ctypes.byref(services_returned),
-                        ctypes.byref(resume_handle),
-                        None,
-                    ):
-                        entry_array = ctypes.cast(buf, ctypes.POINTER(ENUM_SERVICE_STATUS_PROCESSW))
-                        for i in range(services_returned.value):
-                            entry = entry_array[i]
-                            ssp = entry.ServiceStatusProcess
-                            svc_name = entry.lpServiceName or ""
-                            svc_pid = ssp.dwProcessId
-                            svc_state = SERVICE_STATES.get(ssp.dwCurrentState, "UNKNOWN")
-
-                            if svc_pid not in pid_services:
-                                pid_services[svc_pid] = []
-                            pid_services[svc_pid].append({"name": svc_name, "state": svc_state})
-            finally:
-                advapi32.CloseServiceHandle(scm)
+        for service in process_utils.enumerate_services():
+            state = process_utils.SERVICE_STATE_NAMES.get(service.state_code, "UNKNOWN")
+            if service.pid not in pid_services:
+                pid_services[service.pid] = []
+            pid_services[service.pid].append({"name": service.name, "state": state})
     except Exception:
         pass
 
@@ -211,21 +110,8 @@ def _enumerate_services() -> dict[int, list[dict]]:
 
 def _get_process_path(proc_pid: int) -> Optional[str]:
     """Get full path for a process."""
-    import ctypes
-    from ctypes import wintypes
-
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     try:
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, proc_pid)
-        if handle:
-            try:
-                buf = ctypes.create_unicode_buffer(1024)
-                size = wintypes.DWORD(1024)
-                if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
-                    return buf.value
-            finally:
-                kernel32.CloseHandle(handle)
+        return process_utils.query_process_image_path(proc_pid)
     except Exception:
         pass
     return None
@@ -256,8 +142,6 @@ def processes(
       processes(filter="svchost")       - All svchosts with their services
       processes(pid=1820)               - Details for specific PID
       processes(parent=700)             - Children of services.exe"""
-    import pymem.process
-
     _start = time.perf_counter()
     _log_args = {"filter": filter, "pid": pid, "parent": parent, "service": service, "limit": limit, "offset": offset}
 
@@ -269,10 +153,10 @@ def processes(
     result_list = []
     skipped = 0
 
-    for proc in pymem.process.list_processes():
-        name = proc.szExeFile.decode() if isinstance(proc.szExeFile, bytes) else proc.szExeFile
-        proc_pid = proc.th32ProcessID
-        parent_pid = proc.th32ParentProcessID
+    for proc in process_utils.enumerate_processes():
+        name = proc.name
+        proc_pid = proc.pid
+        parent_pid = proc.parent_pid
 
         # Apply filters
         if pid is not None and proc_pid != pid:
@@ -296,7 +180,7 @@ def processes(
             "pid": proc_pid,
             "name": name,
             "parent_pid": parent_pid,
-            "threads": proc.cntThreads,
+            "threads": proc.threads,
         }
 
         # Include path and command line from PEB

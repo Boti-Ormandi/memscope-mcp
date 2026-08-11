@@ -33,6 +33,7 @@ memscope_mcp/
   plugins/               # PluginBase (specialization of LuaExtension) + loader
   instructions/          # AI context builder (base + extensions + plugins)
   utils/
+    processes.py         # Process/service enumeration and image-path queries
     shellcode.py         # x64 codegen: native calls + hook trampolines
     disasm.py            # Table-driven x64 length decoder + RIP-relative relocation
     pe.py                # PE export resolver (resolveExport)

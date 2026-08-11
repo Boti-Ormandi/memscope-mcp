@@ -14,6 +14,7 @@ from ...tools.lua.process_info import (
     get_threads,
     is_being_debugged,
 )
+from ...utils import processes as process_utils
 
 
 class ProcessExtension(LuaExtension):
@@ -88,8 +89,6 @@ getRegionInfo(addr)              -- Region at address
         Returns:
             Lua table with {pid, name, module_count} or None on failure.
         """
-        import pymem.process
-
         from ...utils.logger import LOGGER
 
         try:
@@ -99,9 +98,9 @@ getRegionInfo(addr)              -- Region at address
             if isinstance(target, (int, float)):
                 # Target is a PID -- look up the name
                 target_pid = int(target)
-                for proc in pymem.process.list_processes():
-                    if proc.th32ProcessID == target_pid:
-                        process_name = proc.szExeFile.decode() if isinstance(proc.szExeFile, bytes) else proc.szExeFile
+                for proc in process_utils.enumerate_processes():
+                    if proc.pid == target_pid:
+                        process_name = proc.name
                         break
                 if not process_name:
                     return None

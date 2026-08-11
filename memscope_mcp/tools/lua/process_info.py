@@ -8,9 +8,9 @@ from ctypes import wintypes
 from typing import Callable, Optional
 
 import pymem.memory
-import pymem.process
 import pymem.ressources.structure as structs
 
+from ...utils import processes as process_utils
 from ...utils.peb import read_process_environment, read_process_modules, read_process_peb
 
 # Windows API constants
@@ -33,7 +33,6 @@ class THREADENTRY32(ctypes.Structure):
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
-advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
 
 # Thread enumeration
 kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
@@ -51,20 +50,7 @@ kernel32.OpenThread.restype = wintypes.HANDLE
 kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 kernel32.CloseHandle.restype = wintypes.BOOL
 
-# Process command line
-kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-kernel32.OpenProcess.restype = wintypes.HANDLE
-
-kernel32.QueryFullProcessImageNameW.argtypes = [
-    wintypes.HANDLE,
-    wintypes.DWORD,
-    wintypes.LPWSTR,
-    ctypes.POINTER(wintypes.DWORD),
-]
-kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
-
 # For reading PEB/command line
-PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
 
 # Memory protection flags for readable output
@@ -98,16 +84,15 @@ def get_process_list(lua_table_fn: Callable, filter_str: Optional[str] = None, l
         Lua table of {pid, name, parent_pid, threads}
     """
     results = []
-    for proc in pymem.process.list_processes():
-        name = proc.szExeFile.decode() if isinstance(proc.szExeFile, bytes) else proc.szExeFile
-        if filter_str and filter_str.lower() not in name.lower():
+    for proc in process_utils.enumerate_processes():
+        if filter_str and filter_str.lower() not in proc.name.lower():
             continue
         results.append(
             {
-                "pid": proc.th32ProcessID,
-                "name": name,
-                "parent_pid": proc.th32ParentProcessID,
-                "threads": proc.cntThreads,
+                "pid": proc.pid,
+                "name": proc.name,
+                "parent_pid": proc.parent_pid,
+                "threads": proc.threads,
             }
         )
         if len(results) >= limit:
@@ -143,24 +128,17 @@ def get_process_info(lua_table_fn: Callable, pid: Optional[int] = None, *, sessi
     result["pid"] = target_pid
 
     # Find process in list
-    for proc in pymem.process.list_processes():
-        if proc.th32ProcessID == target_pid:
-            name = proc.szExeFile.decode() if isinstance(proc.szExeFile, bytes) else proc.szExeFile
-            result["name"] = name
-            result["parent_pid"] = proc.th32ParentProcessID
-            result["threads"] = proc.cntThreads
+    for proc in process_utils.enumerate_processes():
+        if proc.pid == target_pid:
+            result["name"] = proc.name
+            result["parent_pid"] = proc.parent_pid
+            result["threads"] = proc.threads
             break
 
     # Get full image path
-    handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION, False, target_pid)
-    if handle:
-        try:
-            buf = ctypes.create_unicode_buffer(1024)
-            size = wintypes.DWORD(1024)
-            if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
-                result["path"] = buf.value
-        finally:
-            kernel32.CloseHandle(handle)
+    path = process_utils.query_process_image_path(target_pid)
+    if path:
+        result["path"] = path
 
     # Read PEB fields (command line, cwd, debugger flag)
     peb_data = read_process_peb(target_pid)
@@ -362,32 +340,6 @@ def get_threads(lua_table_fn: Callable, pid: Optional[int] = None, *, session):
     return t
 
 
-class SERVICE_STATUS_PROCESS(ctypes.Structure):
-    """SERVICE_STATUS_PROCESS structure."""
-
-    _fields_ = [
-        ("dwServiceType", wintypes.DWORD),
-        ("dwCurrentState", wintypes.DWORD),
-        ("dwControlsAccepted", wintypes.DWORD),
-        ("dwWin32ExitCode", wintypes.DWORD),
-        ("dwServiceSpecificExitCode", wintypes.DWORD),
-        ("dwCheckPoint", wintypes.DWORD),
-        ("dwWaitHint", wintypes.DWORD),
-        ("dwProcessId", wintypes.DWORD),
-        ("dwServiceFlags", wintypes.DWORD),
-    ]
-
-
-class ENUM_SERVICE_STATUS_PROCESSW(ctypes.Structure):
-    """ENUM_SERVICE_STATUS_PROCESSW structure."""
-
-    _fields_ = [
-        ("lpServiceName", wintypes.LPWSTR),
-        ("lpDisplayName", wintypes.LPWSTR),
-        ("ServiceStatusProcess", SERVICE_STATUS_PROCESS),
-    ]
-
-
 def get_services(lua_table_fn: Callable, pid: Optional[int] = None):
     """List services, optionally filtered by hosting process.
 
@@ -398,116 +350,19 @@ def get_services(lua_table_fn: Callable, pid: Optional[int] = None):
     Returns:
         Lua table of {name, display_name, pid, state}
     """
-    SERVICE_STATE = {
-        1: "STOPPED",
-        2: "START_PENDING",
-        3: "STOP_PENDING",
-        4: "RUNNING",
-        5: "CONTINUE_PENDING",
-        6: "PAUSE_PENDING",
-        7: "PAUSED",
-    }
-
-    SC_MANAGER_ENUMERATE_SERVICE = 0x0004
-    SERVICE_WIN32 = 0x30
-    SERVICE_STATE_ALL = 0x03
-
-    advapi32.OpenSCManagerW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
-    advapi32.OpenSCManagerW.restype = wintypes.HANDLE
-
-    advapi32.CloseServiceHandle.argtypes = [wintypes.HANDLE]
-    advapi32.CloseServiceHandle.restype = wintypes.BOOL
-
-    advapi32.EnumServicesStatusExW.argtypes = [
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.POINTER(ctypes.c_byte),
-        wintypes.DWORD,
-        ctypes.POINTER(wintypes.DWORD),
-        ctypes.POINTER(wintypes.DWORD),
-        ctypes.POINTER(wintypes.DWORD),
-        wintypes.LPCWSTR,
-    ]
-    advapi32.EnumServicesStatusExW.restype = wintypes.BOOL
-
-    scm = advapi32.OpenSCManagerW(None, None, SC_MANAGER_ENUMERATE_SERVICE)
-    if not scm:
-        return lua_table_fn()
-
-    results = []
-
-    try:
-        bytes_needed = wintypes.DWORD()
-        services_returned = wintypes.DWORD()
-        resume_handle = wintypes.DWORD(0)
-
-        # First call to get size
-        advapi32.EnumServicesStatusExW(
-            scm,
-            0,
-            SERVICE_WIN32,
-            SERVICE_STATE_ALL,
-            None,
-            0,
-            ctypes.byref(bytes_needed),
-            ctypes.byref(services_returned),
-            ctypes.byref(resume_handle),
-            None,
-        )
-
-        if bytes_needed.value == 0:
-            return lua_table_fn()
-
-        # Allocate buffer as array of structures
-        buf_size = bytes_needed.value
-        buf = (ctypes.c_byte * buf_size)()
-        resume_handle = wintypes.DWORD(0)
-
-        if advapi32.EnumServicesStatusExW(
-            scm,
-            0,
-            SERVICE_WIN32,
-            SERVICE_STATE_ALL,
-            buf,
-            buf_size,
-            ctypes.byref(bytes_needed),
-            ctypes.byref(services_returned),
-            ctypes.byref(resume_handle),
-            None,
-        ):
-            # Cast buffer to array of structures
-            entry_array = ctypes.cast(buf, ctypes.POINTER(ENUM_SERVICE_STATUS_PROCESSW))
-
-            for i in range(services_returned.value):
-                entry = entry_array[i]
-                ssp = entry.ServiceStatusProcess
-
-                # Filter by PID if requested
-                if pid and ssp.dwProcessId != pid:
-                    continue
-
-                results.append(
-                    {
-                        "name": entry.lpServiceName or "",
-                        "display_name": entry.lpDisplayName or "",
-                        "pid": ssp.dwProcessId,
-                        "state": SERVICE_STATE.get(ssp.dwCurrentState, f"UNKNOWN({ssp.dwCurrentState})"),
-                    }
-                )
-    finally:
-        advapi32.CloseServiceHandle(scm)
-
-    # Convert to Lua table
     t = lua_table_fn()
-    for i, s in enumerate(results, 1):
+    output_index = 1
+    for service in process_utils.enumerate_services():
+        if pid and service.pid != pid:
+            continue
+
         entry = lua_table_fn()
-        entry["name"] = s["name"]
-        entry["display_name"] = s["display_name"]
-        entry["pid"] = s["pid"]
-        entry["state"] = s["state"]
-        t[i] = entry
+        entry["name"] = service.name
+        entry["display_name"] = service.display_name
+        entry["pid"] = service.pid
+        entry["state"] = process_utils.SERVICE_STATE_NAMES.get(service.state_code, f"UNKNOWN({service.state_code})")
+        t[output_index] = entry
+        output_index += 1
     return t
 
 
