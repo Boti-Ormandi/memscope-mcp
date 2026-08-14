@@ -15,11 +15,17 @@ import os
 from pathlib import Path
 
 
-def _resolve_home() -> Path:
+def _configured_home() -> Path:
     raw = os.environ.get("MEMSCOPE_HOME")
-    if raw:
-        return Path(raw).expanduser().resolve()
-    return Path.home() / ".memscope-mcp"
+    configured = Path(raw).expanduser() if raw else Path.home() / ".memscope-mcp"
+    return Path(os.path.abspath(configured))
+
+
+_CONFIGURED_MEMSCOPE_HOME: Path = _configured_home()
+
+
+def _resolve_home() -> Path:
+    return _CONFIGURED_MEMSCOPE_HOME.resolve()
 
 
 MEMSCOPE_HOME: Path = _resolve_home()

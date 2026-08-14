@@ -11,14 +11,65 @@ Activate by copying this file to the plugins/ directory.
 import gzip
 import ipaddress
 import json
+import math
 import struct
+import threading
 import time
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
+from memscope_mcp._contrib.plugins._recording_fs import (
+    RecordingDirectory,
+    RecordingFsError,
+    RecordingWriter,
+    acquire_directory,
+    acquire_recording_directory,
+    cleanup_stale_stages,
+    compress_recording,
+    open_writer,
+    same_path,
+    validate_component,
+)
 from memscope_mcp.extensions.base import ExtensionContext
+from memscope_mcp.paths import _CONFIGURED_MEMSCOPE_HOME
 from memscope_mcp.plugins import PluginBase
 from memscope_mcp.utils.pe import resolve_export
+
+SCRIPTS_DIR = _CONFIGURED_MEMSCOPE_HOME / "scripts"
+_RECORDING_SIZE_UNIT = 1024 * 1024
+_MAX_RECORDING_SIZE_BYTES = (1 << 63) - 1
+
+
+def _parse_recording_max_size_mb(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("max_size_mb must be an int or float")
+    if isinstance(value, float):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("max_size_mb must be finite and > 0")
+        byte_value = value * _RECORDING_SIZE_UNIT
+        if not math.isfinite(byte_value) or byte_value > _MAX_RECORDING_SIZE_BYTES:
+            raise ValueError("max_size_mb is too large")
+        threshold = int(byte_value)
+    else:
+        if value <= 0:
+            raise ValueError("max_size_mb must be > 0")
+        if value > _MAX_RECORDING_SIZE_BYTES // _RECORDING_SIZE_UNIT:
+            raise ValueError("max_size_mb is too large")
+        threshold = value * _RECORDING_SIZE_UNIT
+    if threshold <= 0:
+        raise ValueError("max_size_mb is too small")
+    return threshold
+
+
+def _recording_locked(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._recording_lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
 
 # ==================== Hook Specifications ====================
 
@@ -555,7 +606,7 @@ for known function prologues.
         self._header_only: bool = False
         self._streams: dict[int, StreamBuffer] = {}
         self._max_stream_size: int = 1024 * 1024  # 1MB per direction per socket
-        self._recording_file = None
+        self._recording_file: RecordingWriter | Any | None = None
         self._recording_path: str | None = None
         self._recording_count: int = 0
         self._recording_start: float | None = None
@@ -563,13 +614,17 @@ for known function prologues.
         self._recording_max_size: int | None = None  # bytes, None = no limit
         self._recording_base_name: str | None = None  # filename stem for rotation
         self._recording_part: int = 1
-        self._recording_dir: Path | None = None
+        self._recording_dir: RecordingDirectory | None = None
+        self._recording_cleanup: list[Any] = []
+        self._recording_lock = threading.RLock()
         self._session: Any | None = None
         self._hook_manager: Any | None = None
+        self._log_error: Callable[[str, Exception], None] | None = None
 
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
         self._session = ctx.session
         self._hook_manager = ctx.hook_manager
+        self._log_error = ctx.log_error
         if self._hook_manager is None:
             raise RuntimeError("NetcapPlugin requires a HookManager")
         if self._hook_manager.session is not self._session:
@@ -821,6 +876,7 @@ for known function prologues.
         self._cleanup(process_alive=True)
         return True
 
+    @_recording_locked
     def _cleanup(self, process_alive: bool) -> None:
         """Remove netcap hooks and optionally free ring buffer."""
         if process_alive:
@@ -836,21 +892,31 @@ for known function prologues.
                 except Exception:
                     pass
 
-        # Close recording if active (file preserved on disk)
-        if self._recording_file is not None:
+        cleanup_errors: list[Exception] = []
+        writer = self._recording_file
+        directory = self._recording_dir
+        if writer is not None:
             try:
-                self._recording_file.close()
-            except Exception:
-                pass
-            self._recording_file = None
-            self._recording_path = None
-            self._recording_count = 0
-            self._recording_start = None
-            self._recording_compress = False
-            self._recording_max_size = None
-            self._recording_base_name = None
-            self._recording_part = 1
-            self._recording_dir = None
+                writer.close()
+            except Exception as exc:
+                cleanup_errors.append(exc)
+                self._queue_recording_cleanup(*getattr(exc, "cleanup", ()))
+                file_owner = getattr(writer, "file", None)
+                if file_owner is not None and not file_owner.closed:
+                    self._queue_recording_cleanup(file_owner)
+        if directory is not None:
+            if writer is None or getattr(writer, "closed", True):
+                try:
+                    directory.close()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+                    self._queue_recording_cleanup(directory)
+            else:
+                self._queue_recording_cleanup(directory)
+        self._reset_recording_state()
+        cleanup_errors.extend(self._drain_recording_cleanup())
+        if cleanup_errors and self._log_error is not None:
+            self._log_error("cleanupRecording", RuntimeError("; ".join(str(error) for error in cleanup_errors)))
 
         self._streams.clear()
         self._hook_ids = {}
@@ -1826,74 +1892,7 @@ for known function prologues.
 
     # ==================== Session Recording ====================
 
-    def _start_recording(self, filename=None, opts=None):
-        """Lua: startRecording(filename?, {compress?, max_size_mb?}?) -> {filename, path}
-
-        Enable recording mode. Subsequent readPackets() calls auto-append to file.
-        File saved under scripts/<process>/recordings/<filename>.jsonl.
-
-        Options:
-            compress: If true, gzip the file on stopRecording() (.jsonl.gz).
-            max_size_mb: Rotate to a new file when the current one exceeds this size.
-        """
-        if self._recording_file is not None:
-            raise RuntimeError("Recording already active. Call stopRecording() first.")
-
-        compress = False
-        max_size_mb = None
-        if opts is not None:
-            comp_val = opts["compress"]
-            if comp_val is not None:
-                compress = bool(comp_val)
-            size_val = opts["max_size_mb"]
-            if size_val is not None:
-                max_size_mb = float(size_val)
-
-        process_name = self._session.target_process or "unknown"
-        rec_dir = Path("scripts") / process_name / "recordings"
-        rec_dir.mkdir(parents=True, exist_ok=True)
-
-        if filename is None:
-            filename = time.strftime("%Y%m%d_%H%M%S")
-        filename = str(filename)
-        if not filename.endswith(".jsonl"):
-            filename += ".jsonl"
-
-        filepath = rec_dir / filename
-        self._recording_file = open(filepath, "a", encoding="utf-8")  # noqa: SIM115
-        self._recording_path = str(filepath)
-        self._recording_count = 0
-        self._recording_start = time.time()
-        self._recording_compress = compress
-        self._recording_max_size = int(max_size_mb * 1024 * 1024) if max_size_mb else None
-        self._recording_base_name = filename[: -len(".jsonl")]
-        self._recording_part = 1
-        self._recording_dir = rec_dir
-
-        return self._table(filename=filename, path=str(filepath))
-
-    def _stop_recording(self):
-        """Lua: stopRecording() -> {path, total_entries, duration_seconds, parts, compressed}"""
-        if self._recording_file is None:
-            raise RuntimeError("No recording active.")
-
-        self._recording_file.close()
-        duration = time.time() - self._recording_start
-
-        path = self._recording_path
-        compressed = False
-        if self._recording_compress:
-            path = self._compress_recording(Path(path))
-            compressed = True
-
-        result = self._table(
-            path=path,
-            total_entries=self._recording_count,
-            duration_seconds=round(duration, 1),
-            parts=self._recording_part,
-            compressed=compressed,
-        )
-
+    def _reset_recording_state(self) -> None:
         self._recording_file = None
         self._recording_path = None
         self._recording_count = 0
@@ -1904,58 +1903,174 @@ for known function prologues.
         self._recording_part = 1
         self._recording_dir = None
 
+    def _queue_recording_cleanup(self, *owners: Any) -> None:
+        known = {id(owner) for owner in self._recording_cleanup}
+        for owner in owners:
+            if owner is not None and id(owner) not in known and not getattr(owner, "closed", False):
+                self._recording_cleanup.append(owner)
+                known.add(id(owner))
+
+    def _drain_recording_cleanup(self) -> list[Exception]:
+        remaining = []
+        errors = []
+        for owner in self._recording_cleanup:
+            if getattr(owner, "closed", False):
+                continue
+            try:
+                owner.close()
+            except Exception as exc:
+                errors.append(exc)
+                remaining.append(owner)
+        self._recording_cleanup = remaining
+        return errors
+
+    def _recording_failed(self, exc: Exception) -> None:
+        writer = self._recording_file
+        directory = self._recording_dir
+        self._queue_recording_cleanup(*getattr(exc, "cleanup", ()))
+        file_owner = getattr(writer, "file", None)
+        if file_owner is not None and not file_owner.closed:
+            self._queue_recording_cleanup(file_owner)
+        if directory is not None:
+            self._queue_recording_cleanup(directory)
+        self._reset_recording_state()
+
+    @_recording_locked
+    def _start_recording(self, filename=None, opts=None):
+        """Enable validated append-only recording under MEMSCOPE_HOME."""
+        if self._recording_file is not None:
+            raise RuntimeError("Recording already active. Call stopRecording() first.")
+        compress = False
+        max_size_bytes = None
+        if opts is not None:
+            compress_value = opts["compress"]
+            if compress_value is not None:
+                if type(compress_value) is not bool:
+                    raise TypeError("compress must be a bool")
+                compress = compress_value
+            if opts["max_size_mb"] is not None:
+                max_size_bytes = _parse_recording_max_size_mb(opts["max_size_mb"])
+
+        process_name = validate_component(self._session.target_process or "unknown", label="process name")
+        raw_name = time.strftime("%Y%m%d_%H%M%S") if filename is None else str(filename)
+        filename = validate_component(
+            raw_name if raw_name.endswith(".jsonl") else raw_name + ".jsonl",
+            label="recording filename",
+        )
+
+        cleanup_errors = self._drain_recording_cleanup()
+        if cleanup_errors:
+            raise RecordingFsError(f"Pending recording cleanup failed: {cleanup_errors[0]}")
+        try:
+            directory = acquire_recording_directory(SCRIPTS_DIR, process_name, create=True)
+        except Exception as exc:
+            self._queue_recording_cleanup(*getattr(exc, "cleanup", ()))
+            raise
+        assert directory is not None
+        try:
+            cleanup_stale_stages(directory)
+            writer = open_writer(directory, filename)
+        except Exception as exc:
+            self._queue_recording_cleanup(*getattr(exc, "cleanup", ()))
+            try:
+                directory.close()
+            except Exception as close_error:
+                self._queue_recording_cleanup(directory)
+                if self._log_error is not None:
+                    self._log_error("cleanupRecording", close_error)
+            raise
+
+        self._recording_file = writer
+        self._recording_path = str(writer.path)
+        self._recording_count = 0
+        self._recording_start = time.time()
+        self._recording_compress = compress
+        self._recording_max_size = max_size_bytes
+        self._recording_base_name = filename[: -len(".jsonl")]
+        self._recording_part = 1
+        self._recording_dir = directory
+        return self._table(filename=filename, path=str(writer.path))
+
+    @_recording_locked
+    def _stop_recording(self):
+        """Persist, optionally compress, and retire the active source recording."""
+        writer = self._recording_file
+        directory = self._recording_dir
+        if writer is None or directory is None:
+            raise RuntimeError("No recording active.")
+
+        count = self._recording_count
+        started = self._recording_start
+        parts = self._recording_part
+        compress = self._recording_compress
+        try:
+            writer.close()
+            path = writer.path
+            if compress:
+                path = compress_recording(directory, writer.name, writer.identity)
+            directory.close()
+        except Exception as exc:
+            self._recording_failed(exc)
+            raise
+
+        result = self._table(
+            path=str(path),
+            total_entries=count,
+            duration_seconds=round(time.time() - started, 1),
+            parts=parts,
+            compressed=compress,
+        )
+        self._reset_recording_state()
         return result
 
+    @_recording_locked
     def _record_packets(self, packets_list: list) -> None:
-        """Append packets to recording file. Rotates if max_size_mb exceeded."""
-        for pkt in packets_list:
-            record = self._serialize_packet(pkt)
-            self._recording_file.write(json.dumps(record, separators=(",", ":")) + "\n")
-            self._recording_count += 1
-        self._recording_file.flush()
-
-        if self._recording_max_size is not None:
-            try:
-                pos = self._recording_file.tell()
-            except Exception:
-                pos = 0
-            if pos >= self._recording_max_size:
+        """Serialize and durably append one batch, then rotate if required."""
+        writer = self._recording_file
+        if writer is None:
+            raise RuntimeError("No recording active.")
+        records = [json.dumps(self._serialize_packet(packet), separators=(",", ":")) + "\n" for packet in packets_list]
+        payload = "".join(records).encode("utf-8")
+        try:
+            writer.write_batch(payload)
+            self._recording_count += len(records)
+            if self._recording_max_size is not None and writer.size() >= self._recording_max_size:
                 self._rotate_recording()
+        except Exception as exc:
+            self._recording_failed(exc)
+            raise
 
     def _rotate_recording(self) -> None:
-        """Close current recording file and open the next part."""
-        self._recording_file.close()
-
+        """Persist the current part and commit a validated next writer atomically in state."""
+        writer = self._recording_file
+        directory = self._recording_dir
+        if writer is None or directory is None:
+            raise RuntimeError("No recording active.")
+        next_part = self._recording_part + 1
+        next_name = f"{self._recording_base_name}_part{next_part:03d}.jsonl"
+        writer.close()
         if self._recording_compress:
-            self._compress_recording(Path(self._recording_path))
-
-        self._recording_part += 1
-        filename = f"{self._recording_base_name}_part{self._recording_part:03d}.jsonl"
-        filepath = self._recording_dir / filename
-        self._recording_file = open(filepath, "a", encoding="utf-8")  # noqa: SIM115
-        self._recording_path = str(filepath)
+            compress_recording(directory, writer.name, writer.identity)
+        next_writer = open_writer(directory, next_name)
+        self._recording_file = next_writer
+        self._recording_path = str(next_writer.path)
+        self._recording_part = next_part
 
     def _compress_recording(self, filepath: Path) -> str:
-        """Gzip a recording file and remove the original. Returns compressed path."""
-        gz_path = filepath.with_suffix(filepath.suffix + ".gz")
-        with open(filepath, "rb") as f_in, gzip.open(gz_path, "wb") as f_out:
-            while True:
-                chunk = f_in.read(65536)
-                if not chunk:
-                    break
-                f_out.write(chunk)
-        filepath.unlink()
-        return str(gz_path)
+        """Compatibility wrapper for focused tests; compression is handle-based."""
+        directory = self._recording_dir
+        writer = self._recording_file
+        if directory is None or writer is None or writer.path != filepath:
+            raise RecordingFsError("Compression requires the active canonical recording")
+        if not writer.closed:
+            writer.close()
+        return str(compress_recording(directory, writer.name, writer.identity))
 
     def _serialize_packet(self, pkt) -> dict:
-        """Convert a Lua packet table to a JSON-serializable dict.
-
-        Stores full data as hex (not truncated to 256-byte preview).
-        """
-        STRING_FIELDS = {"direction", "socket_hex", "caller", "hook_name"}
-        INT_FIELDS = {"socket", "timestamp", "sequence", "size", "captured", "result"}
-
-        d = {}
+        """Convert a Lua packet table to a JSON-serializable dict."""
+        string_fields = {"direction", "socket_hex", "caller", "hook_name"}
+        int_fields = {"socket", "timestamp", "sequence", "size", "captured", "result"}
+        result = {}
         for key in (
             "direction",
             "socket",
@@ -1968,155 +2083,238 @@ for known function prologues.
             "caller",
             "hook_name",
         ):
-            val = pkt[key]
-            if val is None:
+            value = pkt[key]
+            if value is None:
                 continue
-            if key in INT_FIELDS:
-                d[key] = int(val)
-            elif key in STRING_FIELDS:
-                d[key] = str(val)
-            else:
-                d[key] = val
+            result[key] = int(value) if key in int_fields else str(value) if key in string_fields else value
+        data_value = pkt.get("data") if hasattr(pkt, "get") else pkt["data"]
+        if data_value is not None:
+            data = _lua_table_to_bytes(data_value)
+            if data:
+                result["data_hex"] = " ".join(f"{byte:02X}" for byte in data)
+        if pkt.get("async") if hasattr(pkt, "get") else None:
+            result["async"] = True
+        return result
 
-        data_val = pkt.get("data") if hasattr(pkt, "get") else pkt["data"]
-        if data_val is not None:
-            data_bytes = _lua_table_to_bytes(data_val)
-            if data_bytes:
-                d["data_hex"] = " ".join(f"{b:02X}" for b in data_bytes)
+    def _recording_candidate_names(self, filename: Any) -> tuple[str, ...]:
+        name = validate_component(filename, label="recording filename")
+        if name.endswith(".jsonl.gz"):
+            return (name,)
+        if name.endswith(".jsonl"):
+            return (name, name + ".gz")
+        return (name + ".jsonl", name + ".jsonl.gz")
 
-        async_val = pkt.get("async") if hasattr(pkt, "get") else None
-        if async_val:
-            d["async"] = True
-
-        return d
+    def _resolve_recording_source(self, filename: Any, process_name: str):
+        names = self._recording_candidate_names(filename)
+        process_name = validate_component(process_name, label="process name")
+        expected = Path(SCRIPTS_DIR) / process_name / "recordings" / names[0]
+        roots = [(Path(SCRIPTS_DIR), False)]
+        legacy = Path.cwd() / "scripts"
+        if not same_path(legacy, SCRIPTS_DIR):
+            roots.append((legacy, True))
+        for scripts_root, legacy_source in roots:
+            directory = acquire_recording_directory(scripts_root, process_name, create=False)
+            if directory is None:
+                continue
+            try:
+                for name in names:
+                    protected = directory.open_existing(name)
+                    if protected is not None:
+                        return directory, protected, legacy_source, expected
+            except Exception as exc:
+                try:
+                    directory.close()
+                except Exception as close_error:
+                    cleanup = [*getattr(exc, "cleanup", ()), *getattr(close_error, "cleanup", ())]
+                    if not directory.closed and all(owner is not directory for owner in cleanup):
+                        cleanup.append(directory)
+                    raise RecordingFsError(
+                        f"Recording lookup failed: {exc}; directory close failed: {close_error}",
+                        cleanup,
+                    ) from exc
+                raise
+            try:
+                directory.close()
+            except Exception as close_error:
+                cleanup = list(getattr(close_error, "cleanup", ()))
+                if not directory.closed and all(owner is not directory for owner in cleanup):
+                    cleanup.append(directory)
+                raise RecordingFsError(
+                    f"Recording lookup directory close failed: {close_error}",
+                    cleanup,
+                ) from close_error
+        return None, None, False, expected
 
     def _load_recording(self, filename, opts=None):
-        """Lua: loadRecording(filename, {offset, limit}?) -> packet list
-
-        Load a recorded session. Returns packets in the same format as readPackets(),
-        with full data byte tables reconstructed from stored hex.
-
-        Args:
-            filename: recording name (without .jsonl extension)
-            opts: optional table with offset (skip first N entries, default 0)
-                  and limit (max entries to return, default all)
-        """
+        """Load a validated canonical recording or the read-only legacy fallback."""
         process_name = self._session.target_process or "unknown"
-        filepath = self._resolve_recording_path(filename, process_name)
-        if not filepath.exists():
-            raise RuntimeError(f"Recording not found: {filepath}")
+        directory, protected, legacy_source, expected = self._resolve_recording_source(filename, process_name)
+        if protected is None or directory is None:
+            raise RuntimeError(f"Recording not found: {expected}")
+        try:
+            raw = protected.read_all()
+            is_gzip = protected.name.endswith(".gz")
+            protected.close()
+            directory.close()
+            text = gzip.decompress(raw).decode("utf-8") if is_gzip else raw.decode("utf-8")
+        except Exception:
+            if not protected.closed:
+                protected.close()
+            if not directory.closed:
+                directory.close()
+            raise
 
-        offset = 0
-        limit = None
-        if opts is not None:
-            off_val = opts["offset"]
-            if off_val is not None:
-                offset = int(off_val)
-            lim_val = opts["limit"]
-            if lim_val is not None:
-                limit = int(lim_val)
-
+        offset = int(opts["offset"] or 0) if opts is not None else 0
+        limit_value = opts["limit"] if opts is not None else None
+        limit = int(limit_value) if limit_value is not None else None
         packets = []
-        line_num = 0
-        opener = gzip.open if str(filepath).endswith(".gz") else open
-        with opener(filepath, "rt", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                if line_num < offset:
-                    line_num += 1
-                    continue
-                if limit is not None and len(packets) >= limit:
-                    break
-                record = json.loads(line)
-                pkt = self._deserialize_packet(record)
-                packets.append(pkt)
-                line_num += 1
-
-        return self._table(*packets)
+        line_number = 0
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line_number < offset:
+                line_number += 1
+                continue
+            if limit is not None and len(packets) >= limit:
+                break
+            packets.append(self._deserialize_packet(json.loads(line)))
+            line_number += 1
+        result = self._table(*packets)
+        if legacy_source:
+            result["legacy_source"] = True
+            self._warn_legacy_recording("loadRecording", protected.path)
+        return result
 
     def _deserialize_packet(self, record: dict):
         """Reconstruct a Lua packet table from a JSON record."""
-        pkt = {}
-        for k, v in record.items():
-            if k == "data_hex":
-                continue
-            pkt[k] = v
-
-        if "data_hex" in record and record["data_hex"]:
-            data_bytes = bytes(int(b, 16) for b in record["data_hex"].split())
-            pkt["data"] = self._table(*data_bytes)
-            preview_len = min(len(data_bytes), 256)
-            pkt["data_hex"] = " ".join(f"{b:02X}" for b in data_bytes[:preview_len])
-            pkt["data_ascii"] = "".join(chr(b) if 32 <= b < 127 else "." for b in data_bytes[:preview_len])
-
-        return self._table(**pkt)
+        packet = {key: value for key, value in record.items() if key != "data_hex"}
+        if record.get("data_hex"):
+            data = bytes(int(byte, 16) for byte in record["data_hex"].split())
+            packet["data"] = self._table(*data)
+            preview = data[:256]
+            packet["data_hex"] = " ".join(f"{byte:02X}" for byte in preview)
+            packet["data_ascii"] = "".join(chr(byte) if 32 <= byte < 127 else "." for byte in preview)
+        return self._table(**packet)
 
     def _resolve_recording_path(self, filename, process_name: str) -> Path:
-        """Resolve recording filename to full path. Auto-detects .jsonl.gz if .jsonl not found."""
-        filename = str(filename)
-        if not filename.endswith(".jsonl") and not filename.endswith(".jsonl.gz"):
-            filename += ".jsonl"
-        path = Path("scripts") / process_name / "recordings" / filename
-        if not path.exists() and not filename.endswith(".gz"):
-            gz_path = path.with_suffix(path.suffix + ".gz")
-            if gz_path.exists():
-                return gz_path
+        """Compatibility resolver that validates the selected source before returning its path."""
+        directory, protected, _legacy, expected = self._resolve_recording_source(filename, process_name)
+        if protected is None or directory is None:
+            return expected
+        path = protected.path
+        protected.close()
+        directory.close()
         return path
 
-    def _list_recordings(self, process=None):
-        """Lua: listRecordings(process?) -> [{filename, path, size_kb, entries, date}, ...]
-
-        List saved recordings. If process is nil, lists for current process.
-        Use process='*' to list all recordings across all processes.
-        """
-        if process == "*":
-            rec_base = Path("scripts")
-            if not rec_base.exists():
-                return self._table()
-            recordings = []
-            for proc_dir in sorted(rec_base.iterdir()):
-                rec_dir = proc_dir / "recordings"
-                if rec_dir.exists():
-                    recordings.extend(self._scan_recording_dir(rec_dir, proc_dir.name))
-            return self._table(*recordings)
-
-        process_name = str(process) if process else (self._session.target_process or "unknown")
-        rec_dir = Path("scripts") / process_name / "recordings"
-        if not rec_dir.exists():
-            return self._table()
-
-        return self._table(*self._scan_recording_dir(rec_dir, process_name))
-
-    def _scan_recording_dir(self, rec_dir: Path, process_name: str) -> list:
-        """Scan a recordings directory and return metadata list."""
-        recordings = []
-        files = sorted(list(rec_dir.glob("*.jsonl")) + list(rec_dir.glob("*.jsonl.gz")))
-        for f in files:
-            stat = f.stat()
-            name = f.name
-            if name.endswith(".jsonl.gz"):
-                display_name = name[: -len(".jsonl.gz")]
-                compressed = True
-                entry_count = None  # counting requires full decompression
-            elif name.endswith(".jsonl"):
-                display_name = name[: -len(".jsonl")]
-                compressed = False
-                with open(f, encoding="utf-8") as fh:
-                    entry_count = sum(1 for line in fh if line.strip())
-            else:
-                continue
-
-            recordings.append(
-                self._table(
-                    filename=display_name,
-                    process=process_name,
-                    path=str(f),
-                    size_kb=round(stat.st_size / 1024, 1),
-                    entries=entry_count,
-                    compressed=compressed,
-                    date=time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime)),
-                )
+    def _warn_legacy_recording(self, operation: str, filepath: Path) -> None:
+        if self._log_error is not None:
+            self._log_error(
+                operation,
+                RuntimeError(f"NETCAP_LEGACY_RECORDING_PATH: using read-only legacy recording at {filepath}"),
             )
+
+    def _list_recordings(self, process=None):
+        """List canonical recordings, then unshadowed read-only legacy recordings."""
+        process_filter = "*" if process == "*" else str(process or (self._session.target_process or "unknown"))
+        if process_filter != "*":
+            validate_component(process_filter, label="process name")
+        selected = {}
+        for entry in self._recording_entries(Path(SCRIPTS_DIR), process_filter, legacy_source=False):
+            selected[(entry["process"].casefold(), entry["filename"].casefold())] = entry
+        legacy_selected = False
+        legacy = Path.cwd() / "scripts"
+        if not same_path(legacy, SCRIPTS_DIR):
+            for entry in self._recording_entries(legacy, process_filter, legacy_source=True):
+                key = (entry["process"].casefold(), entry["filename"].casefold())
+                if key not in selected:
+                    selected[key] = entry
+                    legacy_selected = True
+        recordings = sorted(
+            selected.values(),
+            key=lambda item: (
+                item["process"].casefold(),
+                item["filename"].casefold(),
+                item["process"],
+                item["filename"],
+            ),
+        )
+        if legacy_selected:
+            first = next(entry for entry in recordings if entry.get("legacy_source") is True)
+            self._warn_legacy_recording("listRecordings", Path(first["path"]))
+        return self._table(*recordings)
+
+    def _recording_entries(self, scripts_root: Path, process_filter: str, *, legacy_source: bool) -> list:
+        if process_filter != "*":
+            directory = acquire_recording_directory(scripts_root, process_filter, create=False)
+            if directory is None:
+                return []
+            try:
+                return self._scan_recording_dir(directory, process_filter, legacy_source=legacy_source)
+            finally:
+                directory.close()
+
+        base = acquire_directory(scripts_root, create=False)
+        if base is None:
+            return []
+        try:
+            process_names = []
+            for process_name in sorted(base.names(), key=lambda name: (name.casefold(), name)):
+                validate_component(process_name, label="process name")
+                if base.child_is_directory(process_name):
+                    process_names.append(process_name)
+        finally:
+            base.close()
+        recordings = []
+        for process_name in process_names:
+            directory = acquire_recording_directory(scripts_root, process_name, create=False)
+            if directory is None:
+                continue
+            try:
+                recordings.extend(self._scan_recording_dir(directory, process_name, legacy_source=legacy_source))
+            finally:
+                directory.close()
+        return recordings
+
+    def _scan_recording_dir(
+        self, directory: RecordingDirectory, process_name: str, *, legacy_source: bool = False
+    ) -> list:
+        candidates = []
+        for name in directory.names():
+            validate_component(name, label="recording filename")
+            folded = name.casefold()
+            if folded.endswith(".jsonl.gz"):
+                candidates.append((name[: -len(".jsonl.gz")], True, name))
+            elif folded.endswith(".jsonl"):
+                candidates.append((name[: -len(".jsonl")], False, name))
+        candidates.sort(key=lambda item: (item[0].casefold(), item[1], item[0], item[2]))
+        seen = set()
+        recordings = []
+        for display_name, compressed, name in candidates:
+            key = display_name.casefold()
+            if key in seen:
+                continue
+            protected = directory.open_existing(name)
+            if protected is None:
+                continue
+            try:
+                metadata = protected.metadata()
+                entry_count = None
+                if not compressed:
+                    entry_count = sum(1 for line in protected.read_all().splitlines() if line.strip())
+            finally:
+                protected.close()
+            values = {
+                "filename": display_name,
+                "process": process_name,
+                "path": str(directory.path / name),
+                "size_kb": round(metadata.size / 1024, 1),
+                "entries": entry_count,
+                "compressed": compressed,
+                "date": time.strftime("%Y-%m-%d %H:%M", time.localtime(metadata.modified)),
+            }
+            if legacy_source:
+                values["legacy_source"] = True
+            recordings.append(self._table(**values))
+            seen.add(key)
         return recordings

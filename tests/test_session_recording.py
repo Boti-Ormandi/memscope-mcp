@@ -17,7 +17,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from memscope_mcp._contrib.plugins import netcap as netcap_module
 from memscope_mcp._contrib.plugins.netcap import NetcapPlugin
+
+
+@pytest.fixture(autouse=True)
+def isolated_recording_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(netcap_module, "SCRIPTS_DIR", tmp_path / "scripts")
+
 
 # ==================== Helpers ====================
 
@@ -155,6 +162,251 @@ class TestStartRecording:
         assert result["filename"] == "already.jsonl"
         assert not result["filename"].endswith(".jsonl.jsonl")
         plugin._recording_file.close()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(1, id="integer-one"),
+        pytest.param(0, id="integer-zero"),
+        pytest.param("false", id="string-false"),
+        pytest.param("", id="empty-string"),
+        pytest.param([], id="list"),
+        pytest.param({}, id="dict"),
+        pytest.param(1.5, id="float"),
+        pytest.param(b"false", id="bytes"),
+        pytest.param(lambda: None, id="callable"),
+        pytest.param(make_table(), id="lua-empty-table"),
+        pytest.param(make_table(1, 2), id="lua-sequence-table"),
+    ],
+)
+def test_invalid_compress_is_rejected_before_any_recording_mutation(tmp_path, monkeypatch, value):
+    monkeypatch.chdir(tmp_path)
+    plugin = make_plugin()
+    plugin._session.target_process = "TestGame.exe"
+
+    class CleanupOwner:
+        closed = False
+        calls = 0
+
+        def close(self):
+            self.calls += 1
+            self.closed = True
+
+    owner = CleanupOwner()
+    cleanup_queue = [owner]
+    plugin._recording_cleanup = cleanup_queue
+    state_before = (
+        plugin._recording_file,
+        plugin._recording_path,
+        plugin._recording_count,
+        plugin._recording_start,
+        plugin._recording_compress,
+        plugin._recording_max_size,
+        plugin._recording_base_name,
+        plugin._recording_part,
+        plugin._recording_dir,
+    )
+
+    with patch.object(plugin, "_drain_recording_cleanup", wraps=plugin._drain_recording_cleanup) as drain:
+        with pytest.raises(TypeError, match=r"^compress must be a bool$"):
+            plugin._start_recording("invalid-compress", make_table(compress=value))
+
+    drain.assert_not_called()
+    assert owner.calls == 0
+    assert plugin._recording_cleanup is cleanup_queue
+    assert (
+        plugin._recording_file,
+        plugin._recording_path,
+        plugin._recording_count,
+        plugin._recording_start,
+        plugin._recording_compress,
+        plugin._recording_max_size,
+        plugin._recording_base_name,
+        plugin._recording_part,
+        plugin._recording_dir,
+    ) == state_before
+    assert not (tmp_path / "scripts").exists()
+
+    result = plugin._start_recording("valid-after-invalid", make_table(compress=False))
+    plugin._record_packets([make_packet(data=b"ok")])
+    stopped = plugin._stop_recording()
+    assert stopped["path"] == result["path"]
+    assert Path(stopped["path"]).exists()
+
+
+def test_invalid_compress_never_invokes_user_bool(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    plugin = make_plugin()
+    plugin._session.target_process = "TestGame.exe"
+
+    class CallableBoolProbe:
+        def __init__(self):
+            self.bool_calls = 0
+
+        def __call__(self):
+            return True
+
+        def __bool__(self):
+            self.bool_calls += 1
+            raise AssertionError("__bool__ must not be called")
+
+    probe = CallableBoolProbe()
+    with pytest.raises(TypeError, match=r"^compress must be a bool$"):
+        plugin._start_recording("probe", make_table(compress=probe))
+
+    assert probe.bool_calls == 0
+    assert not (tmp_path / "scripts").exists()
+
+
+@pytest.mark.parametrize(
+    ("opts", "expected"),
+    [
+        pytest.param(None, False, id="no-options"),
+        pytest.param(make_table(), False, id="compress-absent"),
+        pytest.param(make_table(compress=None), False, id="compress-none"),
+        pytest.param(make_table(compress=False), False, id="compress-false"),
+        pytest.param(make_table(compress=True), True, id="compress-true"),
+    ],
+)
+def test_compress_exact_bool_and_default_values_preserve_full_lifecycle(tmp_path, monkeypatch, opts, expected):
+    monkeypatch.chdir(tmp_path)
+    plugin = make_plugin()
+    plugin._session.target_process = "TestGame.exe"
+
+    plugin._start_recording("accepted-compress", opts)
+    assert plugin._recording_compress is expected
+    plugin._record_packets([make_packet(data=b"ok")])
+    stopped = plugin._stop_recording()
+
+    assert stopped["compressed"] is expected
+    assert Path(stopped["path"]).exists()
+
+
+@pytest.mark.parametrize(
+    "max_size_mb",
+    [
+        pytest.param(1, id="valid-size"),
+        pytest.param(float("nan"), id="invalid-size"),
+    ],
+)
+def test_invalid_compress_validation_precedes_max_size_and_component_validation(tmp_path, monkeypatch, max_size_mb):
+    monkeypatch.chdir(tmp_path)
+    plugin = make_plugin()
+    plugin._session.target_process = ".."
+
+    with patch.object(
+        netcap_module, "_parse_recording_max_size_mb", wraps=netcap_module._parse_recording_max_size_mb
+    ) as parse:
+        with pytest.raises(TypeError, match=r"^compress must be a bool$"):
+            plugin._start_recording("..\\escape", make_table(compress="false", max_size_mb=max_size_mb))
+
+    parse.assert_not_called()
+    assert not (tmp_path / "scripts").exists()
+
+
+def test_invalid_max_size_still_precedes_component_validation_and_cleanup(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    plugin = make_plugin()
+    plugin._session.target_process = ".."
+    drain = MagicMock(side_effect=AssertionError("cleanup must not run"))
+    plugin._drain_recording_cleanup = drain
+
+    with pytest.raises(ValueError, match="max_size_mb"):
+        plugin._start_recording("..\\escape", make_table(compress=False, max_size_mb=float("nan")))
+
+    drain.assert_not_called()
+    assert not (tmp_path / "scripts").exists()
+
+
+def test_active_recording_guard_precedes_option_validation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    plugin = make_plugin()
+    plugin._session.target_process = "TestGame.exe"
+    plugin._start_recording("first")
+
+    with pytest.raises(RuntimeError, match="Recording already active"):
+        plugin._start_recording("second", make_table(compress="false", max_size_mb=float("nan")))
+
+    plugin._stop_recording()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+        pytest.param(0, id="zero"),
+        pytest.param(-1, id="negative"),
+        pytest.param(5e-324, id="underflow-to-zero-bytes"),
+        pytest.param(1 << 43, id="signed-byte-threshold-overflow"),
+        pytest.param(1e308, id="extreme-float"),
+        pytest.param("1", id="string"),
+        pytest.param(True, id="true-boolean"),
+        pytest.param(False, id="false-boolean"),
+        pytest.param(object(), id="unrelated-object"),
+    ],
+)
+def test_invalid_max_size_is_rejected_before_filesystem_mutation_and_state_commit(tmp_path, monkeypatch, value):
+    monkeypatch.chdir(tmp_path)
+    plugin = make_plugin()
+    plugin._session.target_process = "TestGame.exe"
+
+    with pytest.raises((TypeError, ValueError)):
+        plugin._start_recording("invalid-size", make_table(max_size_mb=value))
+
+    assert not (tmp_path / "scripts").exists()
+    assert plugin._recording_file is None
+    assert plugin._recording_dir is None
+    assert plugin._recording_path is None
+    assert plugin._recording_max_size is None
+    assert plugin._recording_part == 1
+
+
+def test_invalid_max_size_is_rejected_before_pending_cleanup_is_touched(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    plugin = make_plugin()
+    plugin._session.target_process = "TestGame.exe"
+
+    class CleanupOwner:
+        closed = False
+        calls = 0
+
+        def close(self):
+            self.calls += 1
+            self.closed = True
+
+    owner = CleanupOwner()
+    plugin._recording_cleanup = [owner]
+
+    with pytest.raises(ValueError):
+        plugin._start_recording("invalid-size", make_table(max_size_mb=float("nan")))
+
+    assert owner.calls == 0
+    assert plugin._recording_cleanup == [owner]
+    assert not (tmp_path / "scripts").exists()
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_bytes"),
+    [
+        pytest.param(1, 1024 * 1024, id="integer"),
+        pytest.param(0.5, 512 * 1024, id="float"),
+    ],
+)
+def test_valid_max_size_preserves_recording_behavior(tmp_path, monkeypatch, value, expected_bytes):
+    monkeypatch.chdir(tmp_path)
+    plugin = make_plugin()
+    plugin._session.target_process = "TestGame.exe"
+    result = plugin._start_recording("valid-size", make_table(max_size_mb=value))
+
+    assert plugin._recording_max_size == expected_bytes
+    plugin._record_packets([make_packet(data=b"ok")])
+    stopped = plugin._stop_recording()
+    assert stopped["path"] == result["path"]
+    assert stopped["parts"] == 1
+    assert Path(stopped["path"]).exists()
 
 
 # ==================== _record_packets / _serialize_packet ====================
