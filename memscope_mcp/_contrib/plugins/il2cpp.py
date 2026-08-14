@@ -56,7 +56,7 @@ local dict = readIL2CppDict(addr, "int32", "ptr", 50)
 
 ### Thread Attachment
 IL2CPP API calls CRASH without thread attachment. The attachment is thread-local,
-so you MUST use call_sequence to run attach + API calls in the same thread:
+so you MUST use `callSequence` to run attach + API calls in the same thread:
 
 ```lua
 -- Resolve il2cpp_thread_attach and the appdomain pointer dynamically

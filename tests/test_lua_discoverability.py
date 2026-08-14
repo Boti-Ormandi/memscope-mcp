@@ -344,3 +344,24 @@ def test_legacy_module_readers_preserve_duplicate_address_semantics(monkeypatch)
     }
     assert get_module_for_address(0x100010, session=server.SESSION) is None
     assert get_module_for_address(0x200010, session=server.SESSION) == ("DUP.dll", 0x10)
+
+
+def test_runtime_guidance_spells_lua_api_call_sequence_exactly():
+    """Base and bundled IL2CPP guidance must teach the exported Lua API name.
+
+    The Lua runtime registers and executes `callSequence`; prose guidance must
+    use the exact backticked spelling and never the Python helper function name.
+    """
+    from memscope_mcp._contrib.plugins.il2cpp import IL2CppPlugin
+    from memscope_mcp.instructions.base import BASE_INSTRUCTIONS
+
+    fragments = {
+        "base": BASE_INSTRUCTIONS,
+        "bundled_il2cpp": IL2CppPlugin.instructions,
+    }
+    for name, fragment in fragments.items():
+        assert "`callSequence`" in fragment, name
+        assert "callSequence({" in fragment, name
+        assert "call_sequence" not in fragment, name
+
+    assert LUA_ENGINE._function_registry["callSequence"] == "execution"

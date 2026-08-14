@@ -35,7 +35,7 @@ local ptr = 0x1F58E12ECF0
 
 ### Thread-Local APIs
 Some runtime APIs (like thread_attach) only affect the calling thread.
-Use `call_sequence` to run multiple calls in the same thread:
+Use `callSequence` to run multiple calls in the same thread:
 ```lua
 callSequence({
     {address=thread_attach, args={domain}},
