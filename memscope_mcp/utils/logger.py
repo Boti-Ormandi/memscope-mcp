@@ -91,6 +91,14 @@ class MCPLogger:
 
         return self._file_handle
 
+    def _append_raw_event(self, event: Mapping[str, Any]) -> None:
+        """Append one already-bounded structured event to the session JSONL file."""
+
+        line = json.dumps(event, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        handle = self._get_handle()
+        handle.write(line + "\n")
+        handle.flush()
+
     def _maybe_cleanup(self):
         """Run cleanup if not done recently (once per day max)."""
         now = datetime.now()

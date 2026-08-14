@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Memscope Plugin Diagnostic v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "severity",
+    "code",
+    "plugin",
+    "cause",
+    "guidance",
+    "channel"
+  ],
+  "properties": {
+    "schema": {
+      "const": "memscope-plugin-diagnostic/v1"
+    },
+    "severity": {
+      "const": "warning"
+    },
+    "code": {
+      "enum": [
+        "PLUGIN_LOAD_FAILED",
+        "PLUGIN_CONTEXT_INCOMPATIBLE"
+      ]
+    },
+    "plugin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filename",
+        "declared_name"
+      ],
+      "properties": {
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^(?!\\.{1,2}$)[^/\\\\:]+$"
+        },
+        "declared_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "cause": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "message"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "guidance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "required_context_fields"
+      ],
+      "properties": {
+        "url": {
+          "const": "https://memscope.esrc.dev/plugins/upgrading/"
+        },
+        "required_context_fields": {
+          "const": [
+            "ctx.session",
+            "ctx.table_factory",
+            "ctx.hook_manager"
+          ]
+        }
+      }
+    },
+    "channel": {
+      "enum": [
+        "stderr",
+        "session_log"
+      ]
+    }
+  }
+}

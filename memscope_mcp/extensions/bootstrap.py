@@ -10,7 +10,8 @@ from typing import Any
 
 from ..extensions.base import ExtensionContext, LuaExtension
 from ..extensions.core import CORE_EXTENSIONS
-from ..plugins import load_plugins
+from ..plugins import _get_plugin_metadata, load_plugins
+from ..plugins.diagnostics import emit_plugin_failure
 from ..session import DebugSession
 from ..tools.hooking import HookManager
 
@@ -47,6 +48,7 @@ def bootstrap_extensions(
         detach_names = set(existing_detach)
 
         extensions: list[LuaExtension] = []
+        extension_names: set[str] = set()
         attach_callbacks: dict[str, Callable[..., Any]] = {}
         detach_callbacks: dict[str, Callable[..., Any]] = {}
 
@@ -56,6 +58,7 @@ def bootstrap_extensions(
                 extension = ext_cls()
                 name = _extension_name(extension)
                 label = name
+                _require_unique_extension_name(name, extension_names)
                 prepared = transaction.prepare_functions(name, extension.register(ctx))
                 on_attach, on_detach = _prepare_lifecycle(
                     extension,
@@ -78,13 +81,18 @@ def bootstrap_extensions(
                 attach_callbacks,
                 detach_callbacks,
             )
+            extension_names.add(name)
             extensions.append(extension)
 
-        for plugin in load_plugins():
-            label = type(plugin).__name__
+        plugins = load_plugins()
+        for plugin in plugins:
+            metadata = _get_plugin_metadata(plugins, plugin)
+            label = metadata.declared_name or type(plugin).__name__
+            name: str | None = None
             try:
                 name = _extension_name(plugin)
                 label = name
+                _require_unique_extension_name(name, extension_names)
                 prepared = transaction.prepare_functions(name, plugin.register(ctx))
                 on_attach, on_detach = _prepare_lifecycle(
                     plugin,
@@ -97,7 +105,12 @@ def bootstrap_extensions(
                 # cannot strand an accepted plugin mapping without callbacks.
                 logger.info("Plugin '%s' registered (%d functions)", name, function_count)
             except Exception as exc:
-                _log_plugin_failure(label, exc)
+                emit_plugin_failure(
+                    filename=metadata.filename,
+                    declared_name=name or metadata.declared_name,
+                    exc=exc,
+                    source_path=metadata.source_path,
+                )
                 continue
 
             transaction.accept_functions(prepared)
@@ -110,6 +123,7 @@ def bootstrap_extensions(
                 attach_callbacks,
                 detach_callbacks,
             )
+            extension_names.add(name)
             extensions.append(plugin)
 
         transaction.commit(session, attach_callbacks, detach_callbacks)
@@ -118,9 +132,14 @@ def bootstrap_extensions(
 
 def _extension_name(extension: LuaExtension) -> str:
     name = extension.name
-    if not isinstance(name, str) or not name:
+    if not isinstance(name, str) or str.__len__(name) == 0:
         raise TypeError("Extension name must be a non-empty string")
-    return name
+    return bytes.decode(str.encode(name, "utf-8", errors="replace"), "utf-8")
+
+
+def _require_unique_extension_name(name: str, existing_names: set[str]) -> None:
+    if name in existing_names:
+        raise ValueError(f"Extension name '{name}' is already registered")
 
 
 def _prepare_lifecycle(
@@ -166,12 +185,3 @@ def _accept_lifecycle(
     if on_detach is not None:
         detach_names.add(name)
         detach_callbacks[name] = on_detach
-
-
-def _log_plugin_failure(label: str, exc: Exception) -> None:
-    try:
-        logger.warning("Plugin '%s' registration failed: %s", label, exc)
-    except Exception:
-        # A broken logging handler must not promote an otherwise isolated plugin
-        # Exception into a claimed-composition failure.
-        pass

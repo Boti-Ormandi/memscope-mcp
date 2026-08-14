@@ -34,6 +34,28 @@ EXPECTED_INVALID_SCAN = {
 }
 
 
+def _assert_initialize_config_shape(client: Client) -> None:
+    assert isinstance(client.protocol_version, str) and client.protocol_version
+    server_info = client.server_info
+    assert server_info is not None
+    assert server_info.name == "memscope-mcp"
+    assert server_info.version == ""
+    assert server_info.title is None
+    assert server_info.description is None
+    assert server_info.website_url is None
+    assert server_info.icons is None
+
+    capabilities = client.server_capabilities
+    assert capabilities.tools is not None
+    assert capabilities.prompts is not None
+    assert capabilities.resources is not None
+    assert capabilities.logging is None
+    assert capabilities.completions is None
+    assert not capabilities.extensions
+    assert isinstance(client.instructions, str)
+    assert "Session log: " in client.instructions
+
+
 def _memscope_executable() -> str:
     executable_name = "memscope-mcp.exe" if os.name == "nt" else "memscope-mcp"
     adjacent = Path(sys.executable).with_name(executable_name)
@@ -57,7 +79,9 @@ async def _exercise_stdio(tmp_path: Path, *, mode: str | None) -> None:
     client = Client(transport) if mode is None else Client(transport, mode=mode)
 
     async with client:
+        _assert_initialize_config_shape(client)
         listed = await client.list_tools()
+        assert len(listed.tools) == 11
         assert {tool.name for tool in listed.tools} == EXPECTED_TOOLS
 
         invalid = await client.call_tool("scan", {"pattern": "AA", "offset": 1})

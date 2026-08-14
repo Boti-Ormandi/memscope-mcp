@@ -3,6 +3,7 @@
 import memscope_mcp.server as server
 from memscope_mcp.attachment import ModuleRecord, ModuleSnapshot, normalize_module_name
 from memscope_mcp.extensions.core.module_scan import ModuleScanExtension
+from memscope_mcp.session import DebugSession
 from memscope_mcp.tools.lua.engine import LUA_ENGINE
 from memscope_mcp.utils.memory_utils import get_module_for_address
 
@@ -91,6 +92,15 @@ def test_list_lua_functions_reports_names_and_owner_filter():
     assert result["results"]["found_addr"] is True
     assert result["results"]["found_capabilities"] is True
     assert result["results"]["all_general"] is True
+
+
+def test_legacy_open_process_remains_registered_without_raw_runtime_access():
+    result = LUA_ENGINE.execute("return openProcess ~= nil")
+
+    assert result["success"] is True
+    assert result["results"]["return"] is True
+    assert LUA_ENGINE._function_registry["openProcess"] == "process"
+    assert not hasattr(LUA_ENGINE, "lua")
 
 
 def test_get_loaded_extensions_preserves_first_seen_owner_order():
@@ -189,6 +199,25 @@ def test_get_capabilities_includes_attached_process_info(monkeypatch):
         "module_count": 2,
         "process_module_count": 2,
     }
+
+
+def test_debug_session_modules_preserves_detached_dictionary_compatibility():
+    session = DebugSession()
+    snapshot = _module_snapshot(("legacy.dll", 0x1000, 0x200, r"C:\\Target\\legacy.dll"))
+    session._module_snapshot = snapshot
+
+    modules = session.modules
+
+    assert isinstance(modules, dict)
+    assert modules == {
+        "legacy.dll": {
+            "base": 0x1000,
+            "size": 0x200,
+            "path": r"C:\\Target\\legacy.dll",
+        }
+    }
+    modules["legacy.dll"]["base"] = 0xDEADBEEF
+    assert session.modules["legacy.dll"]["base"] == 0x1000
 
 
 def test_legacy_module_readers_preserve_duplicate_address_semantics(monkeypatch):
