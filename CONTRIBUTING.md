@@ -1,122 +1,107 @@
 # Contributing to memscope-mcp
 
-Small focused PRs welcome. For anything large or speculative, open an issue first.
+Contributions target Windows reverse engineers, live-process researchers, native Windows users, and MCP integrators. Keep changes focused, document the user-facing contract, and use only processes and data that you own or are authorized to inspect. Open an issue before a large or speculative change.
 
 ## Development setup
 
-Windows x64 + Python 3.10+ are required. The `pymem` dependency is Windows-only and is skipped via an environment marker on other platforms; the package installs on macOS and Linux but `import memscope_mcp` raises `RuntimeError` there.
+Use a Windows x64 checkout with 64-bit Python 3.10 or newer. The `pymem` dependency is Windows-specific. Create a virtual environment if the project workflow uses one, then install the editable package with development dependencies:
 
-```bash
+```powershell
 git clone https://github.com/Boti-Ormandi/memscope-mcp.git
-cd memscope-mcp
-pip install -e ".[dev]"
+Set-Location memscope-mcp
+python -m pip install -e ".[dev]"
 pre-commit install
+```
+
+Run the focused gates from the repository root:
+
+```powershell
 pytest tests/ -v
 ruff check memscope_mcp/ tests/ benchmarks/
 ruff format --check memscope_mcp/ tests/ benchmarks/
 ```
 
-Pre-commit runs `ruff check --fix` and `ruff format` on every commit. CI runs the same checks plus the full pytest suite on Python 3.10 through 3.14.
+Pre-commit runs the configured Ruff checks and formatting. CI runs the same style checks and the test suite on the supported Python versions.
 
-### Dev workflow note: MEMSCOPE_HOME
+### Use a disposable data root
 
-By default, logs and saved Lua scripts land in `~/.memscope-mcp/`. If you want
-artefacts to land next to the cloned repository instead, set `MEMSCOPE_HOME=$PWD`
-in your shell before starting the server.
+Never use the repository root as `MEMSCOPE_HOME`. Keep logs, scripts, plugins, and recordings outside the checkout:
 
-## Project layout
+```powershell
+$env:MEMSCOPE_HOME = Join-Path $env:TEMP "memscope-mcp-dev-home"
+New-Item -ItemType Directory -Force $env:MEMSCOPE_HOME | Out-Null
+memscope-mcp paths
+```
 
-The full repository layout lives in [`docs/architecture.md`](docs/architecture.md). The pieces you'll actually touch:
+Use a fresh temporary root for tests that exercise plugin activation or Netcap recording. Remove the temporary root only after confirming it contains no data you need.
 
-- [`memscope_mcp/server.py`](memscope_mcp/server.py) -- `@mcp.tool()` wrappers (one per MCP tool)
-- [`memscope_mcp/scanning/`](memscope_mcp/scanning/) -- internal strict scan contracts, authenticated continuation state, attachment snapshots and leases, scope normalization, remote PE-section resolution, `VirtualQueryEx` planning, bounded reads, one-pass batch execution, hybrid matching, bounded result collectors, and cancellation-safe worker adapters (not a supported public Python API)
-- [`memscope_mcp/tools/`](memscope_mcp/tools/) -- non-scanning tool implementations (`memory.py`, `pointers.py`, `types.py`, `execute.py`, `hooking.py`, `lua_scripts.py`)
-- [`memscope_mcp/tools/lua/`](memscope_mcp/tools/lua/) -- Lua engine (`engine.py`) plus themed function modules: `memory_read`, `memory_write`, `process_info`, `struct_helpers`, `modules`, `code_execution`, `comparisons`, `utilities`, `hooking`, `network`
-- [`memscope_mcp/extensions/`](memscope_mcp/extensions/) -- `LuaExtension` ABC + bootstrap + the seven core extensions under `core/`
-- [`memscope_mcp/utils/`](memscope_mcp/utils/) -- address parsing, heuristics, x64 shellcode (`shellcode.py`), instruction decoder + relocator (`disasm.py`), PE export resolver (`pe.py`), PEB reader (`peb.py`)
-- [`memscope_mcp/instructions/base.py`](memscope_mcp/instructions/base.py) -- AI-facing Lua reference (token-priced, kept terse)
-- [`docs/lua-reference.md`](docs/lua-reference.md) -- human-facing Lua reference (complete)
-- [`docs/hooking.md`](docs/hooking.md) and [`docs/peb.md`](docs/peb.md) -- design docs for the hooking and PEB-introspection layers
-- [`memscope_mcp/_contrib/plugins/`](memscope_mcp/_contrib/plugins/) -- bundled reference plugins (il2cpp, netcap)
-- [`tests/`](tests/) -- pytest suite, smoke + unit + extension/hook/netcap/PEB coverage
-- [`benchmarks/scanning/`](benchmarks/scanning/) -- deterministic scanning corpora, stable case manifests, raw evidence schemas, and benchmark runners (not installed with the package)
+## Repository layout
+
+- [`memscope_mcp/server.py`](memscope_mcp/server.py) — the 11 MCP tool registrations and stdio entry point.
+- [`memscope_mcp/boundary.py`](memscope_mcp/boundary.py) — strict scan-model MCP boundary.
+- [`memscope_mcp/session.py`](memscope_mcp/session.py) — process attachment, module snapshots, leases, lifecycle, and target memory primitives.
+- [`memscope_mcp/scanning/`](memscope_mcp/scanning/) — strict scan contracts and bounded execution internals.
+- [`memscope_mcp/tools/`](memscope_mcp/tools/) — typed memory, dumps, pointer chains, Lua execution, scripts, and hooks.
+- [`memscope_mcp/extensions/`](memscope_mcp/extensions/) — `LuaExtension`, bootstrap, and the seven core extensions.
+- [`memscope_mcp/_contrib/plugins/`](memscope_mcp/_contrib/plugins/) — bundled reference plugin sources.
+- [`docs/`](docs/) — evergreen human-facing product content and reference material.
+- [`tests/`](tests/) — unit, smoke, extension, hook, scan, and plugin coverage.
+
+The complete navigation and source-of-truth boundaries are in [`docs/architecture.md`](docs/architecture.md) and [`docs/site-routes.md`](docs/site-routes.md).
 
 ## Adding an MCP tool
 
-1. Implement in `memscope_mcp/tools/<your_tool>.py`. Follow patterns in `types.py`; strict scan tools use the models and boundary adapter under `memscope_mcp/scanning/`.
-2. Wrap with `@mcp.tool()` in `memscope_mcp/server.py`. Call `_log()` so the tool call lands in session logs.
-3. Keep the docstring terse — it becomes AI-facing context and costs tokens. List parameters, types, and return shape.
-4. Update `tests/test_smoke.py`: add the tool name to `test_tool_names` and bump `test_tool_count`. This test pins the 11-tool surface; forgetting it makes the smoke test fail immediately.
-5. Add the tool to the README tool table.
+The public MCP surface is intentionally exactly 11 tools. A new tool changes that contract and requires an explicit product decision. For an accepted tool change:
 
-## Adding a Lua function
+1. Implement the behavior under `memscope_mcp/tools/` or the strict scan boundary.
+2. Register the wrapper in [`memscope_mcp/server.py`](memscope_mcp/server.py) and keep the business function synchronous unless the boundary requires otherwise.
+3. Keep the tool description and result envelope precise.
+4. Update smoke coverage for the tool name and count.
+5. Update [`README.md`](README.md) and [`docs/reference/mcp-tools.md`](docs/reference/mcp-tools.md).
+6. Add task-first and reference documentation without creating a second conflicting full contract.
 
-Lua functions live inside extensions. Pick the right extension first.
+## Adding Lua functions or a core extension
 
-1. Pick the extension by category:
-   - Reads -> `core/memory.py` (which dispatches to `tools/lua/memory_read.py`)
-   - Writes -> `core/memory.py` (`tools/lua/memory_write.py`)
-   - AOB / xref scans, module/address resolution -> `core/module_scan.py` (the strict adapter in `scanning/lua.py` plus `tools/lua/modules.py`)
-   - Vector / matrix / declarative struct reads, comparisons, bitwise, formatting -> `core/general.py` (`tools/lua/struct_helpers.py`, `tools/lua/comparisons.py`, `tools/lua/utilities.py`)
-   - Remote calls and allocation -> `core/execution.py` (`tools/lua/code_execution.py`)
-   - Pre-attach / PEB introspection -> `core/process.py` (`tools/lua/process_info.py`)
-   - Hooking primitives -> `core/hooking.py` (`tools/lua/hooking.py`)
-   - Network helpers -> `core/network.py` (`tools/lua/network.py`)
-2. Add the function to the relevant `tools/lua/*.py` module (or directly to the extension if it is tightly scoped).
-3. Add the Lua-name -> Python-callable mapping to the dict returned by the extension's `register(ctx)`.
-4. Update the extension's `instructions` string with a one-line AI-facing description (token-priced, terse).
-5. Document the function in [`docs/lua-reference.md`](docs/lua-reference.md) under the matching category and in [`memscope_mcp/instructions/base.py`](memscope_mcp/instructions/base.py) if a shared-guidance bullet is appropriate.
-6. Conventions: return `nil` on failure (don't raise), accept addresses as int or hex string (use `parse_address`), and use `ctx.table_factory(...)` only while registering an extension or from an engine-owned execution callback. The raw Lua runtime is intentionally not exposed; return ordinary scalars or tables built through the guarded factory.
+Lua functions belong to the appropriate core extension. Use the registration contract in [`docs/reference/plugin-api.md`](docs/reference/plugin-api.md) and the full [Lua reference](docs/lua-reference.md). Keep state on the extension instance or the session-owned object that owns it; do not introduce module-level session or hook-manager globals.
 
-## Adding an extension
+A core extension normally requires:
 
-A core extension is appropriate when the functionality is generic enough to be useful on any target -- memory, scanning, hooking, process introspection. A user plugin (under `plugins/`) is the right shape when the functionality is target-specific.
-
-1. Create `memscope_mcp/extensions/core/<your_ext>.py`. Subclass `LuaExtension` from `memscope_mcp/extensions/base.py`. Implement `name`, `description`, `instructions`, and `register(ctx)`. Override `on_process_attached` / `on_process_detaching` if the extension holds process-bound state (allocations, hooks).
-2. Register the class in `memscope_mcp/extensions/core/__init__.py` -- import it and add it to `CORE_EXTENSIONS` in the right position (`General` first, the rest in the order the AI is likely to encounter them).
-3. Hold cross-call state on the extension instance, not on `SESSION`.
-4. If the extension introduces a new conceptual surface, write a short `docs/<topic>.md` design doc (see [`docs/hooking.md`](docs/hooking.md) and [`docs/peb.md`](docs/peb.md) for shape and tone) and link it from the relevant subsystem section in [`docs/architecture.md`](docs/architecture.md).
-5. Add a test file under `tests/test_<your_ext>.py` covering the registration path and any non-trivial logic. `tests/test_extension_bootstrap.py` already pins ordering and the basic contract.
+1. a `LuaExtension` implementation under `memscope_mcp/extensions/core/`;
+2. registration in `CORE_EXTENSIONS` with deliberate ordering;
+3. focused tests under `tests/`;
+4. a concise AI-facing instruction fragment; and
+5. human documentation linked from the relevant guide or reference page.
 
 ## Adding a plugin
 
-The bundled reference plugins live under `memscope_mcp/_contrib/plugins/` and ship in the wheel. Users install them to `$MEMSCOPE_HOME/plugins/` (default `~/.memscope-mcp/plugins/`) via `memscope-mcp install-plugin <name>`; the loader picks up any `.py` file placed there. Reference plugins:
+Plugins are activated Python files, not automatically loaded package modules. Subclass `PluginBase`, implement `name`, `description`, `instructions`, and `register(ctx)`, and use the supported context fields `ctx.session`, `ctx.table_factory`, and `ctx.hook_manager`. Keep plugin state on the instance and use lifecycle callbacks for process-bound resources.
 
-- [`memscope_mcp/_contrib/plugins/il2cpp.py`](memscope_mcp/_contrib/plugins/il2cpp.py) -- Unity IL2CPP runtime helpers; template for managed-runtime object walking.
-- [`memscope_mcp/_contrib/plugins/netcap.py`](memscope_mcp/_contrib/plugins/netcap.py) -- Winsock capture and analysis built on the generic hooking layer; template for API-hooking + protocol parsing.
+Start with:
 
-## Code style
+- [Plugin authoring](docs/plugins/authoring.md)
+- [Plugin lifecycle](docs/plugins/lifecycle.md)
+- [Plugin API reference](docs/reference/plugin-api.md)
+- [Netcap](docs/plugins/netcap.md) as a filesystem and hook example
+- [IL2CPP](docs/plugins/il2cpp.md) as a session-bound structure-reader example
 
-Enforced by [ruff](https://docs.astral.sh/ruff/). Configuration in `pyproject.toml`:
+Add tests for activation ordering, failure isolation, context ownership, lifecycle cleanup, and every durable file behavior. Use a disposable `MEMSCOPE_HOME`; never activate a test plugin from the repository's real data location.
 
-- Line length 120
-- Rules: E, F, W, I (pycodestyle, pyflakes, isort)
-- E722 (bare `except`) is allowed: it's deliberate in memory-read paths where any failure means "return nil"
-- Type hints on public function signatures
-- Docstrings with Args/Returns on public functions
-- Delete unused code rather than leaving dead functions or helpers
+## Documentation and compatibility
 
-## Testing
+Write in present tense and describe current behavior only. Keep the exact 11-tool surface, `openProcess`, `DebugSession.modules`, plugin activation boundary, scan contract, and Netcap recording rules aligned with source and tests. Use relative links for repository content and keep canonical site routes aligned with [`docs/site-routes.md`](docs/site-routes.md).
 
-The smoke suite (`tests/test_smoke.py`) is the gating invariant: it asserts the 11-tool surface, that the Lua engine initializes, that the plugin loader runs, and that the instructions builder produces output. Most regressions show up here first.
+Retained compatibility facts belong in [`docs/support/compatibility.md`](docs/support/compatibility.md). Version-specific change notes belong in the project release materials, not in evergreen README or reference pages.
 
-Unit tests live next to features (`test_types.py`, `test_scanning.py`, `test_lua_engine.py`, etc.). Hooking and netcap have dedicated coverage in `test_disasm.py`, `test_relocation.py`, `test_hook_shellcode.py`, `test_ring_buffer.py`, `test_pe_exports.py`, `test_thread_suspension.py`, `test_netcap_plugin.py`, `test_netcap_lifecycle.py`, `test_netcap_udp.py`, `test_netcap_wsa.py`, `test_stream_assembly.py`, `test_protocol_framing.py`, `test_filter_packets.py`, `test_header_only.py`, `test_deref_args.py`, `test_hook_installation.py`, `test_cross_reference.py`, `test_session_recording.py`. The extension bootstrap is pinned by `test_extension_bootstrap.py`. PEB reading is covered by `test_peb.py` (self-process tests run in CI; explorer.exe-dependent tests skip gracefully when explorer is not running). Run a focused subset with `pytest -k <pattern>`.
+## Testing expectations
 
-`tests/conftest.py` imports `memscope_mcp.server` once at collection time so the extension bootstrap runs before any test resolves a Lua function. If a new test needs the Lua surface initialized, it relies on this import side-effect -- nothing else is required.
+The smoke suite checks imports, the 11-tool registration, Lua initialization, plugin loading, and instruction construction. Focused tests cover typed memory, scan contracts, lifecycle, hooks, PEB reads, plugins, and Netcap. Run the narrowest affected tests first, then the full suite on Windows before requesting review.
 
-The scanning reader has controlled self-process integration coverage: tests allocate pages with `VirtualAlloc`, change protections with `VirtualProtect`, and read them through a real process handle. Attaching the full tool surface to an external target is still manual because a clean GitHub Actions runner has no stable target process.
+Before requesting review, run the appropriate full Windows test suite and report any scoped failures with their causes.
 
-The deterministic matcher benchmark validates its own corpus, expected results, strategy choice, raw schema, and operation counters. Run the quick profile with `python -m benchmarks.scanning.matcher --profile smoke`. The Windows controlled-process harness exercises raw reader ceilings, production end-to-end scans, page-protection changes, filters, allocation, and chunk selection; a focused pass is `python -m benchmarks.scanning.process_scan --profile smoke --warmups 0 --repetitions 1 --case-id reader.ceiling.contiguous64m --case-id e2e.exact16.late.contiguous64m`. See [`benchmarks/scanning/README.md`](benchmarks/scanning/README.md) for the evidence contract. Run a one-block paired diagnostic with `python -m benchmarks.scanning.run --profile smoke --blocks 1 --output benchmark-results/scanning-smoke`; clean release evidence uses `python -m benchmarks.scanning.run --profile release --output benchmark-results/scanning-release`. Benchmark output belongs under the ignored `benchmark-results/` directory.
+## Release mechanics
 
-## PR checklist
-
-- `ruff check` and `ruff format --check` pass
-- `pytest` passes locally on Windows
-- README tool table updated if you added or removed an MCP tool
-- New Lua functions documented in the relevant extension's `instructions` string and in `docs/lua-reference.md`
-- New conceptual surface (a new extension category, a new design pattern) gets a short `docs/<topic>.md`
-- One logical change per commit; PR description explains the what and the why
+Maintainers review source, tests, documentation, dependency metadata, and generated distribution checks as one change. They verify a clean tree, run the required gates, prepare release notes separately from evergreen docs, and use the project's authenticated publication process. Contributors do not add credentials, publication configuration, release bodies, or package/site administration to a feature change.
 
 ## License
 
-By contributing, you agree your contributions will be licensed under the MIT License.
+By contributing, you agree that your contributions are licensed under the MIT License.

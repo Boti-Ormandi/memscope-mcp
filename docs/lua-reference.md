@@ -1,474 +1,255 @@
-# Lua Reference
+# Lua reference
 
-Complete reference for the Lua functions exposed by the memscope-mcp `lua` tool. The same surface is summarized in [`memscope_mcp/instructions/base.py`](../memscope_mcp/instructions/base.py) for AI consumption (kept terse because that text ships as the MCP `instructions` channel and is token-priced). When adding or renaming a function, update both files.
+The `lua` MCP tool executes Lua 5.4 through the private Lupa runtime. This page describes the core functions registered by the seven core extensions. Activated plugins append their own functions; see [Plugin overview](plugins/overview.md) and [Netcap](plugins/netcap.md).
 
-The Lua runtime is Lua 5.4 via [lupa](https://github.com/scoder/lupa). Address helpers like `addr("0x...")` and `getAddress("module.dll+0x1234")` accept Lua integers, hex strings, and module+offset strings. Core read/write/struct helpers generally expect a numeric address, so resolve string expressions first.
+Use numeric addresses for memory helpers. Resolve string expressions first with `addr`, `getAddress`, or `getModuleBase`.
 
 ## Contents
 
-- [Memory read](#memory-read)
-- [Bulk array reads](#bulk-array-reads)
-- [Memory write](#memory-write)
-- [Struct helpers](#struct-helpers)
-- [Module / address resolution](#module--address-resolution)
+- [Results and utilities](#results-and-utilities)
+- [Memory reads](#memory-reads)
+- [Memory writes](#memory-writes)
+- [Structures and modules](#structures-and-modules)
 - [Scanning](#scanning)
 - [Pointer chains](#pointer-chains)
 - [Code execution](#code-execution)
 - [Session management](#session-management)
 - [Hooking](#hooking)
-- [Process introspection](#process-introspection)
+- [Process and PEB inspection](#process-and-peb-inspection)
 - [Network utilities](#network-utilities)
-- [64-bit safe comparisons](#64-bit-safe-comparisons)
-- [Bitwise](#bitwise)
-- [Utilities](#utilities)
-- [Netcap plugin](#netcap-plugin)
-- [Important notes](#important-notes)
+- [Saved scripts](#saved-scripts)
 
-## Memory read
+## Results and utilities
 
 ```lua
-readByte(addr)                    -- uint8
-readSmallInteger(addr)            -- int16
-readInteger(addr)                 -- int32
-readIntegerSafe(addr)             -- int32 or nil if value looks like garbage
-readQword(addr)                   -- int64
-readUInt16(addr)                  -- uint16
-readUInt32(addr)                  -- uint32
-readUInt64(addr)                  -- uint64
-readPointer(addr)                 -- uint64, nil if address fails pointer-validity check
-readPointerRaw(addr)              -- uint64, no validation
-readFloat(addr)                   -- float32
-readDouble(addr)                  -- float64
-readBool(addr)                    -- boolean (1 byte)
-readString(addr, maxlen?)         -- null-terminated C string
-readWideString(addr, maxlen?)     -- null-terminated UTF-16LE string
-readBytes(addr, count)            -- table of bytes
-readBytesHex(addr, count)         -- "48 8B 05 ..." hex string
+addr("0x1F58E12ECF0")       -- parse a large hexadecimal address
+parseHex("0x1234")           -- alias for addr
+toHex(value)                  -- format as hexadecimal
+fmt("0x%X", value)           -- C-style formatting
+print(...)                   -- append to output
+addResult("key", value)      -- add a result field
+setResult(value)             -- set the top-level value field
+isNil(value)
+orZero(value)
+orEmpty(value)
+isValidPointer(value)
+clock()                      -- high-resolution milliseconds
+sleep(milliseconds)
+enableDebug()
+disableDebug()
+getLastError()
+listLuaFunctions(owner?)
+getLoadedExtensions()
+getCapabilities()
 ```
 
-Use numeric addresses for these helpers. When starting from a string expression, normalize first with `addr()` or `getAddress()`.
+`getCapabilities()` reports attached state, resolved data paths, the 11-tool count, scan contracts, verified writes, and typed byte writes. `listLuaFunctions(owner?)` reports registered `{name, owner}` entries. `getLoadedExtensions()` preserves first-seen owner order.
 
-## Bulk array reads
+`isValidPointer(value)` performs only a user-mode pointer-range check—it does not prove that the address belongs to a committed or readable page. The check accepts values from `0x10000` through `0x7FFFFFFFFFFF`; use a target read or memory query when you need stronger evidence.
 
-Single bulk read for performance. Use for vtables, ID arrays, float buffers — much faster than a Lua loop of single reads.
+Safe 64-bit comparisons and bitwise helpers:
 
 ```lua
-readPointerArray(addr, count)     -- table of pointers (nil entries for invalid pointers)
-readIntArray(addr, count)         -- table of int32 values
-readFloatArray(addr, count)       -- table of float values
+safeEq(a, b) safeNe(a, b) safeLt(a, b) safeGt(a, b)
+safeLe(a, b) safeGe(a, b) safeIsZero(value) safeNotZero(value)
+safeInt(value)
+band(a, b) bor(a, b) bxor(a, b) bnot(value)
+lshift(value, bits) rshift(value, bits) bextract(value, offset, width?)
 ```
 
-## Memory write
+The engine handles large hexadecimal literals by converting them to `addr("0x...")` before Lua parsing. Explicit `addr()` remains the clearest form.
+
+## Memory reads
 
 ```lua
-writeByte(addr, val)              writeSmallInteger(addr, val)
-writeInteger(addr, val)           writeQword(addr, val)
-writeUInt16(addr, val)            writeUInt32(addr, val)
-writeUInt64(addr, val)            writePointer(addr, val)
-writeFloat(addr, val)             writeDouble(addr, val)
-writeBool(addr, val)              writeString(addr, str, maxlen?)
-writeBytes(addr, table)
+readByte(addr)
+readSmallInteger(addr)
+readInteger(addr)
+readIntegerSafe(addr, max_value?)
+readQword(addr)
+readUInt16(addr) readUInt32(addr) readUInt64(addr)
+readPointer(addr, validate?)
+readPointerRaw(addr)
+readFloat(addr) readDouble(addr)
+readBool(addr)
+readString(addr, maxlen?)
+readWideString(addr, maxlen?)
+readBytes(addr, count)
+readBytesHex(addr, count)
 ```
 
-Use numeric addresses for these helpers. When starting from a string expression, normalize first with `addr()` or `getAddress()`.
-
-## Struct helpers
+Bulk reads use one target read:
 
 ```lua
-readVector3(addr)                 -- {x, y, z} (3 floats)
-readVector4(addr)                 -- {x, y, z, w} (4 floats)
-readQuaternion(addr)              -- alias for readVector4
-readMatrix4x4(addr)               -- 4x4 matrix table with .position field
-readStruct(addr, {                -- read multiple fields at once
-    version = "uint32@0x10",
-    flags = "uint32@0x14",
-    timestamp = "uint64@0x20"
+readPointerArray(addr, count)
+readIntArray(addr, count)
+readFloatArray(addr, count)
+```
+
+Read helpers use returning-`nil` behavior for many target read failures and record a last error where applicable. `readPointer` applies a user-mode pointer check; `readPointerRaw` does not.
+
+## Memory writes
+
+```lua
+writeByte(addr, value)
+writeSmallInteger(addr, value)
+writeInteger(addr, value)
+writeQword(addr, value)
+writeUInt16(addr, value) writeUInt32(addr, value) writeUInt64(addr, value)
+writePointer(addr, value)
+writeFloat(addr, value) writeDouble(addr, value)
+writeBool(addr, value)
+writeString(addr, text, maxlen?)
+writeBytes(addr, byte_table)
+backupMemory(addr, size)
+isWritableMemory(addr)
+```
+
+Writes change target memory. `backupMemory` reads a byte table; `isWritableMemory` checks the target page range before a script write. The MCP `write` tool provides the stronger `verify=true` path with pre-image/readback and a restore attempt.
+
+## Structures and modules
+
+```lua
+readVector3(addr)
+readVector4(addr)
+readQuaternion(addr)
+readMatrix4x4(addr)
+readStruct(addr, {
+    health = "uint32@0x10",
+    position = "vector3@0x20"
 })
 ```
 
-## Module / address resolution
+Module and address helpers:
 
 ```lua
-getAddress("mod.dll+0x1234")      -- resolve to absolute address
-getModuleBase("mod.dll")          -- module base address
-getModuleSize("mod.dll")          -- module size in bytes
-getModules(filter?)               -- table of {name, base, size, path}
-getModuleFromAddress(addr)        -- reverse lookup: {name, base, offset} or nil
-formatAddress(addr)               -- "module.dll+0xOFFSET" or "0xADDR"
-resolveExport("mod.dll", "func")  -- PE export resolution, follows forwarders (depth 5)
+getAddress("module.dll+0x1234")
+getModuleBase("module.dll")
+getModuleSize("module.dll")
+getModules(filter?)
+getModuleFromAddress(addr)
+formatAddress(addr)
+resolveExport("module.dll", "function")
 ```
+
+`resolveExport` reads the attached process PE export directory and follows forwarders with a bounded depth. `getModules` returns module `name`, `base`, `size`, and `path`.
 
 ## Scanning
 
 ```lua
-AOBScan(pattern, options?)       -- strict AOB pattern; ?? is the only wildcard
-AOBScanMany(patterns, options?)  -- ordered 1-32 pattern first/count batch
-scanString(text, options?)       -- encoding: "ascii" or "utf-16le"
-scanPointer(target, options?)    -- pointer alignment defaults to 8
+AOBScan(pattern, options?)
+AOBScanMany(patterns, options?)
+scanString(text, options?)
+scanPointer(target, options?)
 ```
 
-Common named options are `scope`, `mode`, `max_matches`, `timeout_ms`, and `diagnostics`. `scanString` additionally accepts `encoding`; `scanPointer` additionally accepts `alignment` in `1..4096`. Scope kinds are `all_modules`, `modules`, and half-open `range`; module scopes may use case-insensitive PE `filters.sections` in addition to memory-type and protection filters.
-
-Single-query modes are `addresses`, `first`, and `count`:
-
-```lua
-local hits, err = AOBScan("48 8B 05 ?? ?? ?? ??", {
-  scope = {
-    kind = "modules",
-    names = {"target.dll"},
-    filters = {sections = {".text"}}
-  },
-  mode = "addresses",
-  max_matches = 100
-})
-if not hits then
-  print(err.error, err.detail)
-end
-```
-
-Address mode returns numeric entries and metadata, defaults to 100 matches, and permits at most 5000. First mode returns zero or one numeric entry. Count mode returns no numeric entries and places `count` and `observation` under `result.metadata`.
-
-`AOBScanMany` accepts an ordered array of unique `{key, pattern}` items and only `first` or `count` mode. All patterns compile before a scan lease or target read, then share one memory traversal:
-
-```lua
-local items, err = AOBScanMany({
-  {key = "singleton", pattern = "48 8B 05 ?? ?? ?? ??"},
-  {key = "allocator", pattern = "48 89 5C 24 ?? 57 48 83 EC ??"}
-}, {
-  scope = {kind = "modules", names = {"target.dll"}},
-  mode = "first",
-  diagnostics = true
-})
-if not items then error(err.detail) end
-
-for _, item in ipairs(items) do
-  print(item.key, item.match, item.status.termination)
-end
-print(items.metadata.shared.termination)
-```
-
-First items contain `key`, optional numeric `match`, and `status`. Count items contain `key`, `count`, `observation`, and `status`; `max_matches` applies independently to each pattern. Shared traversal status and optional diagnostics are under `items.metadata.shared`. Batch address mode and cursors are intentionally unavailable.
-
-Expected input/domain failures return `nil, error_table`; valid no-match scans return a non-nil result with explicit status. Section names must exist in every selected module, or the operation fails with `SECTION_NOT_FOUND` before corpus scanning. Full MCP/Lua scope, status, continuation, batch, and migration details are in [`scanning.md`](scanning.md).
+Use named options only: `scope`, `mode`, `max_matches`, `timeout_ms`, and `diagnostics`. `scanString` adds `encoding="ascii"` or `"utf-16le"`; `scanPointer` adds `alignment` from 1 through 4096. AOB patterns accept `??` as the only wildcard. Single-query modes are `addresses`, `first`, and `count`; batch mode is `first` or `count`. Expected failures return `nil, error_table` and valid no-match results remain non-nil. See [Scanning](scanning.md).
 
 ## Pointer chains
 
 ```lua
-readPointerChain(base, off1, off2, ...)  -- follow chain, return final address
+readPointerChain(base, offset1, offset2, ...)
 ```
 
-Standard reverse-engineering semantics: add offset, dereference, repeat. Equivalent to `[[base+off1]+off2]+...`.
+The helper adds each offset, reads a pointer, validates intermediate pointers, and returns the final address. This matches `[[base+offset1]+offset2]...` semantics.
 
 ## Code execution
 
-A custom x64 shellcode generator with full Microsoft calling convention support (shadow space, 16-byte stack alignment, RCX/RDX/R8/R9 for integers, XMM0-XMM3 for floats).
-
 ```lua
-executeCode(func, arg1, ...)                  -- call function, return RAX
-executeCodeEx(flags, timeout, func, ...)      -- extended call with options
-callSequence({{address=x, args={...}}, ...})  -- multi-call in ONE thread
-callSequenceResults({...})                    -- final + per-call RAX values
-alloc(size)                                   -- allocate RW memory
-alloc("string")                               -- allocate + write string
-alloc("string", true)                         -- allocate + write wide string (UTF-16)
-freeMemory(addr)                              -- free allocation
-```
-
-String arguments to `executeCode` are smart-handled: numeric strings (`"0x1234"`) are passed as integers, text strings are auto-allocated in the target process and freed after the call.
-
-`executeCode` and `executeCodeEx` each create a remote thread per call. Lua scripts warn after 25 such calls and block after 100 unless `allowUnsafeCodeExecution(true)` is set on the script. Prefer `callSequence` for thread-local APIs and for sequences of dependent native calls:
-
-```lua
+executeCode(function_address, arg1, ...)
+executeCodeEx(flags, timeout, function_address, ...)
 callSequence({
-  {address=thread_attach, args={domain}},
-  {address=get_object, args={image, index}},
-  {address=use_object, args={{result=2}, iterator}}
+    {address = function_address, args = {arg1}},
+    {address = next_function, args = {{result = 1}}}
 })
+callSequenceResults(calls, timeout?)
+allowUnsafeCodeExecution(true)
+alloc(size)
+alloc("text")
+alloc("text", true)          -- UTF-16 string
+freeMemory(addr)
 ```
 
-`{result=N}` passes the RAX value from the Nth prior call (1-based) as an argument. Use `callSequenceResults` when the sequence ends in a cleanup call but you still need an earlier return value; it returns `{result=..., call_results={...}, calls_executed=N}`.
+`executeCode` and `executeCodeEx` create one remote thread per call. The script guard warns after 25 calls and blocks after 100 unless `allowUnsafeCodeExecution(true)` is set. `callSequence` keeps dependent calls on one target thread and supports `{result=N}` references to earlier RAX results. `callSequenceResults` returns the final result and per-call results.
+
+Native calls execute target code and can mutate or crash the target. Validate function addresses, argument widths, thread-local requirements, timeout, and cleanup. `alloc` uses target memory and detach cleanup tracks allocations.
 
 ## Session management
 
 ```lua
-attach(target, pid?)              -- attach("Game.exe"), attach("chrome.exe", 1234), or attach(1234)
-detach()                          -- clean detach with lifecycle callbacks
-isAttached()                      -- true when a process is attached
-getAttachedProcess()              -- {pid, name, module_count} or nil
-openProcess(pid)                  -- legacy alias for attach(pid)
+attach(target, pid?)
+detach()
+isAttached()
+getAttachedProcess()
+openProcess(pid)
 ```
+
+`attach` accepts a process name or PID and an optional disambiguating PID. `openProcess(pid)` remains supported as an attach-by-PID alias. Attach/switch/detach invoke extension lifecycle callbacks. `getAttachedProcess()` returns PID, name, and module count or `nil`.
 
 ## Hooking
 
-Generic inline function hooking with a shared ring buffer in the target process. Hook any function by address, capture register args + optional buffer payload + optional stack args, read entries through Lua. Requires an attached process. See [`docs/hooking.md`](hooking.md) for architecture.
-
 ```lua
-createRingBuffer({entry_count=512, max_data_size=4096}?)  -- one shared buffer per session
-
+createRingBuffer({entry_count = 512, max_data_size = 4096}?)
 hookFunction(address, {
-    name = "label",                        -- identifier for listHooks / entry["hook_name"]
-    type = "pre" | "post",                 -- capture before or after the call
-    buffer_arg = 1..4 | -1,                -- which register arg is a buffer pointer
-    length_arg = 0..4 | -1,                -- which arg is length; 0 = use return value
-    max_capture = 4096,                    -- byte cap per entry
-    stack_args = {5, 6, ...},              -- optional capture of stack args (max 7)
-    deref_args = {[N]=4|8, ...},           -- post-call: re-read arg N as 4/8 bytes (output params)
-    buffer_deref = {arg=N, offset=K},      -- indirect buffer: [arg+K] = buffer pointer (e.g. WSABUF)
-    length_deref = {arg=N, offset=K, size=4|8},  -- indirect length: [arg+K] = length
-})                                          -- returns {hook_id, trampoline, saved_bytes, jmp_size}
-
-unhookFunction(address_or_hook_id)         -- restore original bytes; defer trampoline free
-listHooks()                                -- table of installed hooks
-destroyRingBuffer()                        -- free buffer (all hooks must be removed first)
-
-readRingBuffer(limit?, {min_result=N}?)    -- pending entries; optionally skip entries with low result
-ringBufferMarker("label")                  -- inject a marker entry with timestamp 0
-ringBufferStats()                          -- {total_captured, total_dropped, entries_pending, utilization_pct}
-```
-
-Each entry returned by `readRingBuffer` carries `sequence`, `hook_id`, `hook_name`, `timestamp`, `return_addr`, `arg0..arg3`, optional `extra_args`, `result`, `data_length`, `captured_length`, `data` (byte table), `data_hex` (printable hex), and `is_marker`. Pre-call hooks have `result=0`. Post-call hooks have `result` set to the original function's RAX as a signed int32.
-
-Minimal capture-and-read cycle:
-
-```lua
-createRingBuffer({entry_count=512, max_data_size=4096})
-
-local send_addr = resolveExport("ws2_32.dll", "send")
-hookFunction(send_addr, {
     name = "send",
     type = "pre",
-    buffer_arg = 2,    -- send(socket, *buf, len, flags)
+    buffer_arg = 2,
     length_arg = 3,
     max_capture = 4096,
+    stack_args = {5, 6},
+    deref_args = {[4] = 4},
+    buffer_deref = {arg = 2, offset = 8},
+    length_deref = {arg = 2, offset = 0, size = 4}
 })
-
--- ... let the app run ...
-
-for _, e in ipairs(readRingBuffer(100)) do
-    print(e.hook_name, e.captured_length, e.data_hex)
-end
+readRingBuffer(limit?, {min_result = value}?)
+ringBufferMarker("label")
+ringBufferStats()
+listHooks()
+unhookFunction(address_or_hook_id)
+destroyRingBuffer()
 ```
 
-Indirect capture for APIs whose buffer lives in a struct (WSABUF):
+Entries include sequence, hook ID/name, timestamp, return address, `arg0`–`arg3`, optional `extra_args`, result, data lengths, data, `data_hex`, and marker state. See [Inline hooking](hooking.md) for trampoline, relocation, thread-suspension, and cleanup behavior.
+
+## Process and PEB inspection
+
+These helpers can work before attachment:
 
 ```lua
-hookFunction(resolveExport("ws2_32.dll", "WSASend"), {
-    name = "WSASend",
-    type = "pre",
-    buffer_deref = {arg=2, offset=8},                -- LPWSABUF -> {len@0, buf@8}
-    length_deref = {arg=2, offset=0, size=4},
-    max_capture = 8192,
-})
+getProcessList(filter?, limit?)
+getProcessInfo(pid?)
+isBeingDebugged(pid?)
+getEnvironment(pid?)
+getModulesRemote(pid?)
+getThreads(pid?)
+getServices(pid?)
 ```
 
-## Process introspection
+The process list returns PID, name, parent PID, and thread count. PEB helpers return command line, current directory, debugger state, image path, environment, or remote module records when access permits. Results are bounded; environment reads use a 64 KiB cap, module walks use a 1024-entry cap, and wide strings use a 32 KiB cap. Treat environment and command-line data as sensitive. See [PEB introspection](peb.md).
 
-These functions work without an attached process. Useful for discovery scripts.
+Attached-session region helpers:
 
 ```lua
-getProcessList(filter?, limit?)   -- {pid, name, parent_pid, threads}
-getProcessInfo(pid?)              -- {pid, name, path, parent_pid, threads,
-                                  --  command_line, current_directory, being_debugged, image_path}
-getMemoryRegions(filter?, limit?) -- {base, size, protection, type, state}
-getRegionInfo(addr)               -- {base, size, protection, is_readable/writable/executable}
-getThreads(pid?)                  -- {tid, owner_pid, priority}
-getServices(pid?)                 -- {name, display_name, pid, state}
-isBeingDebugged(pid?)             -- boolean from PEB.BeingDebugged, or nil on access failure
-getEnvironment(pid?)              -- {KEY="value", ...} from the target's PEB
-getModulesRemote(pid?)            -- {name, base, size, path} via PEB Ldr (no attach required)
+getMemoryRegions(filter?, limit?)
+getRegionInfo(addr)
 ```
 
-The `pid?`-suffixed functions default to the attached process when called without arguments. PEB reads (`command_line`, `getEnvironment`, `getModulesRemote`, `isBeingDebugged`) work pre-attach on any process the server can open with `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`. See [`docs/peb.md`](peb.md) for limits (64 KiB env, 1024 modules, 32 KiB strings).
+These helpers operate on the current attached session, so call them after `attach`. When detached, `getMemoryRegions` returns an empty table and `getRegionInfo` returns `nil`.
 
 ## Network utilities
 
 ```lua
-getSocketInfo(socket_handle)      -- {remote_addr, remote_port, local_addr, local_port, family}
-                                  -- family is "IPv4" or "IPv6"; nil on error or unconnected socket
+getSocketInfo(socket_handle)
 ```
 
-Calls `getpeername` and `getsockname` in the target process. Use after a network hook to identify which connection a socket belongs to.
+The helper calls target `getpeername` and `getsockname` and returns remote/local address, port, and `IPv4`/`IPv6` family when available. Netcap adds the packet and recording functions described in [Netcap](plugins/netcap.md).
 
-## 64-bit safe comparisons
+When Netcap is active, its buffer-search helpers accept dense 1-indexed sequences and return 1-indexed offsets. Values from `0` through `255` use the byte-search fast path; other integers use the exact fallback path—the comparison semantics remain unchanged for converted values. Arbitrary converted integers retain exact legacy comparison semantics.
 
-Lua numeric comparisons can overflow on large 64-bit values (pointers and high addresses). These helpers handle wraparound correctly.
+## Saved scripts
 
 ```lua
-safeEq(a, b)    safeNe(a, b)    safeLt(a, b)    safeGt(a, b)
-safeLe(a, b)    safeGe(a, b)    safeIsZero(x)   safeNotZero(x)
-safeInt(val)                      -- val if it fits int64, else nil
+-- Script files live under $MEMSCOPE_HOME/scripts/<process>/.
 ```
 
-## Bitwise
-
-Lua 5.4 supports native operators (`a & b`, `a | b`, `a ~ b`, `a << n`, `a >> n`). These named helpers exist for readability and for cases where the operands need uint64 coercion.
-
-```lua
-band(a, b)    bor(a, b)    bxor(a, b)    bnot(a)
-lshift(a, n)  rshift(a, n) bextract(val, offset, width?)
-```
-
-## Utilities
-
-```lua
-addr("0x...")                     -- parse hex string to integer (required for >32-bit literals)
-parseHex("0x...")                 -- alias for addr()
-toHex(val)                        -- convert to hex string
-fmt("0x%X", val)                  -- C-style string format
-print(...)                        -- output to results.output array
-addResult(key, val)               -- add to results dict
-setResult(val)                    -- set single top-level result value
-isNil(x)       orZero(x)         orEmpty(x)
-isValidPointer(addr)              -- user-mode range check
-isWritableMemory(addr)            -- VirtualQueryEx page-protection check
-backupMemory(addr, size)          -- backup region as byte table (for later writeBytes restore)
-clock()                           -- high-resolution timer (milliseconds)
-sleep(ms)                         -- pause execution
-enableDebug()  disableDebug()     -- toggle error logging into output array
-getLastError()                    -- last error message from a returning-nil call
-listLuaFunctions(owner?)          -- registered {name, owner} entries, optionally filtered by owner
-getLoadedExtensions()             -- unique Lua extension/plugin owners in first-seen order
-getCapabilities()                 -- attached state, paths, and MCP wrapper capability flags
-```
-
-Discovery helpers read the live registry/state, so they work before attaching and include user plugins that registered
-successfully. `getCapabilities().wrappers` includes flags such as `verified_writes` and `typed_byte_writes` for
-MCP wrapper features exposed outside Lua.
-
-## Netcap plugin
-
-These functions are available only when the netcap plugin is installed to `$MEMSCOPE_HOME/plugins/netcap.py` (run `memscope-mcp install-plugin netcap`). The plugin builds on the [Hooking](#hooking) primitives and adds protocol-aware capture, stream assembly, framing, search, and recording for Winsock traffic.
-
-### Capture lifecycle
-
-```lua
-startCapture({                          -- begin capturing on the named Winsock hooks
-    hooks = {"send", "recv", "WSASend", "WSARecv", "sendto", "recvfrom"},
-    connect = true,                     -- track connect/closesocket lifecycle
-    iocp = true,                        -- correlate IOCP async I/O via GQCS
-    lifecycle = true,                   -- track accept/bind for server sockets
-    header_only = false,                -- capture only headers (smaller entries)
-    buffer_size = 1048576,              -- total ring buffer size in bytes (default: 1 MiB)
-    max_packet_size = 4096,             -- max captured bytes per packet (default: 4 KiB)
-})
-stopCapture()
-readPackets(limit?)                     -- per-packet entries with direction, socket, parsed args
-captureStats()                          -- bytes captured, packets seen, drops
-getConnections()                        -- {socket, type, remote_addr, remote_port, local_addr, local_port}
-filterPackets(packets, {direction?, socket?, min_size?, max_size?, hook_name?, contains?})
-```
-
-### Buffer pack/unpack helpers
-
-```lua
-unpackUInt16(data, offset)   unpackInt16(data, offset)
-unpackUInt32(data, offset)   unpackInt32(data, offset)
-unpackUInt64(data, offset)
-unpackFloat(data, offset)    unpackDouble(data, offset)
-unpackString(data, offset, maxlen?)
-unpackBytes(data, offset, len)
-unpackVector3(data, offset)
-
-packUInt16(val)   packUInt32(val)   packInt32(val)
-packUInt64(val)   packFloat(val)
-
-bufferFind(data, pattern)              -- byte-table search; returns offset or nil
-bufferContains(data, pattern)          -- boolean
-bufferFindAll(data, pattern)           -- table of offsets
-```
-
-Search inputs are dense, 1-indexed sequences. Reading stops at the first missing or `nil` element, and each retained value is converted to an integer; conversion errors propagate. Arbitrary converted integers retain exact legacy comparison semantics. Values in the range `0` through `255` use the byte-search fast path, while other integers use the exact legacy fallback. Returned offsets are 1-indexed. `bufferFindAll` includes overlapping matches in ascending order. An empty pattern matches every boundary: `bufferFind` returns `1`, `bufferContains` returns `true`, and `bufferFindAll` returns offsets `1` through the converted data length plus `1`.
-
-### Stream assembly
-
-```lua
-feedPackets(packets)                   -- merge packets into per-socket streams
-getStream(socket_hex, direction?)      -- byte table of assembled stream
-consumeStream(socket_hex, direction, n)-- pop n bytes from the head
-listStreams()                          -- known socket/direction pairs
-clearStream(socket_hex?)               -- drop one stream or all
-```
-
-### Protocol framing
-
-```lua
-splitLengthPrefixed(data, {length_offset, length_size, header_size, endian?, includes_header?})
-splitDelimited(data, delimiter)        -- delimiter as string or byte table
-splitFixed(data, size)
-```
-
-### Cross-reference search
-
-```lua
-searchPackets(packets, pattern)        -- byte pattern across captured payloads
-searchPacketsForValue(packets, type, value)  -- type in {"uint32", "int32", "uint64", "float", "double"}
-```
-
-### Session recording
-
-```lua
-startRecording(filename?, {compress?, max_size_mb?}?)
-stopRecording()
-loadRecording(filename)                -- returns packet table
-listRecordings(process?)               -- recordings for the named process (or attached)
-```
-
-Recordings are JSONL (or `.jsonl.gz` when `compress=true`) under `recordings/<process>/`. `max_size_mb` triggers size-based rotation.
-
-## Important notes
-
-### 64-bit address literals
-
-Lua 5.4's parser rejects hex literals beyond 32 bits even though its integers are 64-bit. The server preprocesses scripts to rewrite large literals to `addr()` calls before execution, but this is best-effort — if you're constructing addresses dynamically, use `addr()` explicitly:
-
-```lua
--- Correct:
-local ptr = addr("0x1F58E12ECF0")
-
--- Also fine (preprocessor handles it):
-local ptr = 0x1F58E12ECF0
-```
-
-The preprocessor protects long strings, single- and double-quoted strings, and already-wrapped `addr()` / `parseHex()` calls from rewrite, so it's safe to use either form.
-
-### Thread-local APIs
-
-Some runtime APIs (IL2CPP's `thread_attach`, Mono's `mono_thread_attach`, etc.) only affect the calling thread. Each `executeCode` call creates a fresh thread, so the attachment is gone by the next call. Use `callSequence` to run the attach and the subsequent API call in the same thread; reference prior return values with `{result=N}`:
-
-```lua
-callSequence({
-    {address=thread_attach, args={domain}},
-    {address=get_object, args={image, index}},
-    {address=api_function, args={{result=2}, iterator}}
-})
-```
-
-### Script persistence
-
-Scripts are stored as `.lua` files in `$MEMSCOPE_HOME/scripts/<process>/`. The first-line comment becomes the script description shown by `scripts(action="list")`, and that action returns absolute paths for editing. Run scripts with `scripts(action="run", name="...")`; `process="ProcessName.exe"` selects the saved-script namespace only and does not attach or switch targets. If detached, pass `process` for detached Lua execution. If attached, an explicit `process` must match the attached target. Run responses include `requested_process` (the caller-provided namespace, or `nil` when implicit), `attached_process`, `attached_pid`, and `detached_execution`.
-
-Saved scripts are not rewritten automatically when scan contracts change. For the 0.3.0 scanning migration, search user scripts for `AOBScanModule`, positional `AOBScan` arguments, and `scanString` boolean encoding arguments; replace them with named options as documented in [`scanning.md`](scanning.md).
-
-### Example: locate a singleton from a RIP-relative reference
-
-```lua
-local pattern = "48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B D8"
-local matches, err = AOBScan(pattern, {
-  scope = {kind = "modules", names = {"target.dll"}},
-  mode = "first"
-})
-if not matches then error(err.detail) end
-
-if #matches > 0 then
-  local rip_offset = readInteger(matches[1] + 3)
-  local singleton = matches[1] + 7 + rip_offset
-  local ptr = readPointer(singleton)
-
-  if ptr and ptr ~= 0 then
-    addResult("address", toHex(ptr))
-    addResult("version", readUInt32(ptr + 0x10))
-    addResult("flags", readUInt32(ptr + 0x14))
-    addResult("name", readString(ptr + 0x20, 64))
-  end
-end
-```
+The MCP `scripts` tool lists and runs files. File tools create/edit them. The first line comment is the description. `process="Target.exe"` selects a namespace only; it does not attach or switch. Detached runs require an explicit process namespace. See [Saved scripts](guides/saved-scripts.md).

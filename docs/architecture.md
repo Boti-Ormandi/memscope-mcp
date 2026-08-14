@@ -1,132 +1,116 @@
-# Architecture and internals
+# Architecture
 
-A tour of the memscope-mcp codebase: where things live, the design rules that shape it, and how each subsystem is built. For installation and usage, see the top-level README. For the function-level API surface, see [`lua-reference.md`](lua-reference.md).
+`memscope-mcp` is a Windows x64 process-memory MCP server with a narrow stdio boundary and a session-bound Lua composition layer. The server keeps common operations in core extensions and loads domain behavior only from explicitly activated plugin files.
+
+For task-first use, start with [Getting started](getting-started.md). For the public surface, use [MCP tools](reference/mcp-tools.md), [Lua reference](lua-reference.md), and [Scanning](scanning.md).
+
+## Runtime shape
+
+```text
+MCP client
+    |
+    | stdio
+    v
+11 MCP tools
+    |                    +------------------+
+    | direct wrappers    | strict scan      |
+    +-------------------> boundary models  |
+    |                    +------------------+
+    v
+DebugSession + immutable module snapshot
+    |
+    +--> Lua 5.4 runtime
+          |
+          +--> seven core extensions
+          +--> activated user plugins
+          |
+          +--> Windows x64 target process
+```
+
+The 11 tools are `processes`, `attach`, `modules`, `read`, `write`, `dump`, `chain`, `scan`, `scan_many`, `lua`, and `scripts`. The synchronous business functions remain ordinary Python callables; the MCP boundary supplies same-thread dispatch for those wrappers. `scan` and `scan_many` use strict Pydantic input/output models and explicit application error envelopes.
 
 ## Repository layout
 
-```
+```text
 memscope_mcp/
-  attachment.py          # Attachment state + module snapshots + stable lease identity
-  boundary.py            # Side-effect-free MCP server boundary + strict-model registry
-  server.py              # MCP tool definitions (thin wrappers + session logging)
-  scanning/              # Strict MCP/Lua contracts, signed cursors, scan control,
-                         #   PE-section cache/planner, bounded reader, matcher,
-                         #   collectors, one-pass batch engine, and async/direct adapters
-  session.py             # Process attach/detach, generations, lease acquisition,
-                         #   memory primitives, threads, VirtualProtect,
-                         #   allocate_near, suspend/resume, lifecycle callbacks
-  extensions/            # Generic LuaExtension contract + bootstrap
-    base.py              # LuaExtension ABC and ExtensionContext
-    bootstrap.py         # Core extension + user plugin registration
-    core/                # Always-loaded extensions
-      general.py memory.py module_scan.py execution.py
-      hooking.py process.py network.py
+  server.py                 MCP registrations and stdio entry point
+  boundary.py               strict scan-model MCP boundary
+  session.py                attach/detach, generations, leases, memory primitives
+  attachment.py             immutable module snapshots and scan identity
+  scanning/                 strict scan contracts and bounded execution
   tools/
-    memory.py            # Smart memory dump
-    pointers.py          # Pointer chain resolution
-    types.py             # Typed memory read/write
-    execute.py           # Remote code execution
-    hooking.py           # HookManager: ring buffer + install/remove/cleanup
-    lua_scripts.py       # Script persistence
-    lua_engine.py        # Compatibility re-export for tools.lua.engine
-    lua/                 # Lua engine and themed function modules
-  plugins/               # PluginBase (specialization of LuaExtension) + loader
-  instructions/          # AI context builder (base + extensions + plugins)
-  utils/
-    processes.py         # Process/service enumeration and image-path queries
-    shellcode.py         # x64 codegen: native calls + hook trampolines
-    disasm.py            # Table-driven x64 length decoder + RIP-relative relocation
-    pe.py                # PE export resolver (resolveExport)
-    peb.py               # PEB reader: cmdline, env, debugger, remote modules
-    memory_utils.py heuristics.py logger.py pointers.py
-  _contrib/plugins/      # Bundled reference plugins (il2cpp, netcap)
-benchmarks/scanning/     # Deterministic matcher, controlled-process, and paired evidence tooling
-scripts/                 # Saved Lua scripts per process (gitignored)
-logs/                    # Session logs in JSONL format (gitignored)
-docs/
-  architecture.md        # This document
-  hooking.md             # Inline hooking architecture
-  peb.md                 # PEB introspection design
-  lua-reference.md       # Full Lua function reference
-  scanning.md            # MCP/Lua scan contracts and migration
+    types.py                typed memory reads and writes
+    memory.py               dumps and raw formatted reads
+    pointers.py             pointer-chain helpers
+    hooking.py              inline hooks and shared ring buffer
+    lua/                    Lua engine and function modules
+    lua_scripts.py          saved-script list/run operations
+  extensions/
+    base.py                 LuaExtension and ExtensionContext
+    bootstrap.py            transactional core/plugin composition
+    core/                   seven always-loaded extensions
+  plugins/
+    __init__.py             PluginBase and activated-file loader
+  _contrib/plugins/         bundled il2cpp.py and netcap.py install sources
+  utils/                    process, PEB, PE, logging, and x64 helpers
+
+docs/                       human-facing source content
+benchmarks/                 repository-only benchmark tooling
+ tests/                      unit, smoke, integration, and plugin tests
 ```
 
-The split that matters most is `memscope_mcp/extensions/core/` vs `memscope_mcp/_contrib/plugins/`. Core extensions register on every server start and their failure is fatal. Bundled plugins ship inside the wheel under `_contrib/` so `memscope-mcp install-plugin` can copy them into the user data directory, but they only activate when the user opts in by placing the file in `$MEMSCOPE_HOME/plugins/`.
+The runtime data root is separate from the repository:
 
-## Design philosophy
+```text
+$MEMSCOPE_HOME/
+  logs/sessions/<session-id>.jsonl
+  scripts/<process>/<name>.lua
+  plugins/<activated-filename>.py
+  scripts/<process>/recordings/<name>.jsonl[.gz]
+```
 
-Five rules shape what goes into the codebase and what stays out.
+`MEMSCOPE_HOME` defaults to `~/.memscope-mcp`. Netcap also recognizes the cwd-relative `scripts/<process>/recordings/` location as a read-only legacy fallback. See [CLI and paths](reference/cli-paths.md).
 
-**Generic core, plugins for domains.** No target-specific code lives in `memscope_mcp/`. Game engine helpers, network protocol parsers, managed-runtime walkers all belong in plugins. The core ships primitives; plugins specialize them.
+## Session and attachment identity
 
-**Minimal tool surface.** Eleven well-shaped MCP tools, with Lua for everything that needs composition. Adding an MCP tool is a real decision -- the smoke suite pins the count.
+`DebugSession` owns the process handle, target name and PID, tracked target allocations, lifecycle callbacks, attachment generation, and immutable module snapshot. A successful attach or module refresh publishes a new generation. A scan borrows a stable lease; switching, detaching, reconnecting, or refreshing retires the current lease and waits for active readers before replacing attachment identity.
 
-**One contract, two activation paths.** Core features and user plugins both implement `LuaExtension`. Core extensions are always loaded and their registration failure is hard. User plugins are gated on file presence in `$MEMSCOPE_HOME/plugins/` and isolated on failure.
+The `modules` MCP tool preserves module records with `name`, `base`, `size`, and `path`. `DebugSession.modules` remains a defensive legacy dictionary view of the current snapshot, and `openProcess` remains a Lua attach alias. Neither surface gives plugins a raw global session object.
 
-**AI context is expensive.** `memscope_mcp/instructions/base.py` is always loaded, and extension `instructions` fragments append in registration order. Plugin instructions are only appended to the AI-facing documentation when the plugin is active. The MCP `instructions` channel is token-priced; the project treats it that way.
+See [Session lifecycle](concepts/session-lifecycle.md).
 
-**Scripts persist, addresses don't.** ASLR shifts everything on every restart. The persistence layer saves Lua finder scripts per process, not raw addresses. The agent reuses the finder.
+## Core extensions
 
-## Subsystems
+Seven core extensions register in this order:
 
-### Bounded hybrid scanning core
+1. `general`
+2. `memory`
+3. `module_scan`
+4. `execution`
+5. `hooking`
+6. `process`
+7. `network`
 
-The internal scanner package compiles AOB input into canonical bytes, a mask, maximal fixed segments, and an overlapping regex fallback. Validated source spellings and canonical byte/mask pairs use separate bounded 256-entry LRU caches; cached values are immutable query metadata and never target-memory contents. Equivalent AOB, exact-byte, pointer, string, and cursor-reconstruction inputs can therefore reuse one canonical object, while cold compilation derives segments, classification, unique fixed bytes, regex state, and the fingerprint exactly once. Exact patterns use `bytes.find`; all-wildcard patterns generate eligible addresses arithmetically; masked patterns sample a constant-size beginning/middle/end slice, rank every fixed segment for anchor selectivity, then choose either C-level anchor search with ordered segment verification or the precompiled regex when anchor candidates would be too dense. Result collectors own first-hit, page, count, and bounded-address stopping, so matching stops at the committed boundary without constructing an unbounded result list or searching for a pagination lookahead hit.
+They provide the common Lua functions for address handling, memory, scans, native execution, hooks, process/PEB inspection, and socket identification. Core registration failure is a hard startup failure. The [Lua reference](lua-reference.md) lists the resulting functions.
 
-The package is an internal engine boundary rather than a supported Python API. Attachment state, immutable, duplicate-aware module snapshots, and stable lease identity are session/attachment-owned in top-level `attachment.py`; scan-specific cancellation/control binding remains scanner-owned. `DebugSession` acquires/releases leases and publishes a monotonically increasing generation on each successful process open or explicit module refresh; detach, switch, reconnect, and refresh signal active leases, retire them, and wait for every release before replacing or closing attachment identity.
+## Scanning engine
 
-The production reader chunk is 256 KiB. It was selected by the controlled-process benchmark matrix as the smallest candidate within 10% of the best end-to-end median while preserving the previous 128 KiB baseline's post-plan salvage p95 and timeout-overshoot p95. The repository harness launches a real child process, publishes versioned topology fingerprints and expected-address checksums, measures raw `ReadProcessMemory` separately from the scanner, and records exact physical-read and work counters. See [`../benchmarks/scanning/README.md`](../benchmarks/scanning/README.md).
+The scanner compiles strict AOB patterns before target reads, normalizes scopes against one module snapshot, plans readable spans, reads bounded chunks, preserves exact overlap continuity, and returns explicit termination/status. Module and range scopes use memory-type and permission filters; module scopes also support case-insensitive PE-section filters. MCP address pages use an authenticated cursor bound to the attachment identity. `scan_many` shares one traversal across 1–32 keyed patterns and supports only `first` and `count` modes.
 
-Scopes are normalized against the lease snapshot before any target read. Module scopes resolve every requested basename atomically and default to readable `MEM_IMAGE` pages in deterministic base order; explicit ranges use exact half-open bounds and may include image, mapped, and private pages. For module scopes, optional PE-section names are resolved case-insensitively from remote headers and cached for the attachment generation; every requested section must exist in every selected module before scanning proceeds. The planner intersects those section intervals with `VirtualQueryEx` memory-type and executable/writable filters and emits clipped non-overlapping spans, so excluded section bytes are never part of corpus reads. The bounded reader never crosses those spans, recursively salvages readable page-aligned fragments after a changed protection causes a larger read to fail, and carries a sticky gap flag when coverage is incomplete. One overlap stream retains at most `pattern_length - 1` bytes only across exact successful continuity, so AOB, string, and pointer queries can find cross-chunk and adjacent-span matches without fabricating matches across unreadable gaps.
+The scan package is an internal engine boundary rather than a supported Python API. Use the MCP tools or Lua helpers. Full request shapes and statuses are in [Scanning](scanning.md).
 
-Address pagination uses authenticated, self-contained continuation state rather than offsets. A cursor carries the compiled query, normalized scope and filters, attachment identity, first unexamined candidate address, cumulative match budget, and sticky gap state. A server-local random key authenticates the bounded token; continuation replans live memory under the same generation and clips planning exactly at the resume address, so earlier candidate starts are neither read logically nor emitted again. A full page stops without searching for proof of another hit, which means a full terminal page may legitimately be followed by one empty terminal page.
+## Lua runtime
 
-`ScanExecutor` owns normalization, one stable lease, planning, reading, matching, and construction of validated mode-specific responses. The side-effect-free top-level `boundary.py` owns `MemscopeMCPServer`, which uses public `MCPServer.list_tools()` and `MCPServer.call_tool()` extension points plus an application-owned strict-model registry to validate raw top-level `scan` and `scan_many` objects and advertise their Pydantic-derived schemas; handshake-era interoperability adds only the protocol-required top-level `type: object` marker to the already-object output unions. Ordinary synchronous MCP functions remain synchronous Python callables; only their registered server-boundary copies are async wrappers so execution stays on the MCP request thread instead of using the SDK's sync worker offload. The scanner's own AnyIO worker adapters remain responsible for scan offload: they start the absolute timeout before dispatch, propagate request cancellation through a thread-safe event, and wait under cancellation shielding until the worker releases its lease. `scan_many` compiles 1-32 keyed patterns before lease acquisition and advances independent first-hit or count collectors over one shared `RegionReader`; it deliberately exposes no address pagination. A process-start executor, attachment-scoped section cache, and ephemeral HMAC key serve all MCP scan requests.
+The Lua runtime is private and serialized through an engine-owned operation lease. The engine converts ordinary tables and scalars across the boundary but rejects Lua functions, threads, userdata, and cyclic tables from results. The `table_factory` capability is valid only during engine-owned bootstrap or execution callbacks. Large hexadecimal literals are normalized to `addr("0x...")`; explicit `addr()` remains clear for 64-bit addresses.
 
-The mutable Lua runtime is separately serialized by an exclusive logical operation lease. Cross-thread executions wait, while same-thread reentry and bootstrap during any active runtime operation reject immediately; the small non-reentrant state lock is never held across Lua calls, registered callbacks, extension registration, logging, or lifecycle callbacks. Cancellation remains an independent engine-owned capability so another thread can interrupt active work. `AOBScan`, `AOBScanMany`, `scanString`, and `scanPointer` use named options and the executor's direct paths; AOB batches, individual AOB queries, encoded exact strings, and aligned pointer values therefore share scope normalization, planning, reading, matching, status, and diagnostics. A shorter local scan deadline returns partial status, while outer Lua cancellation or timeout raises through the script engine. MCP formatting and Lua table construction remain outside the matcher/reader engine, and no legacy scanner or public Python scan wrapper remains.
+Scripts, native calls, hooks, and plugin callbacks share the session boundary but not a raw runtime handle. See [Extension composition](concepts/extension-composition.md) and [Lua reference](lua-reference.md).
 
-### Inline function hooking with shared ring buffer
+## Plugins
 
-Hook any user-mode function by address, capture register args plus optional buffer data, and read the capture stream from Lua -- without DLL injection. `HookManager` ([`memscope_mcp/tools/hooking.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/tools/hooking.py)) reads the target's function prologue through a table-driven x64 instruction length decoder ([`memscope_mcp/utils/disasm.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/utils/disasm.py)), allocates an RWX trampoline page within +-2 GiB of the target so a 5-byte `JMP rel32` patch suffices, and falls back to a 14-byte `JMP [RIP+0]` with thread-suspension + IP redirect when near allocation fails. RIP-relative prologue instructions are rewritten by the relocator so the displaced bytes still resolve to the original target. All hooks share one lock-free ring buffer in target memory; writes claim slots with `lock cmpxchg`, overflow drops without blocking, and a status field gates partial reads.
+The plugin loader scans only `$MEMSCOPE_HOME/plugins/*.py`, nonrecursively, in sorted activated filename order. It skips underscore-prefixed filenames. `_contrib/plugins/` is a packaged catalog/install source, not an automatic runtime root. Each activated file supplies one `PluginBase`/`LuaExtension` implementation and is isolated if ordinary registration fails.
 
-Full architecture in [`hooking.md`](hooking.md).
+Plugins receive a session-bound `ExtensionContext` and register Lua mappings transactionally. A plugin instance owns domain state; attach and detach callbacks own process-bound cleanup. The generic core and plugins share the same `HookManager` when both use hooks. See [Plugin overview](plugins/overview.md), [Plugin API](reference/plugin-api.md), and [Plugin lifecycle](plugins/lifecycle.md).
 
-### PEB introspection without attaching
+## Hooking and target effects
 
-`getProcessInfo`, `isBeingDebugged`, `getEnvironment`, and `getModulesRemote` read the Process Environment Block of any process the server can open with `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ` -- no debug session, no injection, no leaked handles. The reader ([`memscope_mcp/utils/peb.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/utils/peb.py)) is pure ctypes: `NtQueryInformationProcess(ProcessBasicInformation)` returns the PEB base, then `ReadProcessMemory` walks `ProcessParameters` (cmdline, cwd, environment), the `BeingDebugged` byte, and the `Ldr.InLoadOrderModuleList` linked list. The `processes` MCP tool surfaces the per-entry command line directly, which means filters like `processes(filter="electron")` distinguish renderer / GPU / browser instances without further work.
-
-Full structure layout in [`peb.md`](peb.md).
-
-### x64 shellcode generation
-
-`executeCode` and `callSequence` work by assembling raw x64 machine code in the target process. The codegen ([`memscope_mcp/utils/shellcode.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/utils/shellcode.py)) implements the Microsoft x64 calling convention end to end: 32-byte shadow space, 16-byte stack alignment before each `CALL`, RCX/RDX/R8/R9 for the first four integer arguments and XMM0-XMM3 for floats, stack spill for arguments past the fourth, and RAX (or XMM0 for float returns) captured into a thread-local result slot. The Lua wrapper smart-detects argument types: numeric strings become integer arguments, text strings are allocated as buffers in the target process and freed after the call.
-
-The same module also produces hook trampolines (pre- and post-call capture with optional struct-deref for WSABUF-style buffer pointers and output-pointer deref), so both `executeCode` and the hooking layer share one codegen surface.
-
-### Extension system
-
-Core features and user plugins share one ABC: `LuaExtension` ([`memscope_mcp/extensions/base.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/extensions/base.py)). Each extension owns a name, a description, an AI-facing instructions fragment, a `register(ctx)` method that returns one complete Lua function mapping, and optional `on_process_attached` / `on_process_detaching` lifecycle callbacks. `ExtensionContext` deliberately exposes no raw `LuaRuntime`; its `table_factory` is an engine-owned capability that works only on the thread currently performing bootstrap registration or executing an engine callback. The runtime itself is private, and execution result conversion rejects Lua functions, threads, and userdata so executable Lupa handles cannot escape.
-
-The bootstrap ([`memscope_mcp/extensions/bootstrap.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/extensions/bootstrap.py)) instantiates the seven built-in extensions in order and loads activated user plugins. A private identity-checked transaction snapshots and validates complete mappings in Python, preflights every name against direct registrations and earlier staged mappings, caches lifecycle intent and metadata, and publishes nothing from an accepted mapping until the final commit. Ordinary plugin `Exception` failures are logged and skipped with neither mapping nor lifecycle acceptance; plugin `BaseException`, core failures, and shared commit failures are hard.
-
-Engine composition is an explicit one-way lifecycle: `UNBOUND -> BOOTSTRAPPING -> READY`, or terminal `FAILED`. Unbound engines retain generic direct registration and execution. Bootstrap validates the session-bound hook manager, claims one `DebugSession` for one engine by object identity inside a `BaseException` reconciliation boundary, and retains a transferred claim even when the claim call itself raises. A claim that never transferred ownership leaves the attempting engine clean and directly usable. The provisional session remains hidden until READY; a ready engine rejects late public registration and rebootstrap.
-
-At final commit, staged Lupa globals publish first, then the session installs all accepted lifecycle callbacks as one copy-on-write guarded batch, and the engine atomically publishes its registry and READY state. Callback firing snapshots under the session lock and releases it before invocation, so callbacks may register work for the next firing without deadlock. Guard records make provisional or failed composition callbacks inert even if physical publication was interrupted. A final Lupa publication failure may leave private physical partials, but the claimed engine/session pair becomes permanently quarantined from supported execution and saved scripts. Once READY is committed, a later interruption does not downgrade it.
-
-The contract is what makes hooking, PEB introspection, netcap, and any future domain helper pluggable on the same shape. Plugins inherit from `PluginBase`, a thin `LuaExtension` specialization that adds activation gating; otherwise they behave identically to core extensions at runtime.
-
-### PE export resolution
-
-`resolveExport(module, name)` ([`memscope_mcp/utils/pe.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/utils/pe.py)) reads the PE export directory directly from target memory and binary-searches the sorted name pointer table. Forwarded exports are resolved recursively with a depth cap of 5. The hooking layer uses this to find addresses like `ws2_32!WSARecv` without symbol files or AOB-scanning known entry points.
-
-### Transparent reconnection
-
-A reverse-engineering session typically outlives the target process. `DebugSession.ensure_attached` ([`memscope_mcp/session.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/session.py)) polls the cached handle with `GetExitCodeProcess` on every tool call; if the process has exited, it retires active scan leases, closes the old handle only after they release, and transparently re-opens by name. Every successful reopen receives a new attachment generation and immutable module snapshot. The `modules` tool can explicitly rebuild that snapshot with `refresh=true`; a successful refresh advances the generation without firing process attach/detach callbacks or reopening the handle.
-
-### Lua large-hex preprocessor
-
-Lua 5.4 has 64-bit integers, but its parser still rejects hex literals beyond 32 bits -- `local p = 0x1F58E12ECF0` is a syntax error. The engine's preprocessor ([`memscope_mcp/tools/lua/engine.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/tools/lua/engine.py)) rewrites such literals to `addr("0x...")` calls, but only after protecting long strings, single- and double-quoted strings, and already-wrapped `addr()` / `parseHex()` calls from accidental rewrite. Scripts can paste raw 64-bit addresses verbatim without manual wrapping.
-
-### Service-to-PID enumeration via SCM
-
-Identifying which `svchost.exe` hosts a given Windows service is normally a multi-step chore. The `processes` tool calls `EnumServicesStatusExW` through the Service Control Manager and joins the result onto the process list, so `processes(service="EventLog")` returns the right PID in one call. Lazy-loaded: the SCM enumeration only runs when a query actually needs it.
+The hooking extension allocates target-side trampoline/ring-buffer memory, patches user-mode function entries, captures registers and optional buffers, and restores hooks on removal or detach. Native execution uses x64 shellcode and remote threads. PEB helpers open separate read-oriented handles. These are deliberate powers, not sandboxing features. Read [Inline hooking](hooking.md), [PEB introspection](peb.md), and the [security model](concepts/security-model.md).
