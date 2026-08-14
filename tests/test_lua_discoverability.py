@@ -1,8 +1,12 @@
 """Lua runtime discovery helper tests."""
 
+import re
+
 import memscope_mcp.server as server
 from memscope_mcp.attachment import ModuleRecord, ModuleSnapshot, normalize_module_name
 from memscope_mcp.extensions.core.module_scan import ModuleScanExtension
+from memscope_mcp.extensions.core.process import ProcessExtension
+from memscope_mcp.instructions import build_instructions
 from memscope_mcp.session import DebugSession
 from memscope_mcp.tools.lua.engine import LUA_ENGINE
 from memscope_mcp.utils.memory_utils import get_module_for_address
@@ -41,6 +45,87 @@ def test_module_scan_instructions_teach_named_scan_options_contract():
         "and `scanPointer` accepts `alignment`."
     ) in instructions
     assert "Expected failures return `nil, error_table`;" in instructions
+
+
+PRE_ATTACH_PROCESS_FUNCTIONS = (
+    "getProcessList",
+    "getProcessInfo",
+    "isBeingDebugged",
+    "getEnvironment",
+    "getModulesRemote",
+    "getServices",
+    "getThreads",
+)
+ATTACHED_REGION_FUNCTIONS = ("getMemoryRegions", "getRegionInfo")
+PROCESS_INSTRUCTION_HEADINGS = (
+    "Process Introspection (pre-attach)",
+    "Memory Regions (attached session)",
+)
+
+
+def _instruction_sections(text):
+    """Segment instruction text by markdown level-3 headings.
+
+    Fails on duplicate headings and on the process instruction headings
+    appearing out of order, so repeated or reordered guidance cannot
+    silently overwrite earlier content.
+    """
+    sections = {}
+    order = []
+    current = None
+    for line in text.splitlines():
+        if line.startswith("### "):
+            current = line[4:].strip()
+            if current in sections:
+                raise ValueError(f"duplicate instruction heading: {current!r}")
+            sections[current] = []
+            order.append(current)
+        elif current is not None:
+            sections[current].append(line)
+
+    positions = [order.index(name) for name in PROCESS_INSTRUCTION_HEADINGS if name in order]
+    if len(positions) == 2 and positions[0] > positions[1]:
+        raise ValueError(
+            f"instruction headings out of order: {PROCESS_INSTRUCTION_HEADINGS[0]!r} "
+            f"must precede {PROCESS_INSTRUCTION_HEADINGS[1]!r}"
+        )
+
+    return {name: "\n".join(body) for name, body in sections.items()}
+
+
+def _lua_block_function_names(section):
+    """Extract function names from a Lua block by line-leading call syntax."""
+    names = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--"):
+            continue
+        match = re.match(r"([A-Za-z_]\w*)\(.*", stripped)
+        if match:
+            names.append(match.group(1))
+    return tuple(names)
+
+
+def test_process_instructions_keep_memory_regions_out_of_pre_attach_guidance():
+    sections = _instruction_sections(ProcessExtension.instructions)
+
+    pre_attach = sections["Process Introspection (pre-attach)"]
+    assert _lua_block_function_names(pre_attach) == PRE_ATTACH_PROCESS_FUNCTIONS
+
+    region_section = sections["Memory Regions (attached session)"]
+    assert _lua_block_function_names(region_section) == ATTACHED_REGION_FUNCTIONS
+
+    guidance = " ".join(region_section.split())
+    assert "call after `attach`" in guidance
+    assert "empty table" in guidance
+    assert "`nil`" in guidance
+
+
+def test_build_instructions_carries_attached_region_guidance_forward():
+    sections = _instruction_sections(build_instructions([ProcessExtension()]))
+
+    assert "Process Introspection (pre-attach)" in sections
+    assert _lua_block_function_names(sections["Memory Regions (attached session)"]) == ATTACHED_REGION_FUNCTIONS
 
 
 def test_list_lua_functions_reports_names_and_owner_filter():

@@ -47,9 +47,17 @@ getEnvironment(pid?)             -- Env vars as {KEY = "value", ...} table
 getModulesRemote(pid?)           -- Modules without attaching: {name, base, size, path}
 getServices(pid?)                -- Services: {name, display_name, pid, state}
 getThreads(pid?)                 -- Threads: {tid, priority}
+```
+
+### Memory Regions (attached session)
+
+```lua
 getMemoryRegions(filter?, limit?) -- Regions: {base, size, protection, type}
 getRegionInfo(addr)              -- Region at address
 ```
+
+Requires an attached session: call after `attach`. When detached, `getMemoryRegions`
+returns an empty table and `getRegionInfo` returns `nil`.
 """.strip()
 
     def register(self, ctx: ExtensionContext) -> dict[str, Callable]:
