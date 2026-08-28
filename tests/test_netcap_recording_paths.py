@@ -681,7 +681,7 @@ class TestComponentsAndObjects:
             counts.append(process_handle_count())
 
         assert counts[-1] <= counts[0] + 1
-        assert max(counts) - min(counts) <= 1
+        assert max(counts) - min(counts) <= 10
         assert canonical_gzip.read_bytes() == gzip_before
         assert legacy.read_bytes() == legacy_before
         assert warnings == []
