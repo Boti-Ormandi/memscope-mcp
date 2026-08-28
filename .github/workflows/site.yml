@@ -1,0 +1,47 @@
+name: Site
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install site dependencies
+        working-directory: site
+        run: npm ci
+
+      - name: Check tool reference
+        working-directory: site
+        run: npm run tools:check
+
+      - name: Typecheck
+        working-directory: site
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: site
+        run: npm run build
+
+      - name: Static tests
+        working-directory: site
+        run: npm run test:static
+
+      - name: Install Playwright browsers
+        working-directory: site
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser tests
+        working-directory: site
+        run: npx playwright test

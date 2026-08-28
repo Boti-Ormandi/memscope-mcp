@@ -347,6 +347,7 @@ def test_write_wrapper_forwards_verify_to_write_typed(monkeypatch):
 
 def test_read_write_docstrings_describe_current_basics():
     assert "Use count > 1" in server.read.__doc__
+    assert "Use with caution" not in server.write.__doc__
     assert "sbyte" in server.read.__doc__
     assert "char" in server.read.__doc__
     assert "bytes[N]" in server.read.__doc__

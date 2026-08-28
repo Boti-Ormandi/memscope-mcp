@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://memscope.esrc.dev/sitemap-index.xml

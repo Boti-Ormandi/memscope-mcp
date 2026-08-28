@@ -1,0 +1,35 @@
+{
+  "name": "memscope-product-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "preview": "astro preview",
+    "sync": "astro sync",
+    "tools:render": "mcp-site tools render --input tools.json --output src/content/docs/reference/mcp-tools/index.md --title \"MCP tool reference\" --description \"Installed-wheel reference for the exact 11-tool stdio surface.\" --preamble tool-reference-preamble.md",
+    "tools:check": "mcp-site tools check --input tools.json --output src/content/docs/reference/mcp-tools/index.md --title \"MCP tool reference\" --description \"Installed-wheel reference for the exact 11-tool stdio surface.\" --preamble tool-reference-preamble.md",
+    "typecheck": "astro check && tsc -p tsconfig.json --noEmit",
+    "build": "npm run tools:check && astro build",
+    "test:static": "vitest run tests/static.test.ts && node --test tests/runtime-tools-snapshot.test.mjs",
+    "test:browser": "npm run build && playwright test",
+    "check": "npm run tools:check && npm run typecheck && npm run build && npm run test:static && playwright test"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.41.7",
+    "astro": "7.2.4",
+    "mcp-site-platform": "0.2.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1",
+    "@types/node": "24.10.1",
+    "node-html-parser": "7.0.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,34 @@
+/* Product-owned values for Starlight's documented design tokens. */
+:root {
+  --sl-font: "Segoe UI Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --sl-font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --sl-color-accent-low: #d9f2f0;
+  --sl-color-accent: #087f7a;
+  --sl-color-accent-high: #073f3d;
+  --sl-color-text-accent: #06736f;
+  --sl-content-width: 50rem;
+  --sl-sidebar-width: 18rem;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #073f3d;
+  --sl-color-accent: #54d4cc;
+  --sl-color-accent-high: #d9f2f0;
+  --sl-color-text-accent: #72e0d9;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--sl-color-accent) 28%, transparent);
+}
+
+/* Starlight paints the secondary action's 1px pill outline as crisp straight
+   edges plus antialiased arcs. Below ~150% device scale the arcs cannot hold a
+   solid device-pixel core and read as detached endcaps on the hero CTA, so a
+   border-colored outer ring restores one continuous outline there. At higher
+   scale the border already renders continuously and the ring would only
+   thicken the hairline. */
+@media (max-resolution: 1.4dppx) {
+  .sl-link-button.secondary {
+    box-shadow: 0 0 0 0.75px currentColor;
+  }
+}

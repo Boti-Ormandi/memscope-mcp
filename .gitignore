@@ -48,3 +48,12 @@ scripts/*/
 .claude/
 .pi/
 /.agents/
+
+# Nested Node site
+site/node_modules/
+site/dist/
+site/.astro/
+site/.cache/
+site/playwright-report/
+site/test-results/
+site/coverage/

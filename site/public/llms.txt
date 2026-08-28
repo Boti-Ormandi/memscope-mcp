@@ -1,0 +1,22 @@
+# Memscope MCP
+
+Windows process-memory MCP documentation for reverse engineering and live-process research.
+
+## Start
+
+- [Home](https://memscope.esrc.dev/)
+- [Install](https://memscope.esrc.dev/get-started/install/)
+- [Configure an MCP client](https://memscope.esrc.dev/get-started/configure-client/)
+- [First session](https://memscope.esrc.dev/get-started/first-session/)
+- [Permissions and local data](https://memscope.esrc.dev/get-started/permissions-and-data/)
+
+## Core reference
+
+- [MCP tools](https://memscope.esrc.dev/reference/mcp-tools/)
+- [Lua](https://memscope.esrc.dev/reference/lua/)
+- [Scanning](https://memscope.esrc.dev/reference/scanning/)
+- [Plugin API](https://memscope.esrc.dev/reference/plugin-api/)
+- [Security model](https://memscope.esrc.dev/concepts/security-model/)
+- [Troubleshooting](https://memscope.esrc.dev/support/troubleshooting/)
+
+This file describes the static documentation set. It makes no deployment, availability, hosting API, package-registry, or live-service status claim.

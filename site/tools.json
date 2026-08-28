@@ -1,0 +1,1860 @@
+{
+  "formatVersion": 1,
+  "server": {
+    "name": "memscope-mcp",
+    "displayName": "Memscope MCP"
+  },
+  "tools": [
+    {
+      "name": "processes",
+      "description": "List running processes with smart filtering.\n\nReturns array of {pid, name, path, parent_pid, threads, command_line, services[]}.\nServices are auto-included for svchost processes.\n\nFilters (combine as needed):\n  filter  - Substring match on process name\n  pid     - Exact PID lookup (returns single process)\n  parent  - Only processes with this parent PID\n  service - Only processes hosting this service (e.g., \"EventLog\")\n\nExamples:\n  processes(service=\"EventLog\")     - Find which svchost hosts EventLog\n  processes(filter=\"svchost\")       - All svchosts with their services\n  processes(pid=1820)               - Details for specific PID\n  processes(parent=700)             - Children of services.exe",
+      "inputSchema": {
+        "properties": {
+          "filter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Filter"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pid"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Service"
+          },
+          "limit": {
+            "default": 100,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "title": "processesArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "attach",
+      "description": "Attach to process and cache module bases.\nReturns pid, key_modules (base/size), saved_scripts list, scripts_dir, and log_file path.\n\nUse pid parameter when multiple processes share the same name (e.g., svchost.exe).\nUse processes() tool first to find the right PID.\n\nExamples: attach(\"Game.exe\") or attach(\"svchost.exe\", pid=1820)",
+      "inputSchema": {
+        "properties": {
+          "process_name": {
+            "title": "Process Name",
+            "type": "string"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pid"
+          }
+        },
+        "required": [
+          "process_name"
+        ],
+        "title": "attachArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "modules",
+      "description": "List loaded modules with base addresses, sizes, and paths.\nSet refresh to rebuild the module snapshot and advance its generation.",
+      "inputSchema": {
+        "properties": {
+          "filter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Filter"
+          },
+          "limit": {
+            "default": 30,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "refresh": {
+            "default": false,
+            "title": "Refresh",
+            "type": "boolean"
+          }
+        },
+        "title": "modulesArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "read",
+      "description": "Read typed data from memory.\nPrimitive types: int8/sbyte, uint8/byte, int16/short, uint16/ushort, char,\nint32/int, uint32/uint, int64/long, uint64/ulong, float/single,\ndouble, bool/boolean, ptr/pointer/intptr.\nSpecial types: cstring, bytes, bytes[N].\nComposite types: vector2/3/4, quaternion, color, color32, rect, bounds, matrix4x4.\nUse count > 1 for consecutive values; count controls length for bytes.\nReturns value or values array.",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "type_name": {
+            "title": "Type Name",
+            "type": "string"
+          },
+          "count": {
+            "default": 1,
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "address",
+          "type_name"
+        ],
+        "title": "readArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "write",
+      "description": "Write typed data to memory.\nTypes: primitives, composite types (vector3 as {x,y,z} dict), bytes, and bytes[N].\nBytes values accept compact hex (\"DEADBEEF\"), spaced hex (\"DE AD BE EF\"), or [222, 173, 190, 239].\nbytes[N] requires exactly N bytes.\nSet verify=True to require a writable range check, pre-image capture, byte-for-byte readback,\nand a pre-image restore attempt on post-write verification failure.",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "value": {
+            "title": "value",
+            "type": "string"
+          },
+          "type_name": {
+            "title": "Type Name",
+            "type": "string"
+          },
+          "verify": {
+            "default": false,
+            "title": "Verify",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "address",
+          "value",
+          "type_name"
+        ],
+        "title": "writeArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "dump",
+      "description": "Smart memory dump with auto pointer detection.\nFor exploring unknown structures. size is clamped to the remaining 4096-byte window.\nstart_offset selects a byte offset within that window. annotation_level: minimal, normal, or full.\nReturns annotated entries showing likely pointers and values.",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "size": {
+            "default": 256,
+            "title": "Size",
+            "type": "integer"
+          },
+          "pointers_only": {
+            "default": false,
+            "title": "Pointers Only",
+            "type": "boolean"
+          },
+          "start_offset": {
+            "default": 0,
+            "title": "Start Offset",
+            "type": "integer"
+          },
+          "non_null_only": {
+            "default": false,
+            "title": "Non Null Only",
+            "type": "boolean"
+          },
+          "max_entries": {
+            "default": 100,
+            "title": "Max Entries",
+            "type": "integer"
+          },
+          "annotation_level": {
+            "default": "normal",
+            "title": "Annotation Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "dumpArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "chain",
+      "description": "Follow pointer chain with standard RE semantics: add offset, then read.\n[[base+off0]+off1]... Offsets accept hex: [\"0x148\", \"0x10\"].\nReturns chain steps, final_address, and final_value.",
+      "inputSchema": {
+        "properties": {
+          "base": {
+            "title": "Base",
+            "type": "string"
+          },
+          "offsets": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "title": "Offsets",
+            "type": "array"
+          },
+          "read_final": {
+            "default": "ptr",
+            "title": "Read Final",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base",
+          "offsets"
+        ],
+        "title": "chainArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "scan",
+      "description": "Scan target memory with strict AOB patterns. Supports address pages with authenticated cursor continuation, first-hit mode, count mode, structured scopes, planner filters, and bounded diagnostics.",
+      "inputSchema": {
+        "$defs": {
+          "AllModulesScopeInput": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "all_modules",
+                "title": "Kind",
+                "type": "string"
+              },
+              "filters": {
+                "$ref": "#/$defs/ScanFiltersInput"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "AllModulesScopeInput",
+            "type": "object"
+          },
+          "ModulesScopeInput": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "modules",
+                "title": "Kind",
+                "type": "string"
+              },
+              "names": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "title": "Names",
+                "type": "array"
+              },
+              "filters": {
+                "$ref": "#/$defs/ScanFiltersInput"
+              }
+            },
+            "required": [
+              "kind",
+              "names"
+            ],
+            "title": "ModulesScopeInput",
+            "type": "object"
+          },
+          "RangeScopeInput": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "range",
+                "title": "Kind",
+                "type": "string"
+              },
+              "start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "title": "Start"
+              },
+              "end_exclusive": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "title": "End Exclusive"
+              },
+              "filters": {
+                "$ref": "#/$defs/ScanFiltersInput"
+              }
+            },
+            "required": [
+              "kind",
+              "start",
+              "end_exclusive"
+            ],
+            "title": "RangeScopeInput",
+            "type": "object"
+          },
+          "ScanFiltersInput": {
+            "additionalProperties": false,
+            "properties": {
+              "memory_types": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "enum": [
+                        "image",
+                        "mapped",
+                        "private"
+                      ],
+                      "type": "string"
+                    },
+                    "maxItems": 3,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Memory Types"
+              },
+              "executable": {
+                "default": "any",
+                "enum": [
+                  "any",
+                  "required",
+                  "forbidden"
+                ],
+                "title": "Executable",
+                "type": "string"
+              },
+              "writable": {
+                "default": "any",
+                "enum": [
+                  "any",
+                  "required",
+                  "forbidden"
+                ],
+                "title": "Writable",
+                "type": "string"
+              },
+              "sections": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Sections"
+              }
+            },
+            "title": "ScanFiltersInput",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Flat start-or-continuation request accepted by the strict MCP adapter.",
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "cursor"
+              ]
+            },
+            "required": [
+              "pattern"
+            ]
+          },
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "pattern"
+                  ]
+                },
+                {
+                  "required": [
+                    "scope"
+                  ]
+                },
+                {
+                  "required": [
+                    "mode"
+                  ]
+                },
+                {
+                  "required": [
+                    "max_matches"
+                  ]
+                }
+              ]
+            },
+            "required": [
+              "cursor"
+            ]
+          }
+        ],
+        "properties": {
+          "pattern": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pattern"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "all_modules": "#/$defs/AllModulesScopeInput",
+                    "modules": "#/$defs/ModulesScopeInput",
+                    "range": "#/$defs/RangeScopeInput"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/AllModulesScopeInput"
+                  },
+                  {
+                    "$ref": "#/$defs/ModulesScopeInput"
+                  },
+                  {
+                    "$ref": "#/$defs/RangeScopeInput"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          },
+          "mode": {
+            "default": "addresses",
+            "enum": [
+              "addresses",
+              "first",
+              "count"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "max_matches": {
+            "anyOf": [
+              {
+                "maximum": 100000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Matches"
+          },
+          "timeout_ms": {
+            "default": 30000,
+            "maximum": 30000,
+            "minimum": 100,
+            "title": "Timeout Ms",
+            "type": "integer"
+          },
+          "diagnostics": {
+            "default": false,
+            "title": "Diagnostics",
+            "type": "boolean"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          }
+        },
+        "title": "ScanInput",
+        "type": "object"
+      },
+      "outputSchema": {
+        "$defs": {
+          "AddressScanSuccess": {
+            "additionalProperties": false,
+            "properties": {
+              "success": {
+                "const": true,
+                "title": "Success",
+                "type": "boolean"
+              },
+              "mode": {
+                "const": "addresses",
+                "title": "Mode",
+                "type": "string"
+              },
+              "matches": {
+                "items": {
+                  "$ref": "#/$defs/ScanHit"
+                },
+                "maxItems": 500,
+                "title": "Matches",
+                "type": "array"
+              },
+              "returned_count": {
+                "anyOf": [
+                  {
+                    "maximum": 500,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 0,
+                    "type": "integer"
+                  }
+                ],
+                "title": "Returned Count"
+              },
+              "sequence_returned_count": {
+                "maximum": 100000,
+                "minimum": 0,
+                "title": "Sequence Returned Count",
+                "type": "integer"
+              },
+              "next_cursor": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Next Cursor"
+              },
+              "status": {
+                "$ref": "#/$defs/ScanStatus"
+              },
+              "diagnostics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ScanDiagnostics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "success",
+              "mode",
+              "matches",
+              "returned_count",
+              "sequence_returned_count",
+              "next_cursor",
+              "status"
+            ],
+            "title": "AddressScanSuccess",
+            "type": "object"
+          },
+          "CountScanSuccess": {
+            "additionalProperties": false,
+            "properties": {
+              "success": {
+                "const": true,
+                "title": "Success",
+                "type": "boolean"
+              },
+              "mode": {
+                "const": "count",
+                "title": "Mode",
+                "type": "string"
+              },
+              "count": {
+                "anyOf": [
+                  {
+                    "maximum": 100000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 0,
+                    "type": "integer"
+                  }
+                ],
+                "title": "Count"
+              },
+              "observation": {
+                "enum": [
+                  "complete_traversal",
+                  "partial_traversal"
+                ],
+                "title": "Observation",
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/ScanStatus"
+              },
+              "diagnostics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ScanDiagnostics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "success",
+              "mode",
+              "count",
+              "observation",
+              "status"
+            ],
+            "title": "CountScanSuccess",
+            "type": "object"
+          },
+          "FirstScanSuccess": {
+            "additionalProperties": false,
+            "properties": {
+              "success": {
+                "const": true,
+                "title": "Success",
+                "type": "boolean"
+              },
+              "mode": {
+                "const": "first",
+                "title": "Mode",
+                "type": "string"
+              },
+              "match": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ScanHit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "$ref": "#/$defs/ScanStatus"
+              },
+              "diagnostics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ScanDiagnostics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "success",
+              "mode",
+              "match",
+              "status"
+            ],
+            "title": "FirstScanSuccess",
+            "type": "object"
+          },
+          "ScanDiagnostics": {
+            "additionalProperties": false,
+            "properties": {
+              "duration_ms": {
+                "minimum": 0,
+                "title": "Duration Ms",
+                "type": "number"
+              },
+              "scope_fingerprint": {
+                "pattern": "^[0-9a-f]{64}$",
+                "title": "Scope Fingerprint",
+                "type": "string"
+              },
+              "sections": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "title": "Sections",
+                "type": "array"
+              },
+              "strategy_counts": {
+                "additionalProperties": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxProperties": 4,
+                "propertyNames": {
+                  "enum": [
+                    "exact",
+                    "all_wildcard",
+                    "anchor",
+                    "regex"
+                  ]
+                },
+                "title": "Strategy Counts",
+                "type": "object"
+              },
+              "unique_bytes_examined": {
+                "minimum": 0,
+                "title": "Unique Bytes Examined",
+                "type": "integer"
+              },
+              "physical_read_calls": {
+                "minimum": 0,
+                "title": "Physical Read Calls",
+                "type": "integer"
+              },
+              "physical_bytes_read": {
+                "minimum": 0,
+                "title": "Physical Bytes Read",
+                "type": "integer"
+              },
+              "physical_cursor_prefix_bytes": {
+                "minimum": 0,
+                "title": "Physical Cursor Prefix Bytes",
+                "type": "integer"
+              },
+              "region_count": {
+                "minimum": 0,
+                "title": "Region Count",
+                "type": "integer"
+              },
+              "span_count": {
+                "minimum": 0,
+                "title": "Span Count",
+                "type": "integer"
+              },
+              "candidate_count": {
+                "minimum": 0,
+                "title": "Candidate Count",
+                "type": "integer"
+              },
+              "verification_count": {
+                "minimum": 0,
+                "title": "Verification Count",
+                "type": "integer"
+              },
+              "control_polls": {
+                "minimum": 0,
+                "title": "Control Polls",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "duration_ms",
+              "scope_fingerprint",
+              "sections",
+              "strategy_counts",
+              "unique_bytes_examined",
+              "physical_read_calls",
+              "physical_bytes_read",
+              "physical_cursor_prefix_bytes",
+              "region_count",
+              "span_count",
+              "candidate_count",
+              "verification_count",
+              "control_polls"
+            ],
+            "title": "ScanDiagnostics",
+            "type": "object"
+          },
+          "ScanFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "success": {
+                "const": false,
+                "default": false,
+                "title": "Success",
+                "type": "boolean"
+              },
+              "error": {
+                "enum": [
+                  "INVALID_PATTERN",
+                  "INVALID_SCOPE",
+                  "INVALID_MODE",
+                  "INVALID_ARGUMENT",
+                  "MODULE_NOT_FOUND",
+                  "AMBIGUOUS_MODULE",
+                  "SECTION_NOT_FOUND",
+                  "PROCESS_NOT_ATTACHED",
+                  "INVALID_CURSOR",
+                  "CURSOR_STALE",
+                  "TARGET_CHANGED",
+                  "INTERNAL_SCAN_ERROR"
+                ],
+                "title": "Error",
+                "type": "string"
+              },
+              "detail": {
+                "maxLength": 1024,
+                "minLength": 1,
+                "title": "Detail",
+                "type": "string"
+              },
+              "field": {
+                "anyOf": [
+                  {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Field"
+              },
+              "hint": {
+                "anyOf": [
+                  {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Hint"
+              }
+            },
+            "required": [
+              "error",
+              "detail"
+            ],
+            "title": "ScanFailure",
+            "type": "object"
+          },
+          "ScanHit": {
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "pattern": "^0x(?:0|[1-9A-F][0-9A-F]*)$",
+                "title": "Address",
+                "type": "string"
+              },
+              "module": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Module"
+              },
+              "module_offset": {
+                "anyOf": [
+                  {
+                    "pattern": "^0x(?:0|[1-9A-F][0-9A-F]*)$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Module Offset"
+              }
+            },
+            "required": [
+              "address",
+              "module",
+              "module_offset"
+            ],
+            "title": "ScanHit",
+            "type": "object"
+          },
+          "ScanStatus": {
+            "additionalProperties": false,
+            "properties": {
+              "termination": {
+                "enum": [
+                  "scope_exhausted",
+                  "page_limit",
+                  "match_limit",
+                  "first_hit",
+                  "timeout",
+                  "cancelled",
+                  "target_changed",
+                  "reader_error"
+                ],
+                "title": "Termination",
+                "type": "string"
+              },
+              "read_gaps_detected": {
+                "title": "Read Gaps Detected",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "termination",
+              "read_gaps_detected"
+            ],
+            "title": "ScanStatus",
+            "type": "object"
+          }
+        },
+        "anyOf": [
+          {
+            "discriminator": {
+              "mapping": {
+                "addresses": "#/$defs/AddressScanSuccess",
+                "count": "#/$defs/CountScanSuccess",
+                "first": "#/$defs/FirstScanSuccess"
+              },
+              "propertyName": "mode"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/AddressScanSuccess"
+              },
+              {
+                "$ref": "#/$defs/FirstScanSuccess"
+              },
+              {
+                "$ref": "#/$defs/CountScanSuccess"
+              }
+            ]
+          },
+          {
+            "$ref": "#/$defs/ScanFailure"
+          }
+        ],
+        "title": "ScanResponse",
+        "type": "object"
+      }
+    },
+    {
+      "name": "scan_many",
+      "description": "Scan 1-32 keyed AOB patterns in one shared target-memory traversal. Supports only bounded first-hit and count modes, structured scopes, PE-section filters, and shared diagnostics.",
+      "inputSchema": {
+        "$defs": {
+          "AllModulesScopeInput": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "all_modules",
+                "title": "Kind",
+                "type": "string"
+              },
+              "filters": {
+                "$ref": "#/$defs/ScanFiltersInput"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "AllModulesScopeInput",
+            "type": "object"
+          },
+          "ModulesScopeInput": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "modules",
+                "title": "Kind",
+                "type": "string"
+              },
+              "names": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "title": "Names",
+                "type": "array"
+              },
+              "filters": {
+                "$ref": "#/$defs/ScanFiltersInput"
+              }
+            },
+            "required": [
+              "kind",
+              "names"
+            ],
+            "title": "ModulesScopeInput",
+            "type": "object"
+          },
+          "NamedPatternInput": {
+            "additionalProperties": false,
+            "description": "One caller-keyed AOB pattern in a bounded batch request.",
+            "properties": {
+              "key": {
+                "minLength": 1,
+                "title": "Key",
+                "type": "string"
+              },
+              "pattern": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "title": "Pattern",
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "pattern"
+            ],
+            "title": "NamedPatternInput",
+            "type": "object"
+          },
+          "RangeScopeInput": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "range",
+                "title": "Kind",
+                "type": "string"
+              },
+              "start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "title": "Start"
+              },
+              "end_exclusive": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "title": "End Exclusive"
+              },
+              "filters": {
+                "$ref": "#/$defs/ScanFiltersInput"
+              }
+            },
+            "required": [
+              "kind",
+              "start",
+              "end_exclusive"
+            ],
+            "title": "RangeScopeInput",
+            "type": "object"
+          },
+          "ScanFiltersInput": {
+            "additionalProperties": false,
+            "properties": {
+              "memory_types": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "enum": [
+                        "image",
+                        "mapped",
+                        "private"
+                      ],
+                      "type": "string"
+                    },
+                    "maxItems": 3,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Memory Types"
+              },
+              "executable": {
+                "default": "any",
+                "enum": [
+                  "any",
+                  "required",
+                  "forbidden"
+                ],
+                "title": "Executable",
+                "type": "string"
+              },
+              "writable": {
+                "default": "any",
+                "enum": [
+                  "any",
+                  "required",
+                  "forbidden"
+                ],
+                "title": "Writable",
+                "type": "string"
+              },
+              "sections": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Sections"
+              }
+            },
+            "title": "ScanFiltersInput",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Bounded first-hit or count batch over one shared scan traversal.",
+        "properties": {
+          "patterns": {
+            "items": {
+              "$ref": "#/$defs/NamedPatternInput"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Patterns",
+            "type": "array"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "all_modules": "#/$defs/AllModulesScopeInput",
+                    "modules": "#/$defs/ModulesScopeInput",
+                    "range": "#/$defs/RangeScopeInput"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/AllModulesScopeInput"
+                  },
+                  {
+                    "$ref": "#/$defs/ModulesScopeInput"
+                  },
+                  {
+                    "$ref": "#/$defs/RangeScopeInput"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          },
+          "mode": {
+            "default": "first",
+            "enum": [
+              "first",
+              "count"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "max_matches": {
+            "anyOf": [
+              {
+                "maximum": 100000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Matches"
+          },
+          "timeout_ms": {
+            "default": 30000,
+            "maximum": 30000,
+            "minimum": 100,
+            "title": "Timeout Ms",
+            "type": "integer"
+          },
+          "diagnostics": {
+            "default": false,
+            "title": "Diagnostics",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "patterns"
+        ],
+        "title": "ScanManyInput",
+        "type": "object"
+      },
+      "outputSchema": {
+        "$defs": {
+          "CountScanManyItem": {
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "minLength": 1,
+                "title": "Key",
+                "type": "string"
+              },
+              "count": {
+                "anyOf": [
+                  {
+                    "maximum": 100000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 0,
+                    "type": "integer"
+                  }
+                ],
+                "title": "Count"
+              },
+              "observation": {
+                "enum": [
+                  "complete_traversal",
+                  "partial_traversal"
+                ],
+                "title": "Observation",
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/ScanStatus"
+              }
+            },
+            "required": [
+              "key",
+              "count",
+              "observation",
+              "status"
+            ],
+            "title": "CountScanManyItem",
+            "type": "object"
+          },
+          "CountScanManySuccess": {
+            "additionalProperties": false,
+            "properties": {
+              "success": {
+                "const": true,
+                "title": "Success",
+                "type": "boolean"
+              },
+              "mode": {
+                "const": "count",
+                "title": "Mode",
+                "type": "string"
+              },
+              "results": {
+                "items": {
+                  "$ref": "#/$defs/CountScanManyItem"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "title": "Results",
+                "type": "array"
+              },
+              "shared": {
+                "$ref": "#/$defs/ScanManyShared"
+              }
+            },
+            "required": [
+              "success",
+              "mode",
+              "results",
+              "shared"
+            ],
+            "title": "CountScanManySuccess",
+            "type": "object"
+          },
+          "FirstScanManyItem": {
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "minLength": 1,
+                "title": "Key",
+                "type": "string"
+              },
+              "match": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ScanHit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "$ref": "#/$defs/ScanStatus"
+              }
+            },
+            "required": [
+              "key",
+              "match",
+              "status"
+            ],
+            "title": "FirstScanManyItem",
+            "type": "object"
+          },
+          "FirstScanManySuccess": {
+            "additionalProperties": false,
+            "properties": {
+              "success": {
+                "const": true,
+                "title": "Success",
+                "type": "boolean"
+              },
+              "mode": {
+                "const": "first",
+                "title": "Mode",
+                "type": "string"
+              },
+              "results": {
+                "items": {
+                  "$ref": "#/$defs/FirstScanManyItem"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "title": "Results",
+                "type": "array"
+              },
+              "shared": {
+                "$ref": "#/$defs/ScanManyShared"
+              }
+            },
+            "required": [
+              "success",
+              "mode",
+              "results",
+              "shared"
+            ],
+            "title": "FirstScanManySuccess",
+            "type": "object"
+          },
+          "ScanDiagnostics": {
+            "additionalProperties": false,
+            "properties": {
+              "duration_ms": {
+                "minimum": 0,
+                "title": "Duration Ms",
+                "type": "number"
+              },
+              "scope_fingerprint": {
+                "pattern": "^[0-9a-f]{64}$",
+                "title": "Scope Fingerprint",
+                "type": "string"
+              },
+              "sections": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "title": "Sections",
+                "type": "array"
+              },
+              "strategy_counts": {
+                "additionalProperties": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxProperties": 4,
+                "propertyNames": {
+                  "enum": [
+                    "exact",
+                    "all_wildcard",
+                    "anchor",
+                    "regex"
+                  ]
+                },
+                "title": "Strategy Counts",
+                "type": "object"
+              },
+              "unique_bytes_examined": {
+                "minimum": 0,
+                "title": "Unique Bytes Examined",
+                "type": "integer"
+              },
+              "physical_read_calls": {
+                "minimum": 0,
+                "title": "Physical Read Calls",
+                "type": "integer"
+              },
+              "physical_bytes_read": {
+                "minimum": 0,
+                "title": "Physical Bytes Read",
+                "type": "integer"
+              },
+              "physical_cursor_prefix_bytes": {
+                "minimum": 0,
+                "title": "Physical Cursor Prefix Bytes",
+                "type": "integer"
+              },
+              "region_count": {
+                "minimum": 0,
+                "title": "Region Count",
+                "type": "integer"
+              },
+              "span_count": {
+                "minimum": 0,
+                "title": "Span Count",
+                "type": "integer"
+              },
+              "candidate_count": {
+                "minimum": 0,
+                "title": "Candidate Count",
+                "type": "integer"
+              },
+              "verification_count": {
+                "minimum": 0,
+                "title": "Verification Count",
+                "type": "integer"
+              },
+              "control_polls": {
+                "minimum": 0,
+                "title": "Control Polls",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "duration_ms",
+              "scope_fingerprint",
+              "sections",
+              "strategy_counts",
+              "unique_bytes_examined",
+              "physical_read_calls",
+              "physical_bytes_read",
+              "physical_cursor_prefix_bytes",
+              "region_count",
+              "span_count",
+              "candidate_count",
+              "verification_count",
+              "control_polls"
+            ],
+            "title": "ScanDiagnostics",
+            "type": "object"
+          },
+          "ScanFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "success": {
+                "const": false,
+                "default": false,
+                "title": "Success",
+                "type": "boolean"
+              },
+              "error": {
+                "enum": [
+                  "INVALID_PATTERN",
+                  "INVALID_SCOPE",
+                  "INVALID_MODE",
+                  "INVALID_ARGUMENT",
+                  "MODULE_NOT_FOUND",
+                  "AMBIGUOUS_MODULE",
+                  "SECTION_NOT_FOUND",
+                  "PROCESS_NOT_ATTACHED",
+                  "INVALID_CURSOR",
+                  "CURSOR_STALE",
+                  "TARGET_CHANGED",
+                  "INTERNAL_SCAN_ERROR"
+                ],
+                "title": "Error",
+                "type": "string"
+              },
+              "detail": {
+                "maxLength": 1024,
+                "minLength": 1,
+                "title": "Detail",
+                "type": "string"
+              },
+              "field": {
+                "anyOf": [
+                  {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Field"
+              },
+              "hint": {
+                "anyOf": [
+                  {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Hint"
+              }
+            },
+            "required": [
+              "error",
+              "detail"
+            ],
+            "title": "ScanFailure",
+            "type": "object"
+          },
+          "ScanHit": {
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "pattern": "^0x(?:0|[1-9A-F][0-9A-F]*)$",
+                "title": "Address",
+                "type": "string"
+              },
+              "module": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Module"
+              },
+              "module_offset": {
+                "anyOf": [
+                  {
+                    "pattern": "^0x(?:0|[1-9A-F][0-9A-F]*)$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Module Offset"
+              }
+            },
+            "required": [
+              "address",
+              "module",
+              "module_offset"
+            ],
+            "title": "ScanHit",
+            "type": "object"
+          },
+          "ScanManyShared": {
+            "additionalProperties": false,
+            "properties": {
+              "termination": {
+                "enum": [
+                  "scope_exhausted",
+                  "page_limit",
+                  "match_limit",
+                  "first_hit",
+                  "timeout",
+                  "cancelled",
+                  "target_changed",
+                  "reader_error"
+                ],
+                "title": "Termination",
+                "type": "string"
+              },
+              "read_gaps_detected": {
+                "title": "Read Gaps Detected",
+                "type": "boolean"
+              },
+              "diagnostics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ScanDiagnostics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "termination",
+              "read_gaps_detected"
+            ],
+            "title": "ScanManyShared",
+            "type": "object"
+          },
+          "ScanStatus": {
+            "additionalProperties": false,
+            "properties": {
+              "termination": {
+                "enum": [
+                  "scope_exhausted",
+                  "page_limit",
+                  "match_limit",
+                  "first_hit",
+                  "timeout",
+                  "cancelled",
+                  "target_changed",
+                  "reader_error"
+                ],
+                "title": "Termination",
+                "type": "string"
+              },
+              "read_gaps_detected": {
+                "title": "Read Gaps Detected",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "termination",
+              "read_gaps_detected"
+            ],
+            "title": "ScanStatus",
+            "type": "object"
+          }
+        },
+        "anyOf": [
+          {
+            "discriminator": {
+              "mapping": {
+                "count": "#/$defs/CountScanManySuccess",
+                "first": "#/$defs/FirstScanManySuccess"
+              },
+              "propertyName": "mode"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/FirstScanManySuccess"
+              },
+              {
+                "$ref": "#/$defs/CountScanManySuccess"
+              }
+            ]
+          },
+          {
+            "$ref": "#/$defs/ScanFailure"
+          }
+        ],
+        "title": "ScanManyResponse",
+        "type": "object"
+      }
+    },
+    {
+      "name": "lua",
+      "description": "Execute Lua script for complex memory operations (loops, conditionals, multi-step).\nSee server instructions for full list of available Lua functions.\nArgs: script - Lua code. timeout - optional max seconds (default: 180 seconds).\nReturns: {success, results (dict), output (array of prints)}",
+      "inputSchema": {
+        "properties": {
+          "script": {
+            "title": "Script",
+            "type": "string"
+          },
+          "timeout": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout"
+          }
+        },
+        "required": [
+          "script"
+        ],
+        "title": "luaArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "scripts",
+      "description": "Lua script management. Scripts live under $MEMSCOPE_HOME/scripts/<process>/<name>.lua.\n\nActions:\n  list - Returns scripts with absolute paths. Use process='*' for all processes.\n  run  - Execute by name. Pass args={} for script arguments. timeout=seconds optional.\n         process='ProcessName.exe' selects the saved-script namespace only; it does not attach or switch.\n         Without an attachment, pass process for detached execution. When attached, process must match.\n         Responses include requested_process, attached_process, attached_pid, and detached_execution.\n\nCREATE/EDIT: Use file tools on paths from 'list'. First line comment = description.\nExample: scripts(action='list') -> get scripts_dir, then Write to {scripts_dir}/<name>.lua\n",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "process": {
+            "default": "",
+            "title": "Process",
+            "type": "string"
+          },
+          "args": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Args"
+          },
+          "timeout": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "scriptsArguments",
+        "type": "object"
+      }
+    }
+  ]
+}
