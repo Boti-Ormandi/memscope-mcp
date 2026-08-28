@@ -50,11 +50,10 @@ Use ordinary Python values and tables from `ctx.table_factory` at the boundary. 
 Optional callbacks are:
 
 ```python
-def on_process_attached(self, session):
-    ...
+def on_process_attached(self, session): ...
 
-def on_process_detaching(self, session, process_alive):
-    ...
+
+def on_process_detaching(self, session, process_alive): ...
 ```
 
 Attach callbacks run after a successful process attach or switch. Detach callbacks run before the process handle closes. `process_alive` indicates whether target-side cleanup can still run. Callback failures are isolated; plugin state must still reset on both live and already-exited detach paths.
