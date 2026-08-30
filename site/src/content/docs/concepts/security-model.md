@@ -28,7 +28,3 @@ Netcap recording names, process components, roots, and selected files use Window
 Report unintended host execution, boundary escape, path corruption, secret disclosure, or supply-chain weakness through [SECURITY.md](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/SECURITY.md).
 
 See [Read and write memory](/guides/read-and-write-memory/), [Capture calls](/guides/capture-function-calls/), [Plugin troubleshooting](/plugins/troubleshooting/), and [Security support](/support/security/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/concepts/security-model.md)

@@ -3,9 +3,9 @@ title: "Architecture"
 description: "The Windows x64 stdio, session, Lua, scanning, and plugin architecture."
 ---
 
-`memscope-mcp` is a Windows x64 process-memory MCP server with a narrow stdio boundary and a session-bound Lua composition layer. The server keeps common operations in core extensions and loads domain behavior only from explicitly activated plugin files.
+`memscope-mcp` is a Windows x64 process-memory MCP server that communicates over stdio and provides a session-bound Lua runtime. Core extensions provide common operations; explicitly activated Python plugins add domain-specific functions.
 
-For task-first use, start with [Getting started](/get-started/install/). For the public surface, use [MCP tools](/reference/mcp-tools/), [Lua reference](/reference/lua/), and [Scanning](/reference/scanning/).
+To use the server, start with [installation](/get-started/install/). Request schemas and runtime functions are documented in [MCP tools](/reference/mcp-tools/), the [Lua reference](/reference/lua/), and [Scanning](/reference/scanning/).
 
 ## Runtime shape
 
@@ -30,7 +30,7 @@ DebugSession + immutable module snapshot
           +--> Windows x64 target process
 ```
 
-The 11 tools are `processes`, `attach`, `modules`, `read`, `write`, `dump`, `chain`, `scan`, `scan_many`, `lua`, and `scripts`. The synchronous business functions remain ordinary Python callables; the MCP boundary supplies same-thread dispatch for those wrappers. `scan` and `scan_many` use strict Pydantic input/output models and explicit application error envelopes.
+The 11 tools are `processes`, `attach`, `modules`, `read`, `write`, `dump`, `chain`, `scan`, `scan_many`, `lua`, and `scripts`. Their synchronous handlers remain ordinary Python callables; the MCP adapter dispatches them on the same thread. `scan` and `scan_many` use strict Pydantic input/output models and explicit application error envelopes.
 
 ## Repository layout
 
@@ -57,9 +57,11 @@ memscope_mcp/
   _contrib/plugins/         bundled il2cpp.py and netcap.py install sources
   utils/                    process, PEB, PE, logging, and x64 helpers
 
-docs/                       human-facing source content
+site/src/content/docs/      end-user documentation
+
+docs/                       implementation notes and documentation URL map
 benchmarks/                 repository-only benchmark tooling
- tests/                      unit, smoke, integration, and plugin tests
+tests/                      unit, smoke, integration, and plugin tests
 ```
 
 The runtime data root is separate from the repository:
@@ -100,7 +102,7 @@ They provide the common Lua functions for address handling, memory, scans, nativ
 
 The scanner compiles strict AOB patterns before target reads, normalizes scopes against one module snapshot, plans readable spans, reads bounded chunks, preserves exact overlap continuity, and returns explicit termination/status. Module and range scopes use memory-type and permission filters; module scopes also support case-insensitive PE-section filters. MCP address pages use an authenticated cursor bound to the attachment identity. `scan_many` shares one traversal across 1–32 keyed patterns and supports only `first` and `count` modes.
 
-The scan package is an internal engine boundary rather than a supported Python API. Use the MCP tools or Lua helpers. Full request shapes and statuses are in [Scanning](/reference/scanning/).
+The scan package is an internal implementation, not a supported Python API. Use the MCP tools or Lua helpers. Full request shapes and statuses are in [Scanning](/reference/scanning/).
 
 ## Lua runtime
 
@@ -112,12 +114,8 @@ Scripts, native calls, hooks, and plugin callbacks share the session boundary bu
 
 The plugin loader scans only `$MEMSCOPE_HOME/plugins/*.py`, nonrecursively, in sorted activated filename order. It skips underscore-prefixed filenames. `_contrib/plugins/` is a packaged catalog/install source, not an automatic runtime root. Each activated file supplies one `PluginBase`/`LuaExtension` implementation and is isolated if ordinary registration fails.
 
-Plugins receive a session-bound `ExtensionContext` and register Lua mappings transactionally. A plugin instance owns domain state; attach and detach callbacks own process-bound cleanup. The generic core and plugins share the same `HookManager` when both use hooks. See [Plugin overview](/plugins/overview/), [Plugin API](/reference/plugin-api/), and [Plugin lifecycle](/plugins/lifecycle-and-contract/).
+Plugins receive a session-bound `ExtensionContext` and register Lua mappings transactionally. A plugin instance owns domain state; attach and detach callbacks own process-bound cleanup. Core extensions and plugins share the same `HookManager` when both use hooks. See [Plugin overview](/plugins/overview/), [Plugin API](/reference/plugin-api/), and [Plugin lifecycle](/plugins/lifecycle-and-contract/).
 
 ## Hooking and target effects
 
 The hooking extension allocates target-side trampoline/ring-buffer memory, patches user-mode function entries, captures registers and optional buffers, and restores hooks on removal or detach. Native execution uses x64 shellcode and remote threads. PEB helpers open separate read-oriented handles. Read [Inline hooking](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/hooking.md), [PEB introspection](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/peb.md), and the [security model](/concepts/security-model/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/architecture.md)

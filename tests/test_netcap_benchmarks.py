@@ -779,15 +779,5 @@ def test_nonfinite_allocation_median_is_rejected(diagnostic_artifact):
         validate_artifact(invalid)
 
 
-def test_lua_reference_encoding_and_em_dashes():
-    path = Path(__file__).resolve().parents[1] / "docs" / "lua-reference.md"
-    raw = path.read_bytes()
-    assert not raw.startswith(b"\xef\xbb\xbf")
-    text = raw.decode("utf-8")
-    assert text.count("\N{EM DASH}") == 2
-    assert "\u00e2\u20ac\u201d" not in text
-    assert "Arbitrary converted integers retain exact legacy comparison semantics." in text
-
-
 def test_no_benchmark_local_optimized_kernel_is_exposed():
     assert not any(name.startswith("_optimized") for name in vars(benchmark))

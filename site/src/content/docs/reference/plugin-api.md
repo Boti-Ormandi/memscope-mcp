@@ -78,7 +78,3 @@ Earlier activated files win extension-name and Lua-function collisions. Import, 
 - [`memscope_mcp/_contrib/plugins/il2cpp.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/_contrib/plugins/il2cpp.py)
 - [`memscope_mcp/_contrib/plugins/netcap.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/_contrib/plugins/netcap.py)
 - [`tests/test_extension_bootstrap.py`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/tests/test_extension_bootstrap.py)
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/reference/plugin-api.md)

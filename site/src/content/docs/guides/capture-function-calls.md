@@ -3,7 +3,7 @@ title: "Capture function calls"
 description: "Use inline hooks and bounded target-side ring buffers."
 ---
 
-The core hooking extension observes user-mode function calls through inline trampolines and a shared target-side ring buffer. It does not inject a DLL or provide kernel interception. A hook changes target code and can expose sensitive buffers.
+The core hooking extension observes user-mode function calls through inline trampolines and a shared target-side ring buffer. It does not inject a DLL or provide kernel interception. A hook changes target code. Captured buffers can contain credentials, tokens, plaintext network data, or personal data.
 
 ## Minimal read cycle
 
@@ -63,7 +63,3 @@ Entries include sequence, hook ID/name, timestamp, return address, register argu
 Hook installation writes target function entries and allocates executable trampoline memory. Native calls create remote threads and can change target state. Captured buffers can contain credentials, tokens, plaintext network data, or personal data; session logs and Netcap recordings persist local summaries and payloads.
 
 Stop hooks and capture before detach. A process exit can make target cleanup unavailable, so the extension clears local state and defers only what the target permits. See [Inline hooking](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/hooking.md), [Read and write memory](/guides/read-and-write-memory/), [Netcap](/plugins/netcap/), and [Security model](/concepts/security-model/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/guides/capture-calls.md)

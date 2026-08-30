@@ -48,7 +48,3 @@ An activated plugin runs as Python in the server process. It can read the attach
 Netcap captures target traffic, and environment reads can return credentials or other secret material. Recordings, logs, and diagnostics persist under `MEMSCOPE_HOME`.
 
 See [Plugin overview](/plugins/overview/), [Plugin troubleshooting](/plugins/troubleshooting/), and [Security model](/concepts/security-model/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/guides/use-plugins.md)

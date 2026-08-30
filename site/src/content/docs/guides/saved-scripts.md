@@ -33,7 +33,7 @@ The process directory is a saved-script namespace. It is not a request to attach
 
 ```text
 scripts(action="run", name="locate_signature")
-scripts(action="run", name="locate_signature", args={"expected"="4D 5A"}, timeout=30)
+scripts(action="run", name="locate_signature", args={"expected": "4D 5A"}, timeout=30)
 ```
 
 Use `process="Target.exe"` to select a namespace explicitly. If the server is detached, an explicit `process` is required. If the server is attached, an explicit process must match the attached target case-insensitively. The process argument never attaches or switches the target.
@@ -47,7 +47,3 @@ The default path is `$MEMSCOPE_HOME/scripts/<process>/`. Scripts can call memory
 The Lua engine uses a default execution timeout and supports explicit `timeout`. Cancellation preserves captured output but does not guarantee result entries after interruption. Large hexadecimal literals are normalized to `addr("0x...")`; explicit `addr()` is the clearest form for 64-bit addresses.
 
 See [Lua reference](/reference/lua/), [CLI and paths](/reference/cli-and-paths/), and [Security model](/concepts/security-model/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/guides/saved-scripts.md)

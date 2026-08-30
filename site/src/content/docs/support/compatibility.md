@@ -3,7 +3,7 @@ title: "Compatibility"
 description: "Supported Windows, Python, MCP, Lua, data, and plugin boundaries."
 ---
 
-The current public compatibility boundary is intentionally small and explicit.
+Memscope currently supports the host, target, transport, and runtime configurations listed below.
 
 ## Host and transport
 
@@ -27,14 +27,10 @@ The runtime data root is `$MEMSCOPE_HOME` with `logs/`, `scripts/`, and `plugins
 
 Netcap canonical recordings use `$MEMSCOPE_HOME/scripts/<process>/recordings/`. The cwd-relative `scripts/<process>/recordings/` path is a read-only legacy fallback with explicit warning behavior. File selection, component validation, append semantics, compression publication, and residuals are in [Netcap](/plugins/netcap/).
 
-## Contract references
+## Related references
 
 - [MCP tools](/reference/mcp-tools/)
 - [Lua reference](/reference/lua/)
 - [Scanning](/reference/scanning/)
 - [Plugin API](/reference/plugin-api/)
 - [CLI and paths](/reference/cli-and-paths/)
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/support/compatibility.md)

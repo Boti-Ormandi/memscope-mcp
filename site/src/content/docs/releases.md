@@ -1,27 +1,12 @@
 ---
 title: "Releases"
-description: "Current release guidance and links to version-specific GitHub Release history."
+description: "Package metadata, GitHub Release history, and release workflow checks."
 ---
 
-Release materials are separate from evergreen product documentation. This page describes the boundary at a high level so contributors know where a change belongs.
+Published versions and release notes are listed in [GitHub Releases](https://github.com/Boti-Ormandi/memscope-mcp/releases). The version embedded in a Python distribution comes from [`pyproject.toml`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/pyproject.toml).
 
-## Source of truth
+## Checks before publication
 
-- README and `docs/**` describe current behavior, operations, and support.
-- `SECURITY.md` and `CONTRIBUTING.md` define reporting and contribution policy.
-- Release notes describe version-specific changes and belong in the project release materials.
-- Site content mirrors the repository pages through the routes in [the site route inventory](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/site-routes.md).
+The [`release.yml`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/.github/workflows/release.yml) workflow runs the Windows Python test matrix and Ruff before building and checking the distribution. The separate [`site.yml`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/.github/workflows/site.yml) workflow builds and installs the current wheel, compares its 11 MCP tools with `site/tools.json`, checks the generated tool reference, builds the site, and runs static, browser, and accessibility tests for pull requests and main-branch updates.
 
-Do not add availability claims, version-history tables, package publication claims, external service identity, or release-specific transition instructions to evergreen pages.
-
-## Maintainer checks
-
-Maintainers review source, tests, docs, package metadata, and distribution checks together. They run the required platform checks on a clean tree, verify the 11-tool surface and plugin/Netcap contracts, prepare release-specific notes separately, and use authenticated publication systems under their own authority.
-
-Contributors do not add credentials, upload source or target data, change publication configuration, or publish packages/sites as part of an ordinary code or documentation change.
-
-See [Contributing](/contribute/), [Compatibility](/support/compatibility/), and [Security support](/support/security/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/releases.md)
+The release workflow publishes the Python package; neither workflow deploys the Astro site. See [Contributing](/contribute/) for the commands used during development.

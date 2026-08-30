@@ -161,7 +161,7 @@ The implementation holds and revalidates directory/file handles, uses no-follow 
 
 Gzip compression reads the canonical source through a protected handle, writes a random same-directory stage, flushes it, performs a full decompression/readback hash check, verifies the destination is absent, publishes with no-replace semantics, and retires the source only after publication. An existing destination never gets overwritten. A publication failure preserves the source and does not silently replace the destination.
 
-The boundary prevents accidental alias/traversal escape and validates the named boundaries. It is not security against a malicious same-principal concurrent process. Accepted residuals are:
+The boundary rejects alias/traversal escape at its named validation points. A same-principal concurrent process can still mutate the same filesystem objects after validation. Remaining behaviors are:
 
 - post-validation same-principal mutation;
 - a partial final line after an abrupt exit;
@@ -169,14 +169,10 @@ The boundary prevents accidental alias/traversal escape and validates the named 
 - a duplicate source/gzip pair after publication-before-retirement; and
 - no directory-entry power-loss durability.
 
-These residuals are explicit operational boundaries, not guarantees that the tool provides.
+These behaviors delimit what the filesystem checks establish.
 
 ## Stop and cleanup
 
 `stopRecording()` closes, flushes, optionally publishes gzip, and resets recording state. Detach cleanup closes active writers and directories, removes capture hooks when the process remains alive, and records cleanup errors without inventing a successful target-side cleanup. If the target already exits, local state clears while target-side cleanup may be unavailable.
 
 See [Capture calls](/guides/capture-function-calls/), [Plugin lifecycle](/plugins/lifecycle-and-contract/), [CLI and paths](/reference/cli-and-paths/), [Security model](/concepts/security-model/), and the [Netcap source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/_contrib/plugins/netcap.py).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/plugins/netcap.md)

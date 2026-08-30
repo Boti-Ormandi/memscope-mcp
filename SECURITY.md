@@ -1,34 +1,38 @@
 # Security policy
 
-memscope-mcp is a Windows process-memory research tool. Reports about its intended ability to inspect or modify an authorized target are not security defects by themselves. Reports about unintended access, host compromise, unsafe isolation, or supply-chain weakness are security reports.
+memscope-mcp is a Windows process-memory tool. Reading or modifying the selected process and running activated extensions are intended product behavior. Use private security reports for defects that affect another process, unrelated host data, or the package and plugin supply chain.
 
-## Reporting a vulnerability
+## Private reporting
 
-Use GitHub's private security advisory mechanism:
+Submit a report through GitHub private security advisories:
 
 <https://github.com/Boti-Ormandi/memscope-mcp/security/advisories/new>
 
-Do not disclose vulnerability details in a public issue. Include the affected behavior, host and target conditions, a minimal reproduction that avoids real user data, impact, and any mitigation that is already known. Redact process dumps, credentials, tokens, captured packets, plugin source, and other sensitive material from the report; share a disposable reproduction when possible.
+Include the affected behavior, Windows and target conditions, a minimal reproduction, impact, and any known mitigation. Remove unrelated process dumps, credentials, tokens, packet payloads, recordings, plugin source, and session logs from the report.
 
-The project acknowledges reports within 7 days. Coordinated disclosure timing is agreed case by case according to severity, exploitability, and fix complexity.
+## Intended selected-target behavior
 
-## Supported-version policy
+For the exact process selected by name and PID, and subject to the Windows permissions of the server process, memscope-mcp can:
 
-Security fixes target the current supported minor line. Older lines may not receive security fixes. Keep the server, its dependencies, the MCP client, and activated plugins under local change control, and review package and plugin changes before use.
+- open process handles and read or write target memory;
+- change target page protection and allocate or free target memory;
+- create remote threads and call native target functions;
+- install user-mode inline hooks and capture registers or bounded buffers;
+- read PEB command lines, environment variables, debugger state, and module data;
+- execute saved Lua and activated Python plugins; and
+- persist session logs, saved scripts, captures, and recordings under `MEMSCOPE_HOME`.
 
-## Intended powers and reportable defects
+Activated plugin files load as Python when the server starts. Netcap recording paths use validated Windows components and held handles, but a concurrent process running as the same Windows principal can operate on the same filesystem objects.
 
-The following powers are part of the product contract when the operator has authorization:
+## Security defect classes
 
-- opening a process handle and reading process memory;
-- writing typed values or bytes to target memory;
-- changing target page protection and allocating or freeing target memory;
-- creating remote threads and calling target-native functions;
-- installing user-mode inline hooks and collecting registers or bounded buffers;
-- reading PEB command lines, environment variables, debugger state, and remote modules;
-- running Python plugin code in the server process; and
-- storing session logs, saved scripts, packet captures, and recordings under the configured data root.
+Private security reports are appropriate for defects that cause:
 
-A report becomes security-relevant when a defect lets an operation escape its requested target or boundary, causes unintended host-side code execution, bypasses an authorization or trust boundary, leaks secrets through diagnostics or logs, corrupts unrelated files, or weakens package/plugin supply-chain integrity.
+- an operation to affect a process other than the selected target or escape a requested memory/filesystem boundary;
+- host-side code execution that is not the direct result of an activated plugin or an explicit documented execution operation;
+- unintended disclosure through diagnostics, logs, generated artifacts, or protocol responses;
+- corruption of unrelated host files or data roots;
+- bypass of the documented plugin activation, path-validation, or process-selection boundaries; or
+- compromise of package, plugin, build, release, or dependency integrity.
 
-Plugin files are executable Python supplied by the operator. Installing a plugin is a trust decision; review the file and its imports before activation. Netcap recordings use validated Windows path components and held handles, but the boundary is not a security boundary against a malicious concurrent process running as the same principal. See the [security model](docs/concepts/security-model.md) for the complete scope and residuals.
+See the [security model](https://memscope.esrc.dev/concepts/security-model/) for execution and data behavior, or [security support](https://memscope.esrc.dev/support/security/) for the private report link.

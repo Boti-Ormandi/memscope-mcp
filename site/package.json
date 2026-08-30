@@ -12,11 +12,13 @@
     "sync": "astro sync",
     "tools:render": "mcp-site tools render --input tools.json --output src/content/docs/reference/mcp-tools/index.md --title \"MCP tool reference\" --description \"Installed-wheel reference for the exact 11-tool stdio surface.\" --preamble tool-reference-preamble.md",
     "tools:check": "mcp-site tools check --input tools.json --output src/content/docs/reference/mcp-tools/index.md --title \"MCP tool reference\" --description \"Installed-wheel reference for the exact 11-tool stdio surface.\" --preamble tool-reference-preamble.md",
+    "tools:runtime": "node tests/runtime-tools-wheel.mjs",
+    "tools:snapshot:update": "node tests/runtime-tools-wheel.mjs --update && npm run tools:render",
     "typecheck": "astro check && tsc -p tsconfig.json --noEmit",
     "build": "npm run tools:check && astro build",
     "test:static": "vitest run tests/static.test.ts && node --test tests/runtime-tools-snapshot.test.mjs",
     "test:browser": "npm run build && playwright test",
-    "check": "npm run tools:check && npm run typecheck && npm run build && npm run test:static && playwright test"
+    "check": "npm run tools:runtime && npm run typecheck && npm run build && npm run test:static && playwright test"
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.7",

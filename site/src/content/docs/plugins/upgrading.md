@@ -3,7 +3,7 @@ title: "Upgrade plugins"
 description: "Keep activated plugins on the current session-bound ExtensionContext contract."
 ---
 
-This page is evergreen guidance for keeping an activated plugin on the current context and activation contract. It does not describe release history.
+Older plugins may use Lua runtime or hook-manager globals that are no longer exposed. Update them to use the session-bound `ExtensionContext` fields below.
 
 ## Current context contract
 
@@ -77,9 +77,7 @@ The record has these ordered top-level fields:
 
 The paired session-log record uses `"channel": "session_log"`. Filename and declared-name values are bounded basenames/strings. Cause type and message are bounded; arbitrary paths, plugin-controlled exception text, and secrets are not exposed. Sink failures remain isolated.
 
-The diagnostic guidance route is a canonical destination. It does not imply that a web site is deployed.
-
-## Repair checklist
+## Update the plugin
 
 1. Inspect the activated filename named by the diagnostic.
 2. Replace raw runtime and global-manager access with the supported context fields.
@@ -90,7 +88,3 @@ The diagnostic guidance route is a canonical destination. It does not imply that
 7. Expect any `--force` copy from a bundled source to overwrite the local file.
 
 See [Plugin authoring](/plugins/authoring/), [Plugin lifecycle](/plugins/lifecycle-and-contract/), [Plugin troubleshooting](/plugins/troubleshooting/), and [Plugin API](/reference/plugin-api/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/plugins/upgrading.md)

@@ -37,7 +37,3 @@ The engine composition has four logical states:
 The session claim is identity-based. A second engine cannot reuse a claimed session, and a ready engine cannot bootstrap again.
 
 See [Plugin API](/reference/plugin-api/), [Plugin lifecycle](/plugins/lifecycle-and-contract/), and [Session lifecycle](/concepts/session-lifecycle/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/concepts/extension-composition.md)

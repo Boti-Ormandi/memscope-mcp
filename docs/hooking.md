@@ -1,6 +1,6 @@
 # Inline function hooking
 
-The core hooking extension observes user-mode x64 functions with inline trampolines and one shared ring buffer in target memory. It uses no DLL injection and no kernel component. Every hook changes target code and requires an attached authorized process.
+The core hooking extension observes user-mode x64 functions with inline trampolines and one shared ring buffer in target memory. It uses no DLL injection and no kernel component. Every hook changes code in the attached target process.
 
 ## Lua surface
 
@@ -64,6 +64,6 @@ hookFunction(resolveExport("ws2_32.dll", "WSASend"), {
 
 `deref_args` is for post-call output pointers. The netcap plugin supplies the Winsock, UDP, lifecycle, and IOCP patterns built on this primitive.
 
-## Constraints and risk
+## Constraints and effects
 
-The decoder refuses opcodes it cannot safely classify. One hook per function entry is supported. Hooking can be visible to target integrity checks, can change timing, and can crash a target when a specification or address is wrong. Test against a stable authorized target, keep capture bounded, remove hooks before detach, and treat all captured buffers as sensitive. See [Capture calls](guides/capture-calls.md), [Netcap](plugins/netcap.md), and [Security model](concepts/security-model.md).
+The decoder rejects opcodes it cannot classify for relocation. One hook per function entry is supported. Hooking can be visible to target integrity checks, can change timing, and can crash a target when a specification or address is wrong. Captured buffers can contain credentials, tokens, plaintext network data, or personal data. Keep capture bounded and remove hooks before detach. See [Capture calls](https://memscope.esrc.dev/guides/capture-function-calls/), [Netcap](https://memscope.esrc.dev/plugins/netcap/), and [Security model](https://memscope.esrc.dev/concepts/security-model/).

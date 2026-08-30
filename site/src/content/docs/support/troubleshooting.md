@@ -3,7 +3,7 @@ title: "Troubleshooting"
 description: "Resolve startup, attach, memory, scan, Lua, plugin, and Netcap failures."
 ---
 
-Use `memscope-mcp paths` first, then inspect the session log path it reports. Reproduce issues in a disposable `MEMSCOPE_HOME` so its logs and recordings stay separate from long-lived data.
+Use `memscope-mcp paths` to confirm `MEMSCOPE_HOME` and `LOGS_DIR`. It prints directories, not a session-log filename. Startup creates `LOGS_DIR\sessions\`, and the session JSONL file appears when the first event is logged. After a tool call, inspect the newest `LOGS_DIR\sessions\*.jsonl`; an `attach` result also includes the active `log_file` path. If the server fails before any tool call or logged event, use the MCP client's server diagnostics and captured stderr instead because no session file may exist. A session-specific `MEMSCOPE_HOME` keeps its logs and recordings separate from other runs.
 
 ## Server does not start
 
@@ -27,7 +27,7 @@ Use `memscope-mcp paths` first, then inspect the session log path it reports. Re
 - Confirm attachment with `isAttached()` or `getAttachedProcess()`.
 - For writes, check page protection and use `verify=true` when appropriate.
 - For scans, check strict `??` syntax, scope names, section existence, mode-specific fields, and status termination.
-- Treat `read_gaps_detected=true`, `target_changed`, and `partial_traversal` as evidence limits, not as a complete count.
+- A count is incomplete when `read_gaps_detected=true`, termination is `target_changed`, or the observation is `partial_traversal`.
 
 ## Lua fails
 
@@ -52,7 +52,3 @@ Use [Plugin troubleshooting](/plugins/troubleshooting/). Confirm the direct acti
 - A partial final JSONL line, invalid canonical entry, exact-case mismatch, alias, reparse point, or hard link fails closed instead of falling back.
 
 See [Netcap](/plugins/netcap/), [Errors and status](/reference/errors-and-status/), and [Security model](/concepts/security-model/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/support/troubleshooting.md)

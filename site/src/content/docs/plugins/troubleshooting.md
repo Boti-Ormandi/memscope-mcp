@@ -65,7 +65,3 @@ Cause messages are bounded and sanitized. Inspect the activated file locally whe
 A plugin's ordinary import or registration exception does not publish partial functions or callbacks. A fatal `BaseException` or shared composition failure quarantines the engine and requires correcting the composition before another server start. Do not work around a quarantined engine by importing a module-level session or hook manager.
 
 See [Plugin upgrading](/plugins/upgrading/), [Plugin lifecycle](/plugins/lifecycle-and-contract/), [Errors and status](/reference/errors-and-status/), and [Security model](/concepts/security-model/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/plugins/troubleshooting.md)

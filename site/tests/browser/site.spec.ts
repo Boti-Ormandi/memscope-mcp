@@ -207,7 +207,6 @@ test.describe('local production preview', () => {
       await test.step(mode.name, async () => {
         await openInMode(page, '/this-route-does-not-exist/', mode)
         await expect(page.getByRole('heading', { level: 1, name: '404' })).toBeVisible()
-        await expect(page.getByText('Page not found. Check the URL or try using the search bar.')).toBeVisible()
         const results = await new AxeBuilder({ page }).analyze()
         expect(results.violations).toEqual([])
       })

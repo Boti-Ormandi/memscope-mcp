@@ -3,7 +3,7 @@ title: "Permissions and local data"
 description: "Understand Windows permissions, MEMSCOPE_HOME, logs, scripts, plugins, and recordings."
 ---
 
-Windows permissions and the local data root are separate boundaries. A successful server start does not grant access to every target operation, and local artifacts can contain sensitive process data.
+Memscope uses the Windows permissions of the server process, so a successful server start does not grant access to every target operation. Its local data can contain process paths, diagnostics, scripts, captured buffers, and recordings.
 
 ## Windows access checks
 
@@ -26,7 +26,3 @@ The server uses these subdirectories:
 - `plugins/<filename>.py` for explicitly activated plugin files.
 
 Netcap recordings use `$MEMSCOPE_HOME/scripts/<process>/recordings/`. The cwd-relative `scripts/<process>/recordings/` path is a read-only legacy fallback.
-
----
-
-[Source: getting-started guide](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/getting-started.md#data-and-permissions)

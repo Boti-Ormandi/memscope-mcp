@@ -51,7 +51,3 @@ Use `callSequenceResults` when cleanup ends the sequence but an earlier return v
 IL2CPP readers interpret raw target memory against fixed layout offsets. A malformed target object makes a reader fail or return `nil`; validate pointers, lengths, element types, and limits when script input supplies them. Native calls execute arbitrary target code and change target state; see [Code execution and native calls](/reference/lua/#code-execution) and [Security model](/concepts/security-model/) for execution, guard, and cleanup behavior.
 
 See the [source plugin](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/memscope_mcp/_contrib/plugins/il2cpp.py), [Plugin API](/reference/plugin-api/), and [Plugin lifecycle](/plugins/lifecycle-and-contract/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/plugins/il2cpp.md)

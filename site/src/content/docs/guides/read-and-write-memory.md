@@ -60,7 +60,7 @@ Byte values accept compact hex, whitespace-separated two-digit hex, or a JSON ar
 
 Lua writes expose `writeByte`, `writeInteger`, `writePointer`, `writeBytes`, typed unsigned forms, floating-point forms, strings, and composites. Use `isWritableMemory(addr)` and `backupMemory(addr, size)` when a script needs an explicit preflight and backup.
 
-## Write checklist
+## Write sequence
 
 - Confirm the target name and exact PID before a write.
 - Resolve the address from a current module snapshot rather than reusing a stale absolute address.
@@ -70,7 +70,3 @@ Lua writes expose `writeByte`, `writeInteger`, `writePointer`, `writeBytes`, typ
 - Stop hooks, captures, and native work before detach.
 
 See [Errors and status](/reference/errors-and-status/), [Lua reference](/reference/lua/), and the [security model](/concepts/security-model/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/guides/read-write.md)

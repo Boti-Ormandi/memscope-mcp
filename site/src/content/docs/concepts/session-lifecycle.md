@@ -7,7 +7,7 @@ A `DebugSession` binds the MCP and Lua operations to one Windows process handle,
 
 ## Attach and switch
 
-`attach(process_name, pid?)` and Lua `attach(target, pid?)` use the canonical switch path:
+`attach(process_name, pid?)` and Lua `attach(target, pid?)` use the same switch sequence:
 
 1. retire the current attachment and cancel active scan leases;
 2. fire detach callbacks while the old process handle is still available;
@@ -29,7 +29,7 @@ Before ordinary attached operations, the session checks process liveness. If the
 
 A scan acquires a stable lease containing the process handle, PID, target process spelling, module snapshot, generation, cancellation event, and attachment identity. Detach, switch, refresh, and reconnect signal cancellation and wait until every active lease releases before replacing the identity. A scan reports `TARGET_CHANGED` or a corresponding status when the lifecycle changes during execution.
 
-## Lua composition ownership
+## One Lua engine per session
 
 One `MemscopeLuaEngine` owns one session composition. The engine becomes ready only after all core mappings, accepted plugin mappings, and lifecycle callbacks commit. A failed or interrupted composition becomes permanently quarantined; a second engine cannot claim the same session. The engine hides its bound session until the ready commit.
 
@@ -38,7 +38,3 @@ One `MemscopeLuaEngine` owns one session composition. The engine becomes ready o
 Callbacks are registered as a copy-on-write batch and invoked from a stable snapshot without holding the session lock. Callback failures are isolated and logged. A callback can register work for a later callback snapshot, but it cannot replace a composition callback. `on_process_attached` runs after a successful attach/switch; `on_process_detaching(session, process_alive)` runs before the process handle closes and receives whether cleanup can still call the live target.
 
 Plugins keep process-bound state on the plugin instance and release hooks, allocations, capture buffers, and other handles in `on_process_detaching`. See [Plugin lifecycle](/plugins/lifecycle-and-contract/), [Extension composition](/concepts/extension-composition/), and [Inline hooking](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/hooking.md).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/concepts/session-lifecycle.md)

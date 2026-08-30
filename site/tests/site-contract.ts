@@ -18,12 +18,12 @@ export const pages: readonly SitePage[] = [
   {
     route: '/get-started/configure-client/',
     title: 'Configure an MCP client',
-    description: 'Start memscope-mcp over stdio from an MCP-compatible client.'
+    description: 'Configure VS Code on Windows to start memscope-mcp over stdio with a fresh data root.'
   },
   {
     route: '/get-started/first-session/',
     title: 'Perform a first session',
-    description: 'Attach to a selected process and begin with a bounded read-only inspection.'
+    description: 'Start the configured server, select an exact PID, attach, and read an observable PE signature.'
   },
   {
     route: '/get-started/permissions-and-data/',
@@ -163,17 +163,17 @@ export const pages: readonly SitePage[] = [
   {
     route: '/support/security/',
     title: 'Security support',
-    description: 'Report unintended security behavior through the private advisory route.'
+    description: 'Report unintended boundary, host, data, or supply-chain behavior privately.'
   },
   {
     route: '/contribute/',
     title: 'Contribute',
-    description: 'Set up a Windows development environment and contribute focused changes.'
+    description: 'Set up Windows development and run the Python and site checks.'
   },
   {
     route: '/releases/',
     title: 'Releases',
-    description: 'Current release guidance and links to version-specific GitHub Release history.'
+    description: 'Package metadata, GitHub Release history, and release workflow checks.'
   }
 ] as const
 

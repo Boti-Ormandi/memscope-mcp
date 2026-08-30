@@ -1,36 +1,48 @@
 ---
 title: "Configure an MCP client"
-description: "Start memscope-mcp over stdio from an MCP-compatible client."
+description: "Configure VS Code on Windows to start memscope-mcp over stdio with a fresh data root."
 ---
 
-After installing Memscope, configure an MCP-compatible client to start the local console command over stdio.
+The examples below use VS Code on Windows. VS Code stores workspace MCP configuration in `.vscode/mcp.json`; its current MCP schema uses a top-level `servers` object and a stdio entry with `type`, `command`, and optional `env` fields. See the [VS Code MCP configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration).
 
-## Minimal client entry
+## 1. Create a fresh data root
+
+Before VS Code starts the server, create a new directory and keep its resolved path:
+
+```powershell
+$home = Join-Path $env:TEMP ("memscope-mcp-first-session-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Force $home | Out-Null
+$home
+```
+
+A fresh root contains no activated plugin files. The server will create its session-log directory after startup.
+
+## 2. Add the VS Code workspace configuration
+
+Open a disposable or otherwise selected VS Code workspace. Run **MCP: Open Workspace Folder MCP Configuration** from the Command Palette, then write `.vscode/mcp.json` with the absolute path printed above:
 
 ```json
 {
-  "mcpServers": {
+  "servers": {
     "memscope": {
-      "command": "memscope-mcp"
+      "type": "stdio",
+      "command": "memscope-mcp",
+      "env": {
+        "MEMSCOPE_HOME": "C:\\Users\\you\\AppData\\Local\\Temp\\memscope-mcp-first-session-<new-id>"
+      }
     }
   }
 }
 ```
 
-The bare command and `memscope-mcp server` start the same server. Keep stdin and stdout reserved for MCP traffic. Diagnostics and the startup data-root line use stderr.
+`command` must resolve in the environment where VS Code runs; use the full path to `memscope-mcp.exe` if it is not on `PATH`. Keep the generated `MEMSCOPE_HOME` entry in place before the first start. Activated `.py` files under that root's `plugins` directory would load at server startup.
 
-Memscope exposes no HTTP transport, browser client, hosted API, authentication form, or remote runtime asset. The MCP client owns the child process and stdio connection.
+## 3. Start and list the server
 
-## Confirm the surface
+Run **MCP: List Servers**, select `memscope`, and start it. Confirm that the client lists exactly 11 tools before selecting a target. The bare command and `memscope-mcp server` start the same local stdio server.
 
-The server advertises exactly 11 tools. Review the [MCP tool reference](/reference/mcp-tools/) for schemas and the [CLI and paths reference](/reference/cli-and-paths/) for the resolved data root.
+## Other MCP clients
 
-## Select an exact target
+Other MCP clients use the same executable and environment but may use a different configuration filename and top-level schema. Their equivalent server entry must launch `memscope-mcp`, pass a fresh `MEMSCOPE_HOME` before startup, reserve stdin/stdout for MCP traffic, and read diagnostics from stderr. Check the chosen client's current documentation for its exact configuration location and schema.
 
-Use `processes` to filter by name, PID, parent PID, or service. When several processes share a name, select an exact PID. Pre-attach PEB inspection returns command lines, environment variables, executable paths, and module paths.
-
-Continue with the [first-session guide](/get-started/first-session/).
-
----
-
-[Source: getting-started guide](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/getting-started.md#2-configure-the-mcp-client)
+Continue with [Connect to a process and read its PE signature](/get-started/first-session/).
