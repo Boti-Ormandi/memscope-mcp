@@ -50,7 +50,7 @@ getCapabilities()
 
 `isValidPointer(value)` performs only a user-mode pointer-range check—it does not prove that the address belongs to a committed or readable page. The check accepts values from `0x10000` through `0x7FFFFFFFFFFF`; use a target read or memory query when you need stronger evidence.
 
-Safe 64-bit comparisons and bitwise helpers:
+64-bit comparisons and bitwise helpers:
 
 ```lua
 safeEq(a, b) safeNe(a, b) safeLt(a, b) safeGt(a, b)
@@ -256,7 +256,3 @@ When Netcap is active, its buffer-search helpers accept dense 1-indexed sequence
 ```
 
 The MCP `scripts` tool lists and runs files. File tools create/edit them. The first line comment is the description. `process="Target.exe"` selects a namespace only; it does not attach or switch. Detached runs require an explicit process namespace. See [Saved scripts](/guides/saved-scripts/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/lua-reference.md)

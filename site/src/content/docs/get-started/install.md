@@ -33,7 +33,3 @@ The bare command starts the same stdio server as `memscope-mcp server`. It does 
 ## Next step
 
 [Configure your MCP client](/get-started/configure-client/) to start the console command over stdio. [Permissions and local data](/get-started/permissions-and-data/) documents Windows access checks and data-root locations.
-
----
-
-[Source: getting-started guide](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/getting-started.md#1-prepare-the-host)

@@ -8,9 +8,13 @@ on:
 
 jobs:
   site:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
 
       - uses: actions/setup-node@v4
         with:
@@ -22,26 +26,10 @@ jobs:
         working-directory: site
         run: npm ci
 
-      - name: Check tool reference
+      - name: Install Chromium
         working-directory: site
-        run: npm run tools:check
+        run: npx playwright install chromium
 
-      - name: Typecheck
+      - name: Check installed-wheel reference and site
         working-directory: site
-        run: npm run typecheck
-
-      - name: Build
-        working-directory: site
-        run: npm run build
-
-      - name: Static tests
-        working-directory: site
-        run: npm run test:static
-
-      - name: Install Playwright browsers
-        working-directory: site
-        run: npx playwright install --with-deps chromium
-
-      - name: Browser tests
-        working-directory: site
-        run: npx playwright test
+        run: npm run check

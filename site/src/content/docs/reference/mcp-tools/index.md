@@ -5,17 +5,7 @@ description: "Installed-wheel reference for the exact 11-tool stdio surface."
 
 ## Configuration
 
-```json
-{
-  "mcpServers": {
-    "memscope": {
-      "command": "memscope-mcp"
-    }
-  }
-}
-```
-
-The bare command and `memscope-mcp server` use the same stdio server. The server name is `memscope-mcp`. Handshake metadata keeps the public shape minimal; the server advertises tools and instructions, not a second transport or namespace.
+See [Configure an MCP client](/get-started/configure-client/) for a VS Code example with an explicit `MEMSCOPE_HOME` data root. The server name is `memscope-mcp`. It communicates over stdio and advertises tools and instructions; it does not expose a second transport or plugin namespace.
 
 ## Tool list
 

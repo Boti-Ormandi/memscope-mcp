@@ -1,10 +1,10 @@
 # Contributing to memscope-mcp
 
-Contributions target Windows reverse engineers, live-process researchers, native Windows users, and MCP integrators. Keep changes focused, document the user-facing contract, and use only processes and data that you own or are authorized to inspect. Open an issue before a large or speculative change.
+Keep changes focused and document end-user behavior in the Astro/Starlight site under `site/src/content/docs/`. Open an issue before a large or speculative change.
 
 ## Development setup
 
-Use a Windows x64 checkout with 64-bit Python 3.10 or newer. The `pymem` dependency is Windows-specific. Create a virtual environment if the project workflow uses one, then install the editable package with development dependencies:
+Use Windows x64 with 64-bit Python 3.10 or newer. Install the editable package and development dependencies:
 
 ```powershell
 git clone https://github.com/Boti-Ormandi/memscope-mcp.git
@@ -13,95 +13,69 @@ python -m pip install -e ".[dev]"
 pre-commit install
 ```
 
-Run the focused gates from the repository root:
+Point runtime data outside the checkout:
 
 ```powershell
-pytest tests/ -v
-ruff check memscope_mcp/ tests/ benchmarks/
-ruff format --check memscope_mcp/ tests/ benchmarks/
-```
-
-Pre-commit runs the configured Ruff checks and formatting. CI runs the same style checks and the test suite on the supported Python versions.
-
-### Use a disposable data root
-
-Never use the repository root as `MEMSCOPE_HOME`. Keep logs, scripts, plugins, and recordings outside the checkout:
-
-```powershell
-$env:MEMSCOPE_HOME = Join-Path $env:TEMP "memscope-mcp-dev-home"
+$env:MEMSCOPE_HOME = Join-Path $env:TEMP ("memscope-mcp-dev-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Force $env:MEMSCOPE_HOME | Out-Null
 memscope-mcp paths
 ```
 
-Use a fresh temporary root for tests that exercise plugin activation or Netcap recording. Remove the temporary root only after confirming it contains no data you need.
+Activated files under `$MEMSCOPE_HOME\plugins` execute as Python when the server starts. Logs, scripts, plugins, and recordings persist under the selected root.
 
-## Repository layout
+## Python checks
 
-- [`memscope_mcp/server.py`](memscope_mcp/server.py) — the 11 MCP tool registrations and stdio entry point.
-- [`memscope_mcp/boundary.py`](memscope_mcp/boundary.py) — strict scan-model MCP boundary.
-- [`memscope_mcp/session.py`](memscope_mcp/session.py) — process attachment, module snapshots, leases, lifecycle, and target memory primitives.
-- [`memscope_mcp/scanning/`](memscope_mcp/scanning/) — strict scan contracts and bounded execution internals.
-- [`memscope_mcp/tools/`](memscope_mcp/tools/) — typed memory, dumps, pointer chains, Lua execution, scripts, and hooks.
-- [`memscope_mcp/extensions/`](memscope_mcp/extensions/) — `LuaExtension`, bootstrap, and the seven core extensions.
-- [`memscope_mcp/_contrib/plugins/`](memscope_mcp/_contrib/plugins/) — bundled reference plugin sources.
-- [`docs/`](docs/) — evergreen human-facing product content and reference material.
-- [`tests/`](tests/) — unit, smoke, extension, hook, scan, and plugin coverage.
+Run the narrowest affected tests first, then the full repository checks:
 
-The complete navigation and source-of-truth boundaries are in [`docs/architecture.md`](docs/architecture.md) and [`docs/site-routes.md`](docs/site-routes.md).
+```powershell
+ruff check
+ruff format --check
+pytest tests/ -v
+```
 
-## Adding an MCP tool
+The test matrix covers Python 3.10 through 3.14 on Windows. Interface, compatibility, and serialized-format changes require focused tests and matching documentation.
 
-The public MCP surface is intentionally exactly 11 tools. A new tool changes that contract and requires an explicit product decision. For an accepted tool change:
+## Documentation site
 
-1. Implement the behavior under `memscope_mcp/tools/` or the strict scan boundary.
-2. Register the wrapper in [`memscope_mcp/server.py`](memscope_mcp/server.py) and keep the business function synchronous unless the boundary requires otherwise.
-3. Keep the tool description and result envelope precise.
-4. Update smoke coverage for the tool name and count.
-5. Update [`README.md`](README.md) and [`docs/reference/mcp-tools.md`](docs/reference/mcp-tools.md).
-6. Add task-first and reference documentation without creating a second conflicting full contract.
+The site requires Node.js 22.12 or newer. CI and local checks install the versions recorded in `site/package-lock.json`:
 
-## Adding Lua functions or a core extension
+```powershell
+Set-Location site
+npm ci
+npx playwright install chromium
+npm run check
+```
 
-Lua functions belong to the appropriate core extension. Use the registration contract in [`docs/reference/plugin-api.md`](docs/reference/plugin-api.md) and the full [Lua reference](docs/lua-reference.md). Keep state on the extension instance or the session-owned object that owns it; do not introduce module-level session or hook-manager globals.
+`npm run check` performs the installed-wheel tool snapshot comparison, type checking, a production build, static contract tests, and Playwright browser/accessibility tests. The wheel check builds the current tree, installs that wheel into a temporary virtual environment, loads its exact 11-tool registration, and compares names, descriptions, input schemas, and output schemas with `site/tools.json`.
 
-A core extension normally requires:
+After changing the runtime tool contract, regenerate the installed-wheel snapshot and tool reference:
 
-1. a `LuaExtension` implementation under `memscope_mcp/extensions/core/`;
-2. registration in `CORE_EXTENSIONS` with deliberate ordering;
-3. focused tests under `tests/`;
-4. a concise AI-facing instruction fragment; and
-5. human documentation linked from the relevant guide or reference page.
+```powershell
+npm run tools:snapshot:update
+npm run check
+```
 
-## Adding a plugin
+The update command replaces the tool array in `site/tools.json` from an installed built wheel and renders `site/src/content/docs/reference/mcp-tools/index.md`. Do not hand-edit generated tool sections.
 
-Plugins are activated Python files, not automatically loaded package modules. Subclass `PluginBase`, implement `name`, `description`, `instructions`, and `register(ctx)`, and use the supported context fields `ctx.session`, `ctx.table_factory`, and `ctx.hook_manager`. Keep plugin state on the instance and use lifecycle callbacks for process-bound resources.
+## Documentation files
 
-Start with:
+- Write end-user procedures and reference content in `site/src/content/docs/**`.
+- Update `site/tools.json` through `npm run tools:snapshot:update`; it generates the MCP tool reference.
+- Keep `README.md` as a concise repository introduction.
+- Keep root `docs/**` for implementation notes and the documentation URL map, not end-user procedures.
+- Keep vulnerability-reporting instructions in `SECURITY.md`.
+- Record version-specific history in [GitHub Releases](https://github.com/Boti-Ormandi/memscope-mcp/releases).
 
-- [Plugin authoring](docs/plugins/authoring.md)
-- [Plugin lifecycle](docs/plugins/lifecycle.md)
-- [Plugin API reference](docs/reference/plugin-api.md)
-- [Netcap](docs/plugins/netcap.md) as a filesystem and hook example
-- [IL2CPP](docs/plugins/il2cpp.md) as a session-bound structure-reader example
+When a documentation URL changes, update `docs/site-routes.md`, navigation, site checks, and route/link tests together.
 
-Add tests for activation ordering, failure isolation, context ownership, lifecycle cleanup, and every durable file behavior. Use a disposable `MEMSCOPE_HOME`; never activate a test plugin from the repository's real data location.
+## Plugins
 
-## Documentation and compatibility
+Plugins subclass `PluginBase`, register a complete Lua mapping through `ExtensionContext`, keep process-bound state on the plugin instance, and release target resources during detach. See [plugin authoring](https://memscope.esrc.dev/plugins/authoring/), [lifecycle](https://memscope.esrc.dev/plugins/lifecycle-and-contract/), and the [API reference](https://memscope.esrc.dev/reference/plugin-api/).
 
-Write in present tense and describe current behavior only. Keep the exact 11-tool surface, `openProcess`, `DebugSession.modules`, plugin activation boundary, scan contract, and Netcap recording rules aligned with source and tests. Use relative links for repository content and keep canonical site routes aligned with [`docs/site-routes.md`](docs/site-routes.md).
+## Release checks
 
-Retained compatibility facts belong in [`docs/support/compatibility.md`](docs/support/compatibility.md). Version-specific change notes belong in the project release materials, not in evergreen README or reference pages.
-
-## Testing expectations
-
-The smoke suite checks imports, the 11-tool registration, Lua initialization, plugin loading, and instruction construction. Focused tests cover typed memory, scan contracts, lifecycle, hooks, PEB reads, plugins, and Netcap. Run the narrowest affected tests first, then the full suite on Windows before requesting review.
-
-Before requesting review, run the appropriate full Windows test suite and report any scoped failures with their causes.
-
-## Release mechanics
-
-Maintainers review source, tests, documentation, dependency metadata, and generated distribution checks as one change. They verify a clean tree, run the required gates, prepare release notes separately from evergreen docs, and use the project's authenticated publication process. Contributors do not add credentials, publication configuration, release bodies, or package/site administration to a feature change.
+Pull requests and main-branch updates must pass the Python lint/tests and the site checks. The release workflow repeats the Windows Python matrix before building distribution artifacts; the site workflow runs separately for pull requests and main-branch updates.
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the MIT License.
+Contributions are licensed under the [MIT License](LICENSE).

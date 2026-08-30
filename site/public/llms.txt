@@ -18,5 +18,3 @@ Windows process-memory MCP documentation for reverse engineering and live-proces
 - [Plugin API](https://memscope.esrc.dev/reference/plugin-api/)
 - [Security model](https://memscope.esrc.dev/concepts/security-model/)
 - [Troubleshooting](https://memscope.esrc.dev/support/troubleshooting/)
-
-This file describes the static documentation set. It makes no deployment, availability, hosting API, package-registry, or live-service status claim.

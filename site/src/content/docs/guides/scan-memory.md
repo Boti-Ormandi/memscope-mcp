@@ -3,7 +3,7 @@ title: "Scan target memory"
 description: "Run strict bounded AOB, string, pointer, and batch scans."
 ---
 
-Use strict AOB, string, and pointer scans after selecting an exact process and module scope. Start with `first` when one result is expected; use address pages or counts when you need bounded coverage evidence.
+Use AOB, string, and pointer scans after selecting a process and memory scope. Start with `first` when one result is expected; use address pages to retrieve multiple matches, or `count` to determine whether the selected memory was traversed completely.
 
 ## MCP address scan
 
@@ -90,7 +90,3 @@ Filters can select `image`, `mapped`, or `private` memory, and require or forbid
 A valid no-match operation is not an error. Inspect `status.termination` and `read_gaps_detected`. A count is `complete_traversal` only when termination is `scope_exhausted` and no read gap exists. A page can stop at `page_limit` without looking ahead for another hit, so a terminal full page can be followed by one empty page.
 
 See the full [Scanning reference](/reference/scanning/), [Errors and status](/reference/errors-and-status/), and [saved scripts](/guides/saved-scripts/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/guides/scan.md)

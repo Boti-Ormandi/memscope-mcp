@@ -174,7 +174,3 @@ end
 ```
 
 Expected input/domain failures return `nil, error_table`; internal unexpected failures raise through the Lua engine. See [Errors and status](/reference/errors-and-status/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/scanning.md)

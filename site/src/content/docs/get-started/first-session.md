@@ -1,42 +1,46 @@
 ---
 title: "Perform a first session"
-description: "Attach to a selected process and begin with a bounded read-only inspection."
+description: "Start the configured server, select an exact PID, attach, and read an observable PE signature."
 ---
 
-Begin with process discovery and a bounded read. This workflow does not write target memory, execute native code, install a hook, activate a plugin, or create a recording.
+Complete [installation](/get-started/install/) and the [VS Code Windows configuration](/get-started/configure-client/) first. The client configuration must contain a fresh `MEMSCOPE_HOME` before the first server start, so no previously activated plugin file is present in this session.
 
-## 1. Choose an exact process
+## 1. Start and confirm the tool list
 
-Use the `processes` MCP tool to filter the process list. Select an exact PID when names repeat:
+In VS Code, run **MCP: List Servers**, select `memscope`, and start it. Confirm that the client lists 11 tools. Starting the server creates `logs/sessions/` under the configured data root, but the session JSONL file appears only when the first event is logged. Startup does not attach to a process.
+
+## 2. Select an exact PID
+
+Call `processes` and choose one returned PID. When names repeat, the PID distinguishes the target:
 
 ```text
 processes(filter="notepad", limit=10)
 ```
 
-Before attachment, Lua can inspect the PEB of a selected PID with `getProcessInfo(pid)`, `getEnvironment(pid)`, `isBeingDebugged(pid)`, and `getModulesRemote(pid)`. These reads return command lines, environment variables, debugger flags, and module lists.
+## 3. Attach to that process
 
-## 2. Attach and inspect the module snapshot
+Use the exact executable name and PID from the same result:
 
 ```text
 attach(process_name="notepad.exe", pid=<selected_pid>)
 modules(filter="notepad", limit=10)
 ```
 
-`attach` opens the target process and publishes a module snapshot. `modules(refresh=true)` rebuilds that snapshot and advances the attachment generation without changing the process handle or firing attach/detach callbacks. See [session lifecycle](/concepts/session-lifecycle/) for switching, refresh, reconnect, and cleanup behavior.
+`attach` opens the selected process with the Windows permissions available to the server and publishes its module snapshot.
 
-## 3. Read the PE signature
+## 4. Read the PE signature
+
+Run this with the `lua` tool:
 
 ```lua
 local base = getModuleBase("notepad.exe")
 if not base then
-    error("module not found")
+    error("notepad.exe module not found")
 end
-addResult("base", toHex(base))
-addResult("mz", readBytesHex(base, 2))
+addResult("module_base", toHex(base))
+addResult("dos_signature", readBytesHex(base, 2))
 ```
 
-A normal PE image returns `4D 5A`. Use [read and write memory](/guides/read-and-write-memory/) for typed values and the explicit boundary between read-only and mutating operations. Use [discover and attach](/guides/discover-and-attach/) for a longer read-first workflow.
+For a normal loaded PE image, `dos_signature` is `4D 5A`. This confirms that Memscope resolved the executable's module base and read from the selected process. The commands above do not write target memory, call a native target function, install a hook, activate a plugin, or create a recording.
 
----
-
-[Source: getting-started guide](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/getting-started.md#5-perform-a-safe-first-read)
+Use [discover and attach](/guides/discover-and-attach/) for process-selection details and [read and write memory](/guides/read-and-write-memory/) for later operations.

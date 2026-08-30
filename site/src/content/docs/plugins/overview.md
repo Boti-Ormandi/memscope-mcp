@@ -5,7 +5,7 @@ description: "Understand the explicit activated-file plugin boundary."
 
 Plugins add domain-specific Lua functions without expanding the MCP tool list. They are opt-in Python files.
 
-## Activation boundary
+## How activation works
 
 The runtime scans exactly `$MEMSCOPE_HOME/plugins/*.py`:
 
@@ -40,7 +40,3 @@ Plugins use core capabilities such as memory reads, strict scans, native calls, 
 An activated plugin runs as executable Python in the server process. It can read target memory through its session, invoke any operation exposed by its imports, write local data, and register arbitrary Lua callbacks. Keep plugin state on the instance and bind it to the `ExtensionContext` session. Use `on_process_detaching` to release target hooks, allocations, files, and buffers.
 
 See [Plugin authoring](/plugins/authoring/), [Plugin lifecycle](/plugins/lifecycle-and-contract/), [Plugin upgrading](/plugins/upgrading/), and the [security model](/concepts/security-model/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/plugins/overview.md)

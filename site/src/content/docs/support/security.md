@@ -1,16 +1,10 @@
 ---
 title: "Security support"
-description: "Report unintended security behavior through the private advisory route."
+description: "Report unintended boundary, host, data, or supply-chain behavior privately."
 ---
 
-For a vulnerability, use the private advisory route in [`SECURITY.md`](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/SECURITY.md):
+Submit unintended security behavior through the repository's [private security advisory form](https://github.com/Boti-Ormandi/memscope-mcp/security/advisories/new).
 
-<https://github.com/Boti-Ormandi/memscope-mcp/security/advisories/new>
+Include the affected behavior, Windows and target conditions, a minimal reproduction, impact, and any known mitigation. Remove unrelated process dumps, credentials, environment blocks, captured packet payloads, recordings, plugin source, and session logs from the report.
 
-Do not include real process dumps, credentials, environment blocks, captured packets, recordings, plugin source, or session logs unless the recipient explicitly requests a redacted sample. Prefer a disposable target and data root.
-
-The [security model](/concepts/security-model/) documents target process effects, plugin execution, local data locations, and Netcap's same-principal concurrency boundary. The security policy distinguishes that documented behavior from unintended host execution, boundary escape, path corruption, secret disclosure, or supply-chain weakness.
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/support/security.md)
+The [repository security policy](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/SECURITY.md) distinguishes documented selected-target behavior from unintended target escape, host execution, path corruption, data disclosure, and package/plugin supply-chain defects. The [security model](/concepts/security-model/) documents the target effects, plugin execution, local data, and Netcap same-principal filesystem limitation.

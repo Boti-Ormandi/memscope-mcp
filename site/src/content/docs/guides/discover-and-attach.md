@@ -3,7 +3,7 @@ title: "Discover and attach"
 description: "Select an exact process and inspect its immutable module snapshot."
 ---
 
-Start with process discovery and module inspection. This workflow keeps the first target interaction read-only and makes the PID choice explicit.
+List the matching processes, choose a PID, and attach before reading its module snapshot. The commands below do not write target memory.
 
 ## Find the process
 
@@ -65,7 +65,3 @@ end
 - Run a bounded pattern scan with [Scan target memory](/guides/scan-memory/).
 - Resolve PEB data with [Inspect before attach](/guides/inspect-before-attach/).
 - Understand generations and leases in [Session lifecycle](/concepts/session-lifecycle/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/guides/discover-attach.md)

@@ -16,7 +16,7 @@ The `memscope-mcp` console command runs the server and inspects local data or bu
 | `memscope-mcp install-plugin <name>` | Copy one bundled plugin into the activated plugin directory without overwriting an existing file. |
 | `memscope-mcp install-plugin <name> --force` | Explicitly overwrite the activated copy. |
 
-`memscope-mcp version` prints the installed package version. Evergreen documentation does not use that output as a release-availability claim.
+`memscope-mcp version` prints the installed package version. See [GitHub Releases](https://github.com/Boti-Ormandi/memscope-mcp/releases) for published versions and release notes.
 
 ## Data-root resolution
 
@@ -58,7 +58,3 @@ Netcap writes only below the canonical `$MEMSCOPE_HOME/scripts/<process>/recordi
 `list-plugins` reads packaged files under `memscope_mcp/_contrib/plugins/`. `install-plugin` copies the selected source into `PLUGINS_DIR`. The runtime loader then scans only `PLUGINS_DIR/*.py` nonrecursively, in sorted filename order, excluding underscore-prefixed files. A package upgrade preserves both saved scripts and activated plugin copies; refresh requires `--force`.
 
 See [Plugin overview](/plugins/overview/), [Plugin upgrading](/plugins/upgrading/), and [Netcap](/plugins/netcap/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/reference/cli-paths.md)

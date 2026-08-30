@@ -30,7 +30,7 @@ end
 
 Use `isBeingDebugged(pid)` for the PEB debugger flag. `getProcessInfo` includes process identity, path, parent, thread count, command line, current directory, debugger flag, and image path when each read succeeds.
 
-## Boundaries
+## Limits
 
 - The server and target use matching x64 layouts; cross-bitness PEB walking is not supported.
 - Access-denied fields are omitted or return `nil`/an empty table according to the Lua helper.
@@ -43,7 +43,3 @@ Use `isBeingDebugged(pid)` for the PEB debugger flag. `getProcessInfo` includes 
 The `processes` MCP tool enriches process rows with a command line when the read is available. It does not require the target to be attached.
 
 See [PEB introspection](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/peb.md), [Discover and attach](/guides/discover-and-attach/), and [Security model](/concepts/security-model/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/guides/inspect-before-attach.md)

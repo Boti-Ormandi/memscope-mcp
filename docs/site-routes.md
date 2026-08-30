@@ -1,10 +1,10 @@
-# Canonical site routes
+# Documentation URLs
 
-This page records the canonical trailing-slash destinations and their ordinary product-site Markdown sources. The nested Astro/Starlight consumer builds these files directly; it does not copy, select, project, or rewrite root repository documentation during install, check, build, or preview.
+The Astro/Starlight site builds the Markdown files listed below directly from `site/src/content/docs/`. Site URLs use trailing slashes.
 
 Base: <https://memscope.esrc.dev/>
 
-| Route | Product-site source |
+| URL path | Markdown source |
 | --- | --- |
 | `/` | [`site/src/content/docs/index.md`](../site/src/content/docs/index.md) |
 | `/get-started/install/` | [`site/src/content/docs/get-started/install.md`](../site/src/content/docs/get-started/install.md) |
@@ -41,4 +41,4 @@ Base: <https://memscope.esrc.dev/>
 | `/contribute/` | [`site/src/content/docs/contribute.md`](../site/src/content/docs/contribute.md) |
 | `/releases/` | [`site/src/content/docs/releases.md`](../site/src/content/docs/releases.md) |
 
-The MCP tool page is ordinary generated Markdown. `site/tools.json` is its bounded product snapshot, and `mcp-site tools render|check` is its renderer and currentness check. Stable site links should use the route spellings above; product-site Markdown uses root-relative canonical links, while repository source links remain explicit GitHub links.
+The MCP tool page is generated from `site/tools.json` by `mcp-site tools render`. Use the paths above for site links. Markdown under `site/src/content/docs/` uses root-relative site links; links to repository files use explicit GitHub URLs.

@@ -30,13 +30,16 @@ class ProcessProbe(PluginBase):
         return {"probeProcess": probe_process}
 ```
 
-Copy the file to the activated directory:
+Choose the data root, create the activated directory, and copy the file:
 
 ```powershell
-Copy-Item .\process_probe.py (Join-Path $env:MEMSCOPE_HOME "plugins\process_probe.py")
+$env:MEMSCOPE_HOME = Join-Path $env:TEMP "memscope-mcp-plugin-dev"
+$plugins = Join-Path $env:MEMSCOPE_HOME "plugins"
+New-Item -ItemType Directory -Force $plugins | Out-Null
+Copy-Item .\process_probe.py (Join-Path $plugins "process_probe.py")
 ```
 
-Restart the server, then discover the successful registration from Lua:
+Restart the server. The activated Python file loads at startup. Then inspect the registration from Lua:
 
 ```lua
 local found = false
@@ -68,7 +71,7 @@ Do not use `ctx.lua`, `ctx.engine.lua`, `ExtensionContext.lua`, the module-level
 - Use `ctx.table_factory` to build tables returned to Lua.
 - Validate sizes, addresses, names, options, and target state before acting on Lua input.
 - Keep process-bound resources on the plugin instance and release them in detach cleanup.
-- Avoid side effects during registration that cannot be rolled back.
+- Registration occurs during server startup; perform target-bound work through attach callbacks or registered functions.
 
 Bootstrap stages and validates a plugin mapping before publishing it. A failure does not publish a partial mapping or lifecycle callback. An earlier sorted filename wins a later extension-name or Lua-function collision.
 
@@ -87,12 +90,8 @@ class ModuleReader(PluginBase):
         }
 ```
 
-The instance reads only from the session supplied to this composition. Do not import a global `SESSION` to bypass that ownership.
+The instance reads only from the session supplied during registration. Do not import a global `SESSION` to bypass it.
 
 ## Add tests and docs
 
-Use a disposable `MEMSCOPE_HOME` and test activation ordering, underscore exclusion, nested-file exclusion, duplicate names, function collisions, context ownership, lifecycle cleanup, diagnostic records, and target/resource failure paths. Link the user-facing page from [Plugin overview](/plugins/overview/) and keep the full API in [Plugin API](/reference/plugin-api/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/plugins/authoring.md)
+Use a disposable `MEMSCOPE_HOME` and test activation ordering, underscore exclusion, nested-file exclusion, duplicate names, function collisions, session binding, lifecycle cleanup, diagnostic records, and target/resource failure paths. Add usage guidance to [Plugin overview](/plugins/overview/) and API details to [Plugin API](/reference/plugin-api/).

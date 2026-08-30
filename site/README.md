@@ -1,50 +1,60 @@
-# Memscope product site
+# Memscope documentation site
 
-`site/` is a conventional nested Astro/Starlight consumer for the static Memscope documentation at `https://memscope.esrc.dev`. Product content lives as ordinary Markdown in `src/content/docs/`; Astro and Starlight own content loading, rendering, directory routes, navigation, Pagefind search, the sitemap, responsive behavior, appearance switching, preview, and the 404 page.
+`site/` builds the Memscope documentation at `https://memscope.esrc.dev` with Astro and Starlight. Documentation lives in `src/content/docs/`; Astro and Starlight provide content loading, rendering, directory URLs, navigation, Pagefind search, the sitemap, responsive behavior, appearance switching, preview, and the 404 page.
 
-The `mcp-site-platform` Starlight plugin supplies shared design tokens and build-time keyboard focusability for overflowing code and tables. Its Cloudflare Pages integration writes exact no-slash redirects and conventional static-response headers after a successful build. It performs no API, credential, Wrangler, deployment, DNS, or hosted-status operation.
+The `mcp-site-platform` Starlight plugin supplies shared design tokens and build-time keyboard focusability for overflowing code and tables. Its Cloudflare Pages integration writes exact no-slash redirects and static-response headers into the build output; deployment is a separate step.
 
-## Install and run
+## Install and check
 
-Use Node.js 22.12 or newer. Resolve the ordinary version dependencies from the configured package registry, then run:
+Use Node.js 22.12 or newer and the committed lockfile:
 
 ```sh
-npm install
-npm run tools:check
-npm run typecheck
+npm ci
+npx playwright install chromium
+npm run check
+```
+
+`npm run check`:
+
+1. builds the current Python tree into a wheel;
+2. installs that wheel in a temporary virtual environment;
+3. compares its exact ordered 11-tool names, descriptions, input schemas, and output schemas with `tools.json`;
+4. typechecks and builds the site;
+5. verifies the generated tool reference and static route/link/output contracts; and
+6. runs Playwright browser and accessibility coverage.
+
+The wheel step uses `PYTHON` when set, otherwise `python` on Windows. The supported full check runs on Windows because memscope-mcp is a Windows package.
+
+Local development and preview are available through:
+
+```sh
+npm run dev
 npm run build
 npm run preview -- --host 127.0.0.1 --port 4323
 ```
 
-The production output is `dist/`. Local development is available through `npm run dev`.
+The production output is `dist/`.
 
-## Tool reference
+## Tool reference maintenance
 
-`tools.json` is the bounded product-owned runtime snapshot for the exact ordered 11-tool surface. It preserves the installed wheel's names, descriptions (including LF and indentation), input schemas, and output schemas. `tool-reference-preamble.md` is separate consumer-owned ordinary Markdown for the historical page guidance; it sits outside the Starlight docs-loader tree and creates no route. Page metadata and the preamble are supplied through the generic platform CLI options configured identically for both commands:
+`tools.json` records the exact ordered 11-tool interface collected from an installed built wheel: names, descriptions, input schemas, and output schemas. `tool-reference-preamble.md` is prepended to the generated reference page.
 
-```sh
-npm run tools:render
-npm run tools:check
-```
-
-`render` writes `src/content/docs/reference/mcp-tools/index.md`; `check` verifies that file without rewriting it. The page retains the canonical `/reference/mcp-tools/` route, historical title and summary, six stable guidance anchors, and all generated schemas.
-
-A separately collected installed-wheel `list_tools` JSON capture can be compared field-for-field without coupling the site build to Python or MCP:
+After changing the runtime tool contract:
 
 ```sh
-node tests/runtime-tools-snapshot.mjs <list-tools.json>
-```
-
-The capture may be an ordered tool array or an object with a `tools` array. Each entry uses MCP aliases `name`, `description`, `inputSchema`, and optional `outputSchema`; other runtime metadata is ignored because it is not part of this snapshot format. The comparator checks field presence, exact values, and order. Ordinary install, render, check, build, and browser commands do not import or execute Memscope, Python, or the MCP SDK.
-
-## Tests
-
-```sh
-npm run test:static
-npm run test:browser
+npm run tools:snapshot:update
 npm run check
 ```
 
-The static suite checks the complete route, metadata, link, fragment, redirect, header, sitemap, discovery-file, tool, search, and self-contained-asset contracts. The Playwright suite exercises the production preview, Pagefind, keyboard navigation and overflow, responsive layout, all canonical pages, the 404 page, and full Axe analysis in light/dark desktop/mobile modes.
+The update command rebuilds and installs the wheel, replaces the tool array in `tools.json`, and renders `src/content/docs/reference/mcp-tools/index.md`. The check fails when either the installed-wheel snapshot or generated Markdown is stale.
 
-The site has no custom layout or Starlight component override, client application, analytics, form, cookie, remote runtime asset, or deployment command.
+## Tests
+
+- `npm run tools:runtime` compares `tools.json` with the installed wheel.
+- `npm run tools:check` checks generated Markdown against `tools.json`.
+- `npm run typecheck` runs Astro and TypeScript checks.
+- `npm run build` produces the static site.
+- `npm run test:static` checks routes, metadata, links, fragments, redirects, headers, sitemap, discovery files, tool rendering, Pagefind output, and self-contained assets.
+- `npm run test:browser` builds and exercises the production preview with Pagefind, keyboard interaction, responsive layout, the 404 page, and Axe.
+
+The site uses Starlight's standard layout and local assets.

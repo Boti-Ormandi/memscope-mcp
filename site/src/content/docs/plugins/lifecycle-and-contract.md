@@ -69,7 +69,3 @@ Registration and lifecycle failures have different effects:
 - a process that exits can limit cleanup to local state, so callbacks must tolerate `process_alive=false`.
 
 See [Plugin troubleshooting](/plugins/troubleshooting/), [Session lifecycle](/concepts/session-lifecycle/), and [Plugin API](/reference/plugin-api/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/plugins/lifecycle.md)

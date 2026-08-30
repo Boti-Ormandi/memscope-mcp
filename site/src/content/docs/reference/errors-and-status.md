@@ -3,7 +3,7 @@ title: "Errors and status"
 description: "Structured failures, scan termination, Lua cancellation, and plugin diagnostics."
 ---
 
-Most MCP and Lua operations return structured data instead of relying on an uncaught exception. Read the operation's reference page for fields specific to that surface.
+Most MCP and Lua operations return structured data instead of relying on an uncaught exception. Read the operation's reference page for its specific fields.
 
 ## Ordinary tool envelope
 
@@ -17,7 +17,7 @@ A successful ordinary wrapper usually includes `success: true`. An expected fail
 }
 ```
 
-Common error families include `NOT_ATTACHED`/`PROCESS_NOT_ATTACHED`, `PROCESS_NOT_FOUND`, `INVALID_ADDRESS`, `ACCESS_VIOLATION`, `UNKNOWN_TYPE`, `WRITE_ERROR`, `MEMORY_NOT_WRITABLE`, `VERIFY_READ_FAILED`, `VERIFY_MISMATCH`, `INVALID_ACTION`, `SCRIPT_NOT_FOUND`, `PROCESS_MISMATCH`, `TIMEOUT`, `CANCELLED`, and `LUA_ERROR`. Exact fields vary by tool and remain in the source-backed references.
+Common error families include `NOT_ATTACHED`/`PROCESS_NOT_ATTACHED`, `PROCESS_NOT_FOUND`, `INVALID_ADDRESS`, `ACCESS_VIOLATION`, `UNKNOWN_TYPE`, `WRITE_ERROR`, `MEMORY_NOT_WRITABLE`, `VERIFY_READ_FAILED`, `VERIFY_MISMATCH`, `INVALID_ACTION`, `SCRIPT_NOT_FOUND`, `PROCESS_MISMATCH`, `TIMEOUT`, `CANCELLED`, and `LUA_ERROR`. See the [MCP tool reference](/reference/mcp-tools/) for each tool's response fields.
 
 ## Scan failure envelope
 
@@ -100,7 +100,3 @@ An isolated ordinary plugin failure emits one compact JSON record to `stderr` an
 The second record uses `"channel": "session_log"`. The only codes are `PLUGIN_CONTEXT_INCOMPATIBLE` and `PLUGIN_LOAD_FAILED`. Filename, declared name, cause type, and cause message are bounded and normalized; arbitrary source paths, exception text, and secrets do not appear. Diagnostic sink failures do not turn an isolated plugin failure into a core failure.
 
 See [Plugin troubleshooting](/plugins/troubleshooting/) and [Plugin upgrading](/plugins/upgrading/).
-
----
-
-[View this page's repository source](https://github.com/Boti-Ormandi/memscope-mcp/blob/main/docs/reference/errors-status.md)

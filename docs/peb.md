@@ -32,7 +32,7 @@ NtQueryInformationProcess(ProcessBasicInformation)
 
 The implementation reads x64 PEB offsets, Unicode strings, the loader list, and environment blocks. It does not write PEB fields, bypass anti-debugging, inspect TEBs, or enumerate heaps.
 
-## Limits and data handling
+## Limits and returned data
 
 - The server and target bitness must match; WOW64 translation is not supported.
 - Access denial or a target exit can produce `nil`, empty tables, or partial fields.
@@ -42,4 +42,4 @@ The implementation reads x64 PEB offsets, Unicode strings, the loader list, and 
 - Forwarded export resolution belongs to `resolveExport` after attachment.
 - Every PEB call owns and closes its own process handle.
 
-Command lines and environment variables can contain credentials, tokens, paths, and flags. Treat output and session logs as sensitive. See [Inspect before attach](guides/inspect-before-attach.md), [Security model](concepts/security-model.md), and [the PEB source](../memscope_mcp/utils/peb.py).
+Command lines and environment variables can contain credentials, tokens, paths, and flags. Tool output and session logs can persist those values. See [Inspect before attach](https://memscope.esrc.dev/guides/inspect-before-attach/), [Security model](https://memscope.esrc.dev/concepts/security-model/), and [the PEB source](../memscope_mcp/utils/peb.py).

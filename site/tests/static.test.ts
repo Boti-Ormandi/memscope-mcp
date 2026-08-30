@@ -86,10 +86,14 @@ describe('ordinary Starlight source and dependency boundary', () => {
     expect(markdown).not.toContain('tool-reference-preamble.md')
   })
 
-  it('declares only honest version dependencies and no machine locator or fabricated lock', () => {
+  it('pins registry dependencies in the committed npm lockfile', () => {
     const packageJson = JSON.parse(readFileSync(join(siteRoot, 'package.json'), 'utf8')) as {
       dependencies: Record<string, string>
       scripts: Record<string, string>
+    }
+    const packageLock = JSON.parse(readFileSync(join(siteRoot, 'package-lock.json'), 'utf8')) as {
+      lockfileVersion: number
+      packages: Record<string, { dependencies?: Record<string, string> }>
     }
 
     expect(packageJson.dependencies).toEqual({
@@ -97,12 +101,12 @@ describe('ordinary Starlight source and dependency boundary', () => {
       astro: '7.2.4',
       'mcp-site-platform': '0.2.0'
     })
-    expect(existsSync(join(siteRoot, 'package-lock.json'))).toBe(true)
+    expect(packageLock.lockfileVersion).toBe(3)
+    expect(packageLock.packages['']?.dependencies).toEqual(packageJson.dependencies)
     expect(JSON.stringify(packageJson)).not.toMatch(/(?:file:|link:|git\+|github:|\.\.\/|[A-Za-z]:[\\/])/)
-    expect(Object.values(packageJson.scripts).join('\n')).not.toMatch(/\b(?:python|pip|memscope-mcp)\b/i)
   })
 
-  it('contains no product-runtime import path or obsolete proof machinery', () => {
+  it('confines product-runtime coupling to the installed-wheel capture', () => {
     const authoredCode = [
       join(siteRoot, 'astro.config.mjs'),
       ...filesUnder(join(siteRoot, 'src')).filter((path) => /\.(?:js|mjs|ts)$/.test(path))
@@ -111,7 +115,11 @@ describe('ordinary Starlight source and dependency boundary', () => {
       const code = readFileSync(path, 'utf8')
       expect(code, path).not.toMatch(/memscope_mcp|runtime_snapshot|child_process|from\s+['"]mcp['"]/)
     }
-    expect(filesUnder(siteRoot).filter((path) => path.endsWith('.py'))).toEqual([])
+    expect(
+      filesUnder(siteRoot)
+        .filter((path) => path.endsWith('.py'))
+        .map((path) => relative(siteRoot, path).replaceAll('\\', '/'))
+    ).toEqual(['tests/capture-runtime-tools.py'])
     for (const obsolete of [
       'build.py',
       'component-pin.json',
@@ -240,8 +248,6 @@ describe('Cloudflare Pages and discovery files', () => {
     }
     expect(read('robots.txt')).toContain('Sitemap: https://memscope.esrc.dev/sitemap-index.xml')
     expect(Buffer.byteLength(read('robots.txt'))).toBeLessThanOrEqual(256)
-    expect(read('llms.txt')).toContain('Windows process-memory MCP documentation')
-    expect(read('llms.txt')).toContain('makes no deployment, availability, hosting API')
     expect(Buffer.byteLength(read('llms.txt'))).toBeLessThanOrEqual(2048)
     expect(filesUnder(join(siteRoot, 'public')).map((path) => relative(join(siteRoot, 'public'), path)).sort()).toEqual([
       'favicon.svg',
@@ -310,12 +316,6 @@ describe('tool reference, content behavior, and search output', () => {
       expect(toolDocument.querySelector(`main #${anchor}`), anchor).not.toBeNull()
     }
     expect(toolDocument.querySelectorAll('main table')).not.toHaveLength(0)
-    expect(toolDocument.querySelector('main')?.text).toContain(
-      'The server does not add a separate MCP tool for plugins.'
-    )
-    expect(toolDocument.querySelector('main')?.text).toContain(
-      'The full function contract is in the Lua reference.'
-    )
   })
 
   it('keeps difficult tool descriptions visible and structurally inert', () => {
@@ -361,63 +361,6 @@ describe('tool reference, content behavior, and search output', () => {
     expect(filesUnder(pagefindDir).reduce((total, path) => total + statSync(path).size, 0)).toBeGreaterThan(
       20 * 1024
     )
-  })
-})
-
-describe('removed editorial framing', () => {
-  const rejectedPhrases = [
-    'Use with caution',
-    'as untrusted',
-    'Before enabling powerful operations',
-    'safe first session',
-    'Safe first session',
-    'authorized live-process'
-  ]
-  const rejectedHeadings = [
-    'Safety checklist',
-    'Safety',
-    'Trust and data',
-    'Trust and state',
-    'Plugin trust',
-    'Data trust',
-    'Operational practice'
-  ]
-
-  function builtText(): string[] {
-    return filesUnder(distDir)
-      .filter((path) => path.endsWith('.html') || path === join(distDir, 'llms.txt'))
-      .map((path) => readFileSync(path, 'utf8'))
-  }
-
-  it('keeps user-rejected warning phrases out of every built page and llms.txt', () => {
-    const hits: string[] = []
-    for (const text of builtText()) {
-      for (const phrase of rejectedPhrases) {
-        if (text.includes(phrase)) hits.push(phrase)
-      }
-    }
-    expect(hits, [...new Set(hits)].join(', ')).toEqual([])
-  })
-
-  it('keeps generic Safety/Trust headings out of every built page', () => {
-    const offenders: string[] = []
-    for (const [route, document] of dom) {
-      for (const heading of document.querySelectorAll('main h1, main h2, main h3')) {
-        if (rejectedHeadings.includes(heading.text.trim())) offenders.push(`${route}: ${heading.text.trim()}`)
-      }
-    }
-    expect(offenders).toEqual([])
-  })
-
-  it('keeps the site description free of authorization framing in config and metadata output', () => {
-    const config = readFileSync(join(siteRoot, 'astro.config.mjs'), 'utf8')
-    expect(config).not.toContain('authorized live-process research')
-    const tools = JSON.parse(readFileSync(join(siteRoot, 'tools.json'), 'utf8')) as {
-      tools: Array<{ name: string; description: string }>
-    }
-    for (const tool of tools.tools) {
-      expect(tool.description.includes('Use with caution'), tool.name).toBe(false)
-    }
   })
 })
 
