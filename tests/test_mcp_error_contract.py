@@ -1,8 +1,29 @@
 """MCP wrapper boundary error normalization tests."""
 
+import asyncio
 import time
 
+from mcp.types import CallToolResult
+
 import memscope_mcp.server as server
+
+
+def _call_public_tool(name: str, arguments: dict) -> CallToolResult:
+    result = asyncio.run(server.mcp.call_tool(name, arguments))
+    assert isinstance(result, CallToolResult)
+    return result
+
+
+def test_expected_strict_domain_failure_remains_a_successful_structured_result():
+    result = _call_public_tool("scan", {"pattern": "AA", "offset": 1})
+
+    assert result.is_error is False
+    assert result.structured_content == {
+        "success": False,
+        "error": "INVALID_ARGUMENT",
+        "detail": "Unknown scan argument 'offset'",
+        "field": "offset",
+    }
 
 
 def test_failure_keeps_one_flat_detail_field():

@@ -1,9 +1,10 @@
 """Direct tests for the public MCP wrapper functions."""
 
 import asyncio
+import json
 
 import pytest
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, TextContent
 
 import memscope_mcp.server as server
 from memscope_mcp.attachment import ModuleRecord, ModuleSnapshot, normalize_module_name
@@ -31,9 +32,14 @@ def _module_snapshot(*entries: tuple[str, int, int, str]) -> ModuleSnapshot:
     )
 
 
-def _call_tool_structured(name: str, arguments: dict) -> dict:
+def _call_tool_result(name: str, arguments: dict) -> CallToolResult:
     result = asyncio.run(server.mcp.call_tool(name, arguments))
     assert isinstance(result, CallToolResult)
+    return result
+
+
+def _call_tool_structured(name: str, arguments: dict) -> dict:
+    result = _call_tool_result(name, arguments)
     assert isinstance(result.structured_content, dict)
     return result.structured_content
 
@@ -128,6 +134,34 @@ def test_registered_scan_rejects_removed_fields_before_execution(monkeypatch):
         "field": "offset",
     }
     assert calls == []
+
+
+def test_chain_mcp_wrapper_forwards_arguments_and_serializes_result(monkeypatch):
+    calls = []
+    expected = {
+        "success": True,
+        "steps": [{"address": "0x1000", "offset": "0x10"}],
+        "final_address": "0x1010",
+        "final_value": 42,
+    }
+
+    def fake_resolve_pointer_chain(base, offsets, read_final):
+        calls.append((base, offsets, read_final))
+        return expected
+
+    monkeypatch.setattr(server, "resolve_pointer_chain", fake_resolve_pointer_chain)
+
+    result = _call_tool_result(
+        "chain",
+        {"base": "module.dll+0x1000", "offsets": ["0x10"], "read_final": "u32"},
+    )
+
+    assert result.is_error is False
+    assert result.structured_content is None
+    assert len(result.content) == 1
+    assert isinstance(result.content[0], TextContent)
+    assert json.loads(result.content[0].text) == expected
+    assert calls == [("module.dll+0x1000", ["0x10"], "u32")]
 
 
 def test_dump_forwards_default_arguments_by_keyword(monkeypatch):
