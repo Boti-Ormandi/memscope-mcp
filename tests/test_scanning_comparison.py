@@ -1279,7 +1279,8 @@ def test_historical_preparation_margin_captures_delayed_child_error(tmp_path: Pa
     )
     monkeypatch.setattr("benchmarks.scanning.run._driver_command", lambda **_kwargs: [sys.executable, str(script)])
     monkeypatch.setattr("benchmarks.scanning.run.HISTORICAL_EXACT_PREFLIGHT_TIMEOUT_S", 0.05)
-    monkeypatch.setattr("benchmarks.scanning.run.HISTORICAL_PREPARATION_ERROR_MARGIN_S", 0.20)
+    # Keep this subprocess fixture's preparation allowance above Windows startup/scheduling variance.
+    monkeypatch.setattr("benchmarks.scanning.run.HISTORICAL_PREPARATION_ERROR_MARGIN_S", 2.0)
 
     observation = _run_observation(
         repo_root=tmp_path,
