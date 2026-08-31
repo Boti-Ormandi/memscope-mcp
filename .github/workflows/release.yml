@@ -2,15 +2,14 @@
 #   Owner:     Boti-Ormandi
 #   Repo:      memscope-mcp
 #   Workflow:  release.yml
-#   Env:       'pypi' (production) and 'testpypi' (dry-run)
+#   Env:       'pypi' (production) and 'testpypi' (rehearsal)
 # Renaming any of the above silently breaks publishing. Update the PyPI
 # trusted publisher entries at https://pypi.org/manage/account/publishing/
 # before changing anything here.
 #
-# TestPyPI re-upload constraint: PyPI/TestPyPI reject re-uploads of identical
-# filenames permanently. A workflow_dispatch dry-run targeting `testpypi` at a
-# version already published there will fail. Bump the version (or skip the
-# dry-run) when shipping patches.
+# PyPI/TestPyPI reject re-uploads of identical filenames permanently. A
+# workflow_dispatch rehearsal at a version already on TestPyPI and a repeated
+# production release will fail rather than skip an existing distribution.
 
 name: release
 
@@ -19,28 +18,41 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
-    inputs:
-      target:
-        description: Publish target
-        required: true
-        type: choice
-        options:
-          - testpypi
-          - pypi
+
+permissions:
+  contents: read
 
 jobs:
+  validate-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Fetch current main
+        run: git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
+      - name: Validate release source
+        run: python scripts/validate_release.py source
+
   test:
+    needs: [validate-source]
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Name tag checkout for benchmark identity
         if: startsWith(github.ref, 'refs/tags/')
         run: git switch -c "release-${{ github.ref_name }}"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
@@ -58,40 +70,60 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.13'
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip
           pip install build twine
-      - name: Build
-        run: python -m build
-      - name: Metadata check
-        run: twine check dist/*
-      - uses: actions/upload-artifact@v7
+      - name: Build fresh distributions
+        run: |
+          rm -rf dist
+          python -m build
+      - name: Check package metadata
+        run: python -m twine check dist/*
+      - name: Validate distribution artifacts
+        run: python scripts/validate_release.py artifacts --dist dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
 
-  publish:
+  publish-testpypi:
     needs: [build]
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
     environment:
-      name: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'pypi' }}
+      name: testpypi
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: dist
           path: dist/
-      - name: Publish to TestPyPI
-        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
-      - name: Publish to PyPI
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+
+  publish-pypi:
+    needs: [build]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: pypi
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
