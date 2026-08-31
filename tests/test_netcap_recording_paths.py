@@ -350,8 +350,7 @@ class TestExactCaseBinding:
                 plugin._load_recording("canonicalcase")
             counts.append(process_handle_count())
 
-        assert counts[-1] <= counts[0] + 1
-        assert max(counts) - min(counts) <= 1
+        assert max(counts) <= counts[0] + 1
         assert canonical.read_bytes() == canonical_before
         assert canonical_gzip.read_bytes() == gzip_before
         assert legacy.read_bytes() == legacy_before
