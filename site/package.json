@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.7",
-    "astro": "7.2.4",
+    "astro": "7.4.4",
     "mcp-site-platform": "0.2.0"
   },
   "devDependencies": {
