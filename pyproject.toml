@@ -39,7 +39,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff>=0.15,<0.17", "pre-commit"]
+dev = ["pytest", "ruff>=0.15,<0.18", "pre-commit"]
 
 [project.urls]
 Repository = "https://github.com/Boti-Ormandi/memscope-mcp"
@@ -51,7 +51,7 @@ Changelog = "https://github.com/Boti-Ormandi/memscope-mcp/releases"
 memscope-mcp = "memscope_mcp.cli:main"
 
 [build-system]
-requires = ["hatchling==1.31.0"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
